@@ -18,6 +18,35 @@ Agent-first DeFi retrieval CLI with stable JSON contracts, canonical identifiers
 go build -o defi ./cmd/defi
 ```
 
+## Folder Structure
+
+```text
+cmd/
+  defi/main.go                    # CLI entrypoint
+
+internal/
+  app/runner.go                   # command wiring, routing, cache flow
+  providers/                      # external adapters
+    aave/ morpho/                 # direct lending + yield
+    defillama/                    # normalization + fallback
+    across/ lifi/                 # bridge
+    oneinch/ uniswap/             # swap
+    types.go                      # provider interfaces
+  config/                         # file/env/flags precedence
+  cache/                          # sqlite cache + file lock
+  id/                             # CAIP + amount normalization
+  model/                          # envelope + domain models
+  out/                            # renderers
+  errors/                         # typed errors / exit codes
+  schema/                         # machine-readable CLI schema
+  policy/                         # command allowlist
+  httpx/                          # shared HTTP client
+
+.github/workflows/ci.yml          # CI (test/vet/build)
+AGENTS.md                         # contributor guide for agents
+RESEARCH_DEFI_CLI_WRAPPER.md      # design context
+```
+
 ## Quick Start
 
 ```bash
