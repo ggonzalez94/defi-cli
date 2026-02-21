@@ -1,0 +1,217 @@
+package app
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"path/filepath"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/gustavo/defi-cli/internal/cache"
+	"github.com/gustavo/defi-cli/internal/config"
+	clierr "github.com/gustavo/defi-cli/internal/errors"
+	"github.com/gustavo/defi-cli/internal/model"
+)
+
+type cachePolicyEnvelope struct {
+	Success  bool           `json:"success"`
+	Data     map[string]any `json:"data"`
+	Warnings []string       `json:"warnings"`
+	Meta     struct {
+		Cache     model.CacheStatus      `json:"cache"`
+		Providers []model.ProviderStatus `json:"providers"`
+	} `json:"meta"`
+}
+
+func TestRunCachedCommandFetchesProviderAfterTTLExpiry(t *testing.T) {
+	state, stdout := newCachePolicyTestState(t, 5*time.Minute, false)
+	key := "runner-cache-policy-fetch-after-ttl"
+	if err := state.cache.Set(key, []byte(`{"source":"cache"}`), time.Second); err != nil {
+		t.Fatalf("cache set failed: %v", err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	fetchCalls := 0
+	err := state.runCachedCommand("test command", key, time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		fetchCalls++
+		return map[string]any{"source": "provider"}, []model.ProviderStatus{{Name: "test-provider", Status: "ok", LatencyMS: 1}}, nil, false, nil
+	})
+	if err != nil {
+		t.Fatalf("runCachedCommand failed: %v", err)
+	}
+	if fetchCalls != 1 {
+		t.Fatalf("expected provider fetch after ttl expiry, got calls=%d", fetchCalls)
+	}
+
+	env := decodeCachePolicyEnvelope(t, stdout)
+	if !env.Success {
+		t.Fatalf("expected success envelope, got %#v", env)
+	}
+	if env.Data["source"] != "provider" {
+		t.Fatalf("expected provider data after ttl expiry, got %#v", env.Data)
+	}
+	if env.Meta.Cache.Status != "write" || env.Meta.Cache.Stale {
+		t.Fatalf("expected cache write metadata, got %+v", env.Meta.Cache)
+	}
+	if len(env.Meta.Providers) != 1 || env.Meta.Providers[0].Name != "test-provider" {
+		t.Fatalf("expected provider metadata in response, got %+v", env.Meta.Providers)
+	}
+}
+
+func TestRunCachedCommandFallsBackToStaleOnProviderFailure(t *testing.T) {
+	state, stdout := newCachePolicyTestState(t, 5*time.Second, false)
+	key := "runner-cache-policy-fallback-stale"
+	if err := state.cache.Set(key, []byte(`{"source":"cache"}`), time.Second); err != nil {
+		t.Fatalf("cache set failed: %v", err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	fetchCalls := 0
+	err := state.runCachedCommand("test command", key, time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		fetchCalls++
+		return nil, []model.ProviderStatus{{Name: "test-provider", Status: "unavailable", LatencyMS: 1}}, nil, false, clierr.New(clierr.CodeUnavailable, "provider unavailable")
+	})
+	if err != nil {
+		t.Fatalf("expected stale fallback success, got error: %v", err)
+	}
+	if fetchCalls != 1 {
+		t.Fatalf("expected exactly one provider fetch attempt, got %d", fetchCalls)
+	}
+
+	env := decodeCachePolicyEnvelope(t, stdout)
+	if env.Data["source"] != "cache" {
+		t.Fatalf("expected stale cache fallback data, got %#v", env.Data)
+	}
+	if env.Meta.Cache.Status != "hit" || !env.Meta.Cache.Stale {
+		t.Fatalf("expected stale cache hit metadata, got %+v", env.Meta.Cache)
+	}
+	if len(env.Meta.Providers) != 1 || env.Meta.Providers[0].Status != "unavailable" {
+		t.Fatalf("expected provider failure metadata, got %+v", env.Meta.Providers)
+	}
+	if !containsWarning(env.Warnings, "provider fetch failed; serving stale data within max-stale budget") {
+		t.Fatalf("expected stale fallback warning, got %+v", env.Warnings)
+	}
+}
+
+func TestRunCachedCommandRejectsStaleWhenBeyondMaxStale(t *testing.T) {
+	state, _ := newCachePolicyTestState(t, 10*time.Millisecond, false)
+	key := "runner-cache-policy-too-stale"
+	if err := state.cache.Set(key, []byte(`{"source":"cache"}`), time.Second); err != nil {
+		t.Fatalf("cache set failed: %v", err)
+	}
+	time.Sleep(1300 * time.Millisecond)
+
+	fetchCalls := 0
+	err := state.runCachedCommand("test command", key, time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		fetchCalls++
+		return nil, []model.ProviderStatus{{Name: "test-provider", Status: "unavailable", LatencyMS: 1}}, nil, false, clierr.New(clierr.CodeUnavailable, "provider unavailable")
+	})
+	if fetchCalls != 1 {
+		t.Fatalf("expected provider fetch attempt before stale rejection, got %d", fetchCalls)
+	}
+	if err == nil {
+		t.Fatal("expected stale rejection error, got nil")
+	}
+	if code := clierr.ExitCode(err); code != int(clierr.CodeStale) {
+		t.Fatalf("expected stale exit code %d, got %d err=%v", int(clierr.CodeStale), code, err)
+	}
+	if !strings.Contains(err.Error(), "cached data exceeded stale budget") {
+		t.Fatalf("expected stale budget message, got %v", err)
+	}
+}
+
+func TestRunCachedCommandRejectsStaleIfFetchDelayPushesBeyondMaxStale(t *testing.T) {
+	state, _ := newCachePolicyTestState(t, 2*time.Second, false)
+	key := "runner-cache-policy-crosses-budget-during-fetch"
+	if err := state.cache.Set(key, []byte(`{"source":"cache"}`), time.Second); err != nil {
+		t.Fatalf("cache set failed: %v", err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	fetchCalls := 0
+	err := state.runCachedCommand("test command", key, time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		fetchCalls++
+		time.Sleep(2 * time.Second)
+		return nil, []model.ProviderStatus{{Name: "test-provider", Status: "unavailable", LatencyMS: 2000}}, nil, false, clierr.New(clierr.CodeUnavailable, "provider unavailable")
+	})
+	if fetchCalls != 1 {
+		t.Fatalf("expected one provider fetch attempt, got %d", fetchCalls)
+	}
+	if err == nil {
+		t.Fatal("expected stale rejection after delayed fetch failure, got nil")
+	}
+	if code := clierr.ExitCode(err); code != int(clierr.CodeStale) {
+		t.Fatalf("expected stale exit code %d, got %d err=%v", int(clierr.CodeStale), code, err)
+	}
+	if !strings.Contains(err.Error(), "cached data exceeded stale budget") {
+		t.Fatalf("expected stale budget message, got %v", err)
+	}
+}
+
+func TestRunCachedCommandDoesNotFallbackStaleOnAuthFailure(t *testing.T) {
+	state, _ := newCachePolicyTestState(t, 5*time.Second, false)
+	key := "runner-cache-policy-no-fallback-auth"
+	if err := state.cache.Set(key, []byte(`{"source":"cache"}`), time.Second); err != nil {
+		t.Fatalf("cache set failed: %v", err)
+	}
+	time.Sleep(1200 * time.Millisecond)
+
+	err := state.runCachedCommand("test command", key, time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		return nil, []model.ProviderStatus{{Name: "test-provider", Status: "auth_error", LatencyMS: 1}}, nil, false, clierr.New(clierr.CodeAuth, "missing api key")
+	})
+	if err == nil {
+		t.Fatal("expected auth error, got nil")
+	}
+	if code := clierr.ExitCode(err); code != int(clierr.CodeAuth) {
+		t.Fatalf("expected auth exit code %d, got %d err=%v", int(clierr.CodeAuth), code, err)
+	}
+}
+
+func newCachePolicyTestState(t *testing.T, maxStale time.Duration, noStale bool) (*runtimeState, *bytes.Buffer) {
+	t.Helper()
+	tmp := t.TempDir()
+	store, err := cache.Open(filepath.Join(tmp, "cache.db"), filepath.Join(tmp, "cache.lock"))
+	if err != nil {
+		t.Fatalf("open cache failed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: stdout,
+			stderr: stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: true,
+			MaxStale:     maxStale,
+			NoStale:      noStale,
+		},
+		cache: store,
+	}
+	return state, stdout
+}
+
+func decodeCachePolicyEnvelope(t *testing.T, buf *bytes.Buffer) cachePolicyEnvelope {
+	t.Helper()
+	var env cachePolicyEnvelope
+	if err := json.Unmarshal(buf.Bytes(), &env); err != nil {
+		t.Fatalf("decode envelope failed: %v output=%s", err, buf.String())
+	}
+	return env
+}
+
+func containsWarning(warnings []string, target string) bool {
+	for _, warning := range warnings {
+		if warning == target {
+			return true
+		}
+	}
+	return false
+}

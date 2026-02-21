@@ -35,6 +35,12 @@ func (c *Client) Info() model.ProviderInfo {
 		Capabilities: []string{
 			"swap.quote",
 		},
+		CapabilityAuth: []model.ProviderCapabilityAuth{
+			{
+				Capability: "swap.quote",
+				KeyEnvVar:  "DEFI_UNISWAP_API_KEY",
+			},
+		},
 	}
 }
 

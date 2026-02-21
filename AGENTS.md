@@ -33,7 +33,7 @@ internal/
   app/runner.go                   # command wiring, provider routing, cache flow
   providers/                      # external adapters
     aave/ morpho/                 # direct GraphQL lending + yield
-    defillama/                    # market/yield normalization + fallback
+    defillama/                    # market/yield normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes
     oneinch/ uniswap/             # swap quotes
     types.go                      # provider interfaces
@@ -48,6 +48,9 @@ internal/
   httpx/                          # shared HTTP client/retry behavior
 
 .github/workflows/ci.yml          # CI (test/vet/build)
+.github/workflows/release.yml     # tagged release pipeline (GoReleaser)
+scripts/install.sh                # macOS/Linux installer from GitHub Releases
+.goreleaser.yml                   # cross-platform release artifact config
 README.md                         # user-facing usage + caveats
 RESEARCH_DEFI_CLI_WRAPPER.md      # design/spec context
 ```
@@ -58,10 +61,15 @@ RESEARCH_DEFI_CLI_WRAPPER.md      # design/spec context
 - Config precedence is `flags > env > config file > defaults`.
 - `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
 - Lending routes by `--protocol` to direct adapters when available, then may fallback to DefiLlama on selected failures.
+- Most commands do not require provider API keys.
+- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
+- Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
+- Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
-- Cache hits skip provider calls, so provider latency metadata may be absent on cached responses.
+- Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
+- Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
 
 ## Change patterns
 
@@ -70,6 +78,7 @@ RESEARCH_DEFI_CLI_WRAPPER.md      # design/spec context
   2. register routes/info in `internal/app/runner.go`
   3. add `httptest`-based adapter tests
   4. update README caveats if data quality/semantics differ
+  5. document any command that requires an API key explicitely
 - Contract changes:
   1. treat as breaking unless explicitly intended
   2. update `internal/model` + `internal/out` tests first

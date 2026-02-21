@@ -1,4 +1,4 @@
-.PHONY: build test test-race vet fmt run
+.PHONY: build test test-race vet fmt run release-check release-snapshot
 
 build:
 	go build -o defi ./cmd/defi
@@ -17,3 +17,9 @@ fmt:
 
 run:
 	go run ./cmd/defi $(ARGS)
+
+release-check:
+	goreleaser check
+
+release-snapshot:
+	goreleaser release --snapshot --clean

@@ -65,6 +65,7 @@ type runtimeState struct {
 	lendingProviders       map[string]providers.LendingProvider
 	yieldProviders         map[string]providers.YieldProvider
 	bridgeProviders        map[string]providers.BridgeProvider
+	bridgeDataProviders    map[string]providers.BridgeDataProvider
 	swapProviders          map[string]providers.SwapProvider
 	providerInfos          []model.ProviderInfo
 }
@@ -80,6 +81,7 @@ func (r *Runner) Run(args []string) int {
 	root.SilenceErrors = true
 
 	err := root.Execute()
+	err = normalizeRunError(err)
 	if err == nil {
 		if state.cache != nil {
 			_ = state.cache.Close()
@@ -116,7 +118,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 
 			if s.marketProvider == nil {
 				httpClient := httpx.New(settings.Timeout, settings.Retries)
-				llama := defillama.New(httpClient)
+				llama := defillama.New(httpClient, settings.DefiLlamaAPIKey)
 				aaveProvider := aave.New(httpClient)
 				morphoProvider := morpho.New(httpClient)
 				s.marketProvider = llama
@@ -135,6 +137,9 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.bridgeProviders = map[string]providers.BridgeProvider{
 					"across": across.New(httpClient),
 					"lifi":   lifi.New(httpClient),
+				}
+				s.bridgeDataProviders = map[string]providers.BridgeDataProvider{
+					"defillama": llama,
 				}
 				s.swapProviders = map[string]providers.SwapProvider{
 					"1inch":   oneinch.New(httpClient, settings.OneInchAPIKey),
@@ -161,6 +166,9 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 			return nil
 		},
 	}
+	cmd.SetFlagErrorFunc(func(_ *cobra.Command, err error) error {
+		return clierr.Wrap(clierr.CodeUsage, "parse flags", err)
+	})
 
 	cmd.PersistentFlags().BoolVar(&s.flags.JSON, "json", false, "Output JSON (default)")
 	cmd.PersistentFlags().BoolVar(&s.flags.Plain, "plain", false, "Output plain text")
@@ -170,7 +178,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 	cmd.PersistentFlags().BoolVar(&s.flags.Strict, "strict", false, "Fail on partial results")
 	cmd.PersistentFlags().StringVar(&s.flags.Timeout, "timeout", "", "Provider request timeout")
 	cmd.PersistentFlags().IntVar(&s.flags.Retries, "retries", -1, "Retries per provider request")
-	cmd.PersistentFlags().StringVar(&s.flags.MaxStale, "max-stale", "", "Maximum accepted staleness")
+	cmd.PersistentFlags().StringVar(&s.flags.MaxStale, "max-stale", "", "Maximum stale fallback window after TTL expiry")
 	cmd.PersistentFlags().BoolVar(&s.flags.NoStale, "no-stale", false, "Reject stale cache entries")
 	cmd.PersistentFlags().BoolVar(&s.flags.NoCache, "no-cache", false, "Disable cache reads and writes")
 	cmd.PersistentFlags().StringVar(&s.flags.ConfigPath, "config", "", "Path to config file")
@@ -190,13 +198,20 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 }
 
 func newVersionCommand() *cobra.Command {
-	return &cobra.Command{
+	var long bool
+	cmd := &cobra.Command{
 		Use:   "version",
 		Short: "Print CLI version",
 		Run: func(cmd *cobra.Command, args []string) {
+			if long {
+				_, _ = fmt.Fprintln(cmd.OutOrStdout(), version.Long())
+				return
+			}
 			_, _ = fmt.Fprintln(cmd.OutOrStdout(), version.CLIVersion)
 		},
 	}
+	cmd.Flags().BoolVar(&long, "long", false, "Print extended build metadata")
+	return cmd
 }
 
 func (s *runtimeState) newSchemaCommand() *cobra.Command {
@@ -223,7 +238,7 @@ func (s *runtimeState) newProvidersCommand() *cobra.Command {
 	root := &cobra.Command{Use: "providers", Short: "Provider commands"}
 	list := &cobra.Command{
 		Use:   "list",
-		Short: "List supported providers",
+		Short: "List supported providers and API key metadata (no keys required)",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), s.providerInfos, nil, cacheMetaBypass(), nil, false)
 		},
@@ -275,6 +290,22 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of protocols to return")
 	cmd.Flags().StringVar(&category, "category", "", "Filter by protocol category (e.g. lending)")
 	root.AddCommand(cmd)
+
+	catCmd := &cobra.Command{
+		Use:   "categories",
+		Short: "List protocol categories with protocol counts and TVL",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ProtocolsCategories(ctx)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	root.AddCommand(catCmd)
+
 	return root
 }
 
@@ -440,14 +471,15 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 }
 
 func (s *runtimeState) newBridgeCommand() *cobra.Command {
-	root := &cobra.Command{Use: "bridge", Short: "Bridge quote commands"}
-	var providerArg, fromArg, toArg, assetArg, toAssetArg string
+	root := &cobra.Command{Use: "bridge", Short: "Bridge quote and analytics commands"}
+
+	var quoteProviderArg, fromArg, toArg, assetArg, toAssetArg string
 	var amountBase, amountDecimal string
-	cmd := &cobra.Command{
+	quoteCmd := &cobra.Command{
 		Use:   "quote",
 		Short: "Get bridge quote",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := strings.ToLower(strings.TrimSpace(providerArg))
+			providerName := strings.ToLower(strings.TrimSpace(quoteProviderArg))
 			if providerName == "" {
 				providerName = "across"
 			}
@@ -513,17 +545,83 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "across", "Bridge provider (across|lifi)")
-	cmd.Flags().StringVar(&fromArg, "from", "", "Source chain")
-	cmd.Flags().StringVar(&toArg, "to", "", "Destination chain")
-	cmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19) on source chain")
-	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Destination asset override (symbol/address/CAIP-19)")
-	cmd.Flags().StringVar(&amountBase, "amount", "", "Amount in base units")
-	cmd.Flags().StringVar(&amountDecimal, "amount-decimal", "", "Amount in decimal units")
-	_ = cmd.MarkFlagRequired("from")
-	_ = cmd.MarkFlagRequired("to")
-	_ = cmd.MarkFlagRequired("asset")
-	root.AddCommand(cmd)
+	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "across", "Bridge provider (across|lifi; no API key required)")
+	quoteCmd.Flags().StringVar(&fromArg, "from", "", "Source chain")
+	quoteCmd.Flags().StringVar(&toArg, "to", "", "Destination chain")
+	quoteCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19) on source chain")
+	quoteCmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Destination asset override (symbol/address/CAIP-19)")
+	quoteCmd.Flags().StringVar(&amountBase, "amount", "", "Amount in base units")
+	quoteCmd.Flags().StringVar(&amountDecimal, "amount-decimal", "", "Amount in decimal units")
+	_ = quoteCmd.MarkFlagRequired("from")
+	_ = quoteCmd.MarkFlagRequired("to")
+	_ = quoteCmd.MarkFlagRequired("asset")
+
+	var listLimit int
+	var includeChains bool
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List bridge volumes and coverage (DefiLlama key required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			const providerName = "defillama"
+			provider, ok := s.bridgeDataProviders[providerName]
+			if !ok {
+				return clierr.New(clierr.CodeUnsupported, "bridge data provider is not configured")
+			}
+			req := providers.BridgeListRequest{
+				Limit:         listLimit,
+				IncludeChains: includeChains,
+			}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
+				"provider":       providerName,
+				"limit":          req.Limit,
+				"include_chains": req.IncludeChains,
+			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := provider.ListBridges(ctx, req)
+				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	listCmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum bridges to return")
+	listCmd.Flags().BoolVar(&includeChains, "include-chains", true, "Include chain coverage for each bridge")
+
+	var bridgeArg string
+	var includeChainBreakdown bool
+	detailsCmd := &cobra.Command{
+		Use:   "details",
+		Short: "Get bridge volume details and chain breakdown (DefiLlama key required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			const providerName = "defillama"
+			provider, ok := s.bridgeDataProviders[providerName]
+			if !ok {
+				return clierr.New(clierr.CodeUnsupported, "bridge data provider is not configured")
+			}
+			req := providers.BridgeDetailsRequest{
+				Bridge:                bridgeArg,
+				IncludeChainBreakdown: includeChainBreakdown,
+			}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
+				"provider":                providerName,
+				"bridge":                  strings.ToLower(strings.TrimSpace(req.Bridge)),
+				"include_chain_breakdown": req.IncludeChainBreakdown,
+			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := provider.BridgeDetails(ctx, req)
+				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	detailsCmd.Flags().StringVar(&bridgeArg, "bridge", "", "Bridge identifier (id, slug, or name)")
+	detailsCmd.Flags().BoolVar(&includeChainBreakdown, "include-chain-breakdown", true, "Include per-chain bridge stats")
+	_ = detailsCmd.MarkFlagRequired("bridge")
+
+	root.AddCommand(quoteCmd)
+	root.AddCommand(listCmd)
+	root.AddCommand(detailsCmd)
 	return root
 }
 
@@ -579,7 +677,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap)")
+	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap; both require API keys)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
@@ -700,22 +798,30 @@ type fetchFn func(ctx context.Context) (data any, providerStatus []model.Provide
 func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Duration, fetch fetchFn) error {
 	cacheStatus := cacheMetaMiss()
 	warnings := []string{}
+	var staleData any
+	staleAvailable := false
+	staleObservedAge := time.Duration(0)
+	staleObservedAt := time.Time{}
+	staleCacheStatus := cacheMetaMiss()
 
 	if s.settings.CacheEnabled && s.cache != nil {
 		cached, err := s.cache.Get(key, s.settings.MaxStale)
 		if err == nil && cached.Hit {
-			cacheStatus = model.CacheStatus{Status: "hit", AgeMS: cached.Age.Milliseconds(), Stale: cached.Stale}
-			if !cached.Stale || (!cached.TooStale && !s.settings.NoStale) {
-				if cached.Stale {
-					warnings = append(warnings, "serving stale data within max-stale budget")
-				}
+			entryStatus := model.CacheStatus{Status: "hit", AgeMS: cached.Age.Milliseconds(), Stale: cached.Stale}
+			if !cached.Stale {
 				var data any
 				if err := json.Unmarshal(cached.Value, &data); err == nil {
-					return s.emitSuccess(commandPath, data, warnings, cacheStatus, nil, false)
+					return s.emitSuccess(commandPath, data, warnings, entryStatus, nil, false)
 				}
-			}
-			if cached.TooStale && s.settings.NoStale {
-				return clierr.New(clierr.CodeStale, "cached data exceeded stale budget")
+			} else {
+				var data any
+				if err := json.Unmarshal(cached.Value, &data); err == nil {
+					staleData = data
+					staleAvailable = true
+					staleObservedAge = cached.Age
+					staleObservedAt = time.Now()
+					staleCacheStatus = entryStatus
+				}
 			}
 		}
 	}
@@ -725,6 +831,24 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 	data, providerStatus, providerWarnings, partial, err := fetch(ctx)
 	warnings = append(warnings, providerWarnings...)
 	if err != nil {
+		if staleAvailable {
+			if !staleFallbackAllowed(err) {
+				return err
+			}
+			currentStaleAge := staleObservedAge
+			if !staleObservedAt.IsZero() {
+				currentStaleAge += time.Since(staleObservedAt)
+			}
+			staleCacheStatus.AgeMS = currentStaleAge.Milliseconds()
+			if s.settings.NoStale {
+				return clierr.Wrap(clierr.CodeStale, "fresh provider fetch failed and stale fallback is disabled (--no-stale)", err)
+			}
+			if staleExceedsBudget(currentStaleAge, ttl, s.settings.MaxStale) {
+				return clierr.Wrap(clierr.CodeStale, "fresh provider fetch failed and cached data exceeded stale budget", err)
+			}
+			warnings = append(warnings, "provider fetch failed; serving stale data within max-stale budget")
+			return s.emitSuccess(commandPath, staleData, warnings, staleCacheStatus, providerStatus, false)
+		}
 		return err
 	}
 
@@ -1028,4 +1152,59 @@ func cacheMetaBypass() model.CacheStatus {
 
 func cacheMetaMiss() model.CacheStatus {
 	return model.CacheStatus{Status: "miss", AgeMS: 0, Stale: false}
+}
+
+func normalizeRunError(err error) error {
+	if err == nil {
+		return nil
+	}
+	if _, ok := clierr.As(err); ok {
+		return err
+	}
+	if isLikelyUsageError(err) {
+		return clierr.Wrap(clierr.CodeUsage, "invalid command input", err)
+	}
+	return clierr.Wrap(clierr.CodeInternal, "execute command", err)
+}
+
+func isLikelyUsageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	patterns := []string{
+		"unknown command",
+		"unknown flag",
+		"required flag(s)",
+		"flag needs an argument",
+		"requires at least",
+		"requires exactly",
+		"accepts ",
+		"invalid argument",
+		"invalid args",
+	}
+	for _, p := range patterns {
+		if strings.Contains(msg, p) {
+			return true
+		}
+	}
+	return false
+}
+
+func staleExceedsBudget(age, ttl, maxStale time.Duration) bool {
+	if age <= ttl {
+		return false
+	}
+	if maxStale < 0 {
+		return false
+	}
+	return age > ttl+maxStale
+}
+
+func staleFallbackAllowed(err error) bool {
+	cErr, ok := clierr.As(err)
+	if !ok {
+		return false
+	}
+	return cErr.Code == clierr.CodeUnavailable || cErr.Code == clierr.CodeRateLimited
 }

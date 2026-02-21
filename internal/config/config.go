@@ -28,20 +28,21 @@ type GlobalFlags struct {
 }
 
 type Settings struct {
-	OutputMode     string
-	SelectFields   []string
-	ResultsOnly    bool
-	EnableCommands []string
-	Strict         bool
-	Timeout        time.Duration
-	Retries        int
-	MaxStale       time.Duration
-	NoStale        bool
-	CacheEnabled   bool
-	CachePath      string
-	CacheLockPath  string
-	UniswapAPIKey  string
-	OneInchAPIKey  string
+	OutputMode      string
+	SelectFields    []string
+	ResultsOnly     bool
+	EnableCommands  []string
+	Strict          bool
+	Timeout         time.Duration
+	Retries         int
+	MaxStale        time.Duration
+	NoStale         bool
+	CacheEnabled    bool
+	CachePath       string
+	CacheLockPath   string
+	DefiLlamaAPIKey string
+	UniswapAPIKey   string
+	OneInchAPIKey   string
 }
 
 type fileConfig struct {
@@ -56,6 +57,10 @@ type fileConfig struct {
 		LockPath string `yaml:"lock_path"`
 	} `yaml:"cache"`
 	Providers struct {
+		DefiLlama struct {
+			APIKey    string `yaml:"api_key"`
+			APIKeyEnv string `yaml:"api_key_env"`
+		} `yaml:"defillama"`
 		Uniswap struct {
 			APIKey    string `yaml:"api_key"`
 			APIKeyEnv string `yaml:"api_key_env"`
@@ -97,7 +102,7 @@ func Load(flags GlobalFlags) (Settings, error) {
 	if settings.Retries < 0 {
 		settings.Retries = 0
 	}
-	if settings.MaxStale <= 0 {
+	if settings.MaxStale < 0 {
 		settings.MaxStale = 5 * time.Minute
 	}
 
@@ -197,6 +202,12 @@ func applyFileConfig(path string, settings *Settings) error {
 	if cfg.Providers.Uniswap.APIKey != "" {
 		settings.UniswapAPIKey = cfg.Providers.Uniswap.APIKey
 	}
+	if cfg.Providers.DefiLlama.APIKey != "" {
+		settings.DefiLlamaAPIKey = cfg.Providers.DefiLlama.APIKey
+	}
+	if cfg.Providers.DefiLlama.APIKeyEnv != "" {
+		settings.DefiLlamaAPIKey = os.Getenv(cfg.Providers.DefiLlama.APIKeyEnv)
+	}
 	if cfg.Providers.Uniswap.APIKeyEnv != "" {
 		settings.UniswapAPIKey = os.Getenv(cfg.Providers.Uniswap.APIKeyEnv)
 	}
@@ -252,6 +263,9 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_UNISWAP_API_KEY"); v != "" {
 		settings.UniswapAPIKey = v
+	}
+	if v := os.Getenv("DEFI_DEFILLAMA_API_KEY"); v != "" {
+		settings.DefiLlamaAPIKey = v
 	}
 	if v := os.Getenv("DEFI_1INCH_API_KEY"); v != "" {
 		settings.OneInchAPIKey = v

@@ -41,11 +41,18 @@ type CacheStatus struct {
 }
 
 type ProviderInfo struct {
-	Name          string   `json:"name"`
-	Type          string   `json:"type"`
-	RequiresKey   bool     `json:"requires_key"`
-	Capabilities  []string `json:"capabilities"`
-	KeyEnvVarName string   `json:"key_env_var,omitempty"`
+	Name           string                   `json:"name"`
+	Type           string                   `json:"type"`
+	RequiresKey    bool                     `json:"requires_key"`
+	Capabilities   []string                 `json:"capabilities"`
+	KeyEnvVarName  string                   `json:"key_env_var,omitempty"`
+	CapabilityAuth []ProviderCapabilityAuth `json:"capability_auth,omitempty"`
+}
+
+type ProviderCapabilityAuth struct {
+	Capability  string `json:"capability"`
+	KeyEnvVar   string `json:"key_env_var"`
+	Description string `json:"description,omitempty"`
 }
 
 type ChainTVL struct {
@@ -60,6 +67,12 @@ type ProtocolTVL struct {
 	Protocol string  `json:"protocol"`
 	Category string  `json:"category"`
 	TVLUSD   float64 `json:"tvl_usd"`
+}
+
+type ProtocolCategory struct {
+	Name      string  `json:"name"`
+	Protocols int     `json:"protocols"`
+	TVLUSD    float64 `json:"tvl_usd"`
 }
 
 type AssetResolution struct {
@@ -100,6 +113,62 @@ type AmountInfo struct {
 	AmountBaseUnits string `json:"amount_base_units"`
 	AmountDecimal   string `json:"amount_decimal"`
 	Decimals        int    `json:"decimals"`
+}
+
+type BridgeVolumes struct {
+	LastHourlyUSD float64 `json:"last_hourly_usd"`
+	Last24hUSD    float64 `json:"last_24h_usd"`
+	LastDailyUSD  float64 `json:"last_daily_usd"`
+	PrevDayUSD    float64 `json:"prev_day_usd"`
+	Prev2DayUSD   float64 `json:"prev_2d_usd"`
+	WeeklyUSD     float64 `json:"weekly_usd"`
+	MonthlyUSD    float64 `json:"monthly_usd"`
+}
+
+type BridgeTxCounts struct {
+	Deposits    int64 `json:"deposits"`
+	Withdrawals int64 `json:"withdrawals"`
+}
+
+type BridgeTransactions struct {
+	LastHourly BridgeTxCounts `json:"last_hourly"`
+	CurrentDay BridgeTxCounts `json:"current_day"`
+	PrevDay    BridgeTxCounts `json:"prev_day"`
+	Prev2Day   BridgeTxCounts `json:"prev_2d"`
+	Weekly     BridgeTxCounts `json:"weekly"`
+	Monthly    BridgeTxCounts `json:"monthly"`
+}
+
+type BridgeSummary struct {
+	BridgeID         int           `json:"bridge_id"`
+	Name             string        `json:"name"`
+	DisplayName      string        `json:"display_name"`
+	Slug             string        `json:"slug,omitempty"`
+	DestinationChain string        `json:"destination_chain,omitempty"`
+	URL              string        `json:"url,omitempty"`
+	Chains           []string      `json:"chains,omitempty"`
+	Volumes          BridgeVolumes `json:"volumes"`
+	LastUpdatedUNIX  int64         `json:"last_updated_unix"`
+	FetchedAt        string        `json:"fetched_at"`
+}
+
+type BridgeChainDetails struct {
+	Chain        string             `json:"chain"`
+	ChainID      string             `json:"chain_id,omitempty"`
+	Volumes      BridgeVolumes      `json:"volumes"`
+	Transactions BridgeTransactions `json:"transactions"`
+}
+
+type BridgeDetails struct {
+	BridgeID         int                  `json:"bridge_id"`
+	Name             string               `json:"name"`
+	DisplayName      string               `json:"display_name"`
+	DestinationChain string               `json:"destination_chain,omitempty"`
+	Volumes          BridgeVolumes        `json:"volumes"`
+	Transactions     BridgeTransactions   `json:"transactions"`
+	ChainBreakdown   []BridgeChainDetails `json:"chain_breakdown,omitempty"`
+	LastUpdatedUNIX  int64                `json:"last_updated_unix"`
+	FetchedAt        string               `json:"fetched_at"`
 }
 
 type BridgeQuote struct {

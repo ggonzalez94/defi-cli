@@ -15,6 +15,7 @@ type MarketDataProvider interface {
 	Provider
 	ChainsTop(ctx context.Context, limit int) ([]model.ChainTVL, error)
 	ProtocolsTop(ctx context.Context, category string, limit int) ([]model.ProtocolTVL, error)
+	ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error)
 }
 
 type LendingProvider interface {
@@ -45,6 +46,12 @@ type BridgeProvider interface {
 	QuoteBridge(ctx context.Context, req BridgeQuoteRequest) (model.BridgeQuote, error)
 }
 
+type BridgeDataProvider interface {
+	Provider
+	ListBridges(ctx context.Context, req BridgeListRequest) ([]model.BridgeSummary, error)
+	BridgeDetails(ctx context.Context, req BridgeDetailsRequest) (model.BridgeDetails, error)
+}
+
 type BridgeQuoteRequest struct {
 	FromChain       id.Chain
 	ToChain         id.Chain
@@ -52,6 +59,16 @@ type BridgeQuoteRequest struct {
 	ToAsset         id.Asset
 	AmountBaseUnits string
 	AmountDecimal   string
+}
+
+type BridgeListRequest struct {
+	Limit         int
+	IncludeChains bool
+}
+
+type BridgeDetailsRequest struct {
+	Bridge                string
+	IncludeChainBreakdown bool
 }
 
 type SwapProvider interface {

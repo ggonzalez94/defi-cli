@@ -1,0 +1,49 @@
+version: 2
+
+project_name: defi
+
+builds:
+  - id: defi
+    main: ./cmd/defi
+    binary: defi
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - linux
+      - darwin
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w
+      - -X github.com/gustavo/defi-cli/internal/version.CLIVersion={{ if .IsSnapshot }}{{ .Version }}-snapshot{{ else }}{{ .Tag }}{{ end }}
+      - -X github.com/gustavo/defi-cli/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/gustavo/defi-cli/internal/version.BuildDate={{ .Date }}
+
+archives:
+  - id: default
+    ids:
+      - defi
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    formats:
+      - tar.gz
+    format_overrides:
+      - goos: windows
+        formats:
+          - zip
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-dev"
+
+changelog:
+  use: git
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"

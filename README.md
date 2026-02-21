@@ -9,16 +9,179 @@ Agent-first DeFi retrieval CLI with stable JSON contracts, canonical identifiers
 - Canonical IDs: CAIP-2 chains and CAIP-19 assets.
 - Retrieval commands for chains, protocols, lending, bridging, swapping, and yield opportunities.
 - Direct protocol adapters for Aave and Morpho lending/yield (with DefiLlama fallback routing for supported protocols).
-- SQLite cache with lock-file coordination and staleness policy.
+- Bridge analytics via DefiLlama (`bridge list`, `bridge details`) with per-bridge volumes and chain breakdown.
+- SQLite cache with lock-file coordination, TTL-based revalidation, and bounded stale fallback.
 - Deterministic schema export (`defi schema ...`).
 
 ## Install
+
+### 1) Quick install (macOS/Linux)
+
+Installs the latest tagged release from GitHub:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gustavo/defi-cli/main/scripts/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gustavo/defi-cli/main/scripts/install.sh | DEFI_VERSION=v0.1.0 sh
+```
+
+Use a custom install directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gustavo/defi-cli/main/scripts/install.sh | DEFI_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+### 2) Go install
+
+```bash
+go install github.com/gustavo/defi-cli/cmd/defi@latest
+```
+
+### 3) Manual install from release artifacts
+
+1. Download the right archive from GitHub Releases:
+   - Linux/macOS: `defi_<version>_<os>_<arch>.tar.gz`
+   - Windows: `defi_<version>_windows_<arch>.zip`
+2. Verify checksums with `checksums.txt`.
+3. Extract and move `defi` into your `PATH`.
+
+### 4) Build from source
 
 ```bash
 go build -o defi ./cmd/defi
 ```
 
-## Folder Structure
+Verify install:
+
+```bash
+defi version --long
+```
+
+## Quick Start
+
+```bash
+./defi providers list --results-only
+./defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
+./defi assets resolve --chain base --symbol USDC --results-only
+./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+./defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
+./defi yield opportunities --chain base --asset USDC --limit 20 --results-only
+./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
+./defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
+./defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
+./defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+```
+
+`yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho`).
+
+Bridge quote examples:
+
+```bash
+./defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only # Defaults to Across
+./defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+```
+
+Swap quote example (`1inch` requires API key):
+
+```bash
+export DEFI_1INCH_API_KEY=...
+./defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+## Command API Key Requirements
+
+Most commands do not require provider API keys.
+
+When a provider requires authentication, bring your own key:
+
+- `defi swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
+- `defi swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
+- `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+
+`defi providers list` includes both provider-level key metadata and capability-level key metadata (`capability_auth`).
+
+## API Keys
+
+- `DEFI_1INCH_API_KEY` (required for `swap quote --provider 1inch`)
+- `DEFI_UNISWAP_API_KEY` (required for `swap quote --provider uniswap`)
+- `DEFI_DEFILLAMA_API_KEY` (required for `bridge list` and `bridge details`)
+
+Configure keys with environment variables (recommended):
+
+```bash
+export DEFI_1INCH_API_KEY=...
+export DEFI_UNISWAP_API_KEY=...
+export DEFI_DEFILLAMA_API_KEY=...
+```
+
+For persistent shell setup, add exports to your shell profile (for example `~/.zshrc`).
+
+If a keyed provider is used without a key, CLI exits with code `10`.
+
+## Config (Optional)
+
+Most users only need env vars for provider keys. Use config when you want persistent non-secret defaults (output mode, timeout/retries, cache behavior).
+
+Config precedence is:
+
+- `flags > env > config file > defaults`
+
+Default config path:
+
+- `${XDG_CONFIG_HOME:-~/.config}/defi/config.yaml`
+
+Default cache paths:
+
+- `${XDG_CACHE_HOME:-~/.cache}/defi/cache.db`
+- `${XDG_CACHE_HOME:-~/.cache}/defi/cache.lock`
+
+Example optional config:
+
+```yaml
+output: json
+strict: false
+timeout: 10s
+retries: 2
+cache:
+  enabled: true
+  max_stale: 5m
+```
+
+## Cache Policy
+
+- Command TTLs are fixed in code (`chains/protocols`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
+- Cache entries are served directly only while fresh (`age <= ttl`).
+- After TTL expiry, the CLI fetches provider data immediately.
+- `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
+- If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
+
+## Caveats
+
+- Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
+- `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
+- Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
+
+## Exit Codes
+
+- `0`: success
+- `1`: internal error
+- `2`: usage/validation error
+- `10`: auth required/failed
+- `11`: rate limited
+- `12`: provider unavailable
+- `13`: unsupported input/provider pair
+- `14`: stale data beyond SLA
+- `15`: partial results in strict mode
+- `16`: blocked by command allowlist
+
+## Development
+
+### Folder Structure
 
 ```text
 cmd/
@@ -28,8 +191,8 @@ internal/
   app/runner.go                   # command wiring, routing, cache flow
   providers/                      # external adapters
     aave/ morpho/                 # direct lending + yield
-    defillama/                    # normalization + fallback
-    across/ lifi/                 # bridge
+    defillama/                    # normalization + fallback + bridge analytics
+    across/ lifi/                 # bridge quotes
     oneinch/ uniswap/             # swap
     types.go                      # provider interfaces
   config/                         # file/env/flags precedence
@@ -46,89 +209,8 @@ internal/
 AGENTS.md                         # contributor guide for agents
 RESEARCH_DEFI_CLI_WRAPPER.md      # design context
 ```
-
-## Quick Start
-
-```bash
-./defi providers list --results-only
-./defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
-./defi assets resolve --chain base --symbol USDC --results-only
-./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
-./defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
-./defi yield opportunities --chain base --asset USDC --limit 20 --results-only
-./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
-```
-
-`yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho`).
-
-Bridge quote example:
-
-```bash
-./defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
-```
-
-Swap quote example (`1inch` requires API key):
-
-```bash
-export DEFI_1INCH_API_KEY=...
-./defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
-```
-
-## API Keys
-
-- `DEFI_1INCH_API_KEY`
-- `DEFI_UNISWAP_API_KEY`
-
-If a keyed provider is used without a key, CLI exits with code `10`.
-
-## Config
-
-Default config path:
-
-- `${XDG_CONFIG_HOME:-~/.config}/defi/config.yaml`
-
-Default cache paths:
-
-- `${XDG_CACHE_HOME:-~/.cache}/defi/cache.db`
-- `${XDG_CACHE_HOME:-~/.cache}/defi/cache.lock`
-
-Example config:
-
-```yaml
-output: json
-strict: false
-timeout: 10s
-retries: 2
-cache:
-  enabled: true
-  max_stale: 5m
-providers:
-  uniswap:
-    api_key_env: DEFI_UNISWAP_API_KEY
-  oneinch:
-    api_key_env: DEFI_1INCH_API_KEY
-```
-
-## Testing
+### Testing
 
 ```bash
 go test ./...
 ```
-
-## Caveats
-
-- Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
-- Direct lending/yield adapters currently exist for `aave` and `morpho`; other protocols may still rely on DefiLlama normalization/fallback paths.
-
-## Exit Codes
-
-- `0`: success
-- `1`: internal error
-- `2`: usage/validation error
-- `10`: auth required/failed
-- `11`: rate limited
-- `12`: provider unavailable
-- `13`: unsupported input/provider pair
-- `14`: stale data beyond SLA
-- `15`: partial results in strict mode
-- `16`: blocked by command allowlist

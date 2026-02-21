@@ -33,3 +33,24 @@ func TestLoadMutuallyExclusiveOutputFlags(t *testing.T) {
 		t.Fatal("expected error with --json and --plain")
 	}
 }
+
+func TestLoadAllowsZeroMaxStale(t *testing.T) {
+	settings, err := Load(GlobalFlags{MaxStale: "0s"})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.MaxStale != 0 {
+		t.Fatalf("expected max stale 0s, got %s", settings.MaxStale)
+	}
+}
+
+func TestLoadDefiLlamaAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("DEFI_DEFILLAMA_API_KEY", "key-123")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.DefiLlamaAPIKey != "key-123" {
+		t.Fatalf("expected DefiLlama API key from env, got %q", settings.DefiLlamaAPIKey)
+	}
+}
