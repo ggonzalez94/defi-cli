@@ -21,22 +21,30 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 ### 1) Quick install (macOS/Linux)
 
-Installs the latest tagged release from GitHub:
+Installs the latest tagged GitHub release artifact (not `main` source):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
 ```
 
-Install a specific version:
+Default install location is the first writable directory in your `PATH`. If none are writable, it falls back to `~/.local/bin`.
+
+Install a specific version (accepted: `latest`, `stable`, `vX.Y.Z`, `X.Y.Z`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.1.1
 ```
 
 Use a custom install directory:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+System install (explicit opt-in; may require admin password):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_SYSTEM_INSTALL=1 DEFI_USE_SUDO=1 sh
 ```
 
 ### 2) Go install
@@ -211,7 +219,6 @@ internal/
 
 .github/workflows/ci.yml          # CI (test/vet/build)
 AGENTS.md                         # contributor guide for agents
-RESEARCH_DEFI_CLI_WRAPPER.md      # design context
 ```
 ### Testing
 

@@ -51,8 +51,8 @@ internal/
 .github/workflows/release.yml     # tagged release pipeline (GoReleaser)
 scripts/install.sh                # macOS/Linux installer from GitHub Releases
 .goreleaser.yml                   # cross-platform release artifact config
+assets/                            # static assets (logo, images)
 README.md                         # user-facing usage + caveats
-RESEARCH_DEFI_CLI_WRAPPER.md      # design/spec context
 ```
 
 ## Non-obvious but important
@@ -70,6 +70,7 @@ RESEARCH_DEFI_CLI_WRAPPER.md      # design/spec context
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
+- `scripts/install.sh` installs the latest tagged release artifact into a writable user-space `PATH` directory by default (fallback `~/.local/bin`) and never uses sudo unless explicitly requested.
 
 ## Change patterns
 
