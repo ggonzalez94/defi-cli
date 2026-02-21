@@ -3,8 +3,8 @@ package providers
 import (
 	"context"
 
-	"github.com/gustavo/defi-cli/internal/id"
-	"github.com/gustavo/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 )
 
 type Provider interface {

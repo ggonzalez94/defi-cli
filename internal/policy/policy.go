@@ -3,7 +3,7 @@ package policy
 import (
 	"strings"
 
-	clierr "github.com/gustavo/defi-cli/internal/errors"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 )
 
 func CheckCommandAllowed(allowlist []string, commandPath string) error {

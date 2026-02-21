@@ -1,7 +1,7 @@
 #!/usr/bin/env sh
 set -eu
 
-REPO="${DEFI_REPO:-gustavo/defi-cli}"
+REPO="${DEFI_REPO:-ggonzalez94/defi-cli}"
 BIN_NAME="defi"
 INSTALL_DIR="${DEFI_INSTALL_DIR:-/usr/local/bin}"
 REQUESTED_VERSION="${DEFI_VERSION:-latest}"

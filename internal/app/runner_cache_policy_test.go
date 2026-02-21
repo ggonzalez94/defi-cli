@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gustavo/defi-cli/internal/cache"
-	"github.com/gustavo/defi-cli/internal/config"
-	clierr "github.com/gustavo/defi-cli/internal/errors"
-	"github.com/gustavo/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/cache"
+	"github.com/ggonzalez94/defi-cli/internal/config"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 )
 
 type cachePolicyEnvelope struct {

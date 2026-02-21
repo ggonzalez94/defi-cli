@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	clierr "github.com/gustavo/defi-cli/internal/errors"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 )
 
 var decimalPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)

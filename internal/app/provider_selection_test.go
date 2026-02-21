@@ -3,7 +3,7 @@ package app
 import (
 	"testing"
 
-	"github.com/gustavo/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
 func TestNormalizeLendingProtocol(t *testing.T) {

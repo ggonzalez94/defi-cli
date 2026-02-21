@@ -20,25 +20,25 @@ Agent-first DeFi retrieval CLI with stable JSON contracts, canonical identifiers
 Installs the latest tagged release from GitHub:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gustavo/defi-cli/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
 ```
 
 Install a specific version:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gustavo/defi-cli/main/scripts/install.sh | DEFI_VERSION=v0.1.0 sh
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_VERSION=v0.1.0 sh
 ```
 
 Use a custom install directory:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gustavo/defi-cli/main/scripts/install.sh | DEFI_INSTALL_DIR="$HOME/.local/bin" sh
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_INSTALL_DIR="$HOME/.local/bin" sh
 ```
 
 ### 2) Go install
 
 ```bash
-go install github.com/gustavo/defi-cli/cmd/defi@latest
+go install github.com/ggonzalez94/defi-cli/cmd/defi@latest
 ```
 
 ### 3) Manual install from release artifacts

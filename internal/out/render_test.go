@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gustavo/defi-cli/internal/config"
-	"github.com/gustavo/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/config"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 )
 
 func TestRenderJSONSelectResultsOnly(t *testing.T) {

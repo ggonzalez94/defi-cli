@@ -1,4 +1,4 @@
-module github.com/gustavo/defi-cli
+module github.com/ggonzalez94/defi-cli
 
 go 1.24.0
 

@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gustavo/defi-cli/internal/config"
-	"github.com/gustavo/defi-cli/internal/model"
-	"github.com/gustavo/defi-cli/internal/version"
+	"github.com/ggonzalez94/defi-cli/internal/config"
+	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/version"
 	"github.com/spf13/cobra"
 )
 

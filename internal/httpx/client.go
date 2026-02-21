@@ -11,7 +11,7 @@ import (
 	"net/http"
 	"time"
 
-	clierr "github.com/gustavo/defi-cli/internal/errors"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 )
 
 type Client struct {

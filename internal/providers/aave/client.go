@@ -13,11 +13,11 @@ import (
 	"strings"
 	"time"
 
-	clierr "github.com/gustavo/defi-cli/internal/errors"
-	"github.com/gustavo/defi-cli/internal/httpx"
-	"github.com/gustavo/defi-cli/internal/id"
-	"github.com/gustavo/defi-cli/internal/model"
-	"github.com/gustavo/defi-cli/internal/providers"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
+	"github.com/ggonzalez94/defi-cli/internal/httpx"
+	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
 const defaultEndpoint = "https://api.v3.aave.com/graphql"

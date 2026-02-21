@@ -17,9 +17,9 @@ builds:
       - arm64
     ldflags:
       - -s -w
-      - -X github.com/gustavo/defi-cli/internal/version.CLIVersion={{ if .IsSnapshot }}{{ .Version }}-snapshot{{ else }}{{ .Tag }}{{ end }}
-      - -X github.com/gustavo/defi-cli/internal/version.Commit={{ .ShortCommit }}
-      - -X github.com/gustavo/defi-cli/internal/version.BuildDate={{ .Date }}
+      - -X github.com/ggonzalez94/defi-cli/internal/version.CLIVersion={{ if .IsSnapshot }}{{ .Version }}-snapshot{{ else }}{{ .Tag }}{{ end }}
+      - -X github.com/ggonzalez94/defi-cli/internal/version.Commit={{ .ShortCommit }}
+      - -X github.com/ggonzalez94/defi-cli/internal/version.BuildDate={{ .Date }}
 
 archives:
   - id: default

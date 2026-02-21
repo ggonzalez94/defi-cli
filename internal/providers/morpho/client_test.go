@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/gustavo/defi-cli/internal/httpx"
-	"github.com/gustavo/defi-cli/internal/id"
-	"github.com/gustavo/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/httpx"
+	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
 func TestLendRatesAndYield(t *testing.T) {
