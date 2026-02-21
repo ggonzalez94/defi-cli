@@ -21,30 +21,16 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 ### 1) Quick install (macOS/Linux)
 
-Installs the latest tagged GitHub release artifact (not `main` source):
+Installs the latest tagged release from GitHub:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
 ```
 
-Default install location is the first writable directory in your `PATH`. If none are writable, it falls back to `~/.local/bin`.
-
 Install a specific version (accepted: `latest`, `stable`, `vX.Y.Z`, `X.Y.Z`):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.1.1
-```
-
-Use a custom install directory:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_INSTALL_DIR="$HOME/.local/bin" sh
-```
-
-System install (explicit opt-in; may require admin password):
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | DEFI_SYSTEM_INSTALL=1 DEFI_USE_SUDO=1 sh
 ```
 
 ### 2) Go install
