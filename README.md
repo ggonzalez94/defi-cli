@@ -1,17 +1,21 @@
 # defi-cli
 
-Agent-first DeFi retrieval CLI with stable JSON contracts, canonical identifiers, cache support, and protocol adapters.
+<p align="center">
+  <img src="assets/logo.png" alt="defi-cli logo" width="600" />
+</p>
+
+Query lending rates, compare yield, get bridge and swap quotes — across protocols and chains, from a single CLI.
+
+Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP-2/CAIP-19), and deterministic exit codes make it easy to pipe into any workflow.
 
 ## Features
 
-- JSON-first output envelope with stable exit codes.
-- Global automation flags: `--json`, `--plain`, `--select`, `--results-only`, `--enable-commands`, `--strict`.
-- Canonical IDs: CAIP-2 chains and CAIP-19 assets.
-- Retrieval commands for chains, protocols, lending, bridging, swapping, and yield opportunities.
-- Direct protocol adapters for Aave and Morpho lending/yield (with DefiLlama fallback routing for supported protocols).
-- Bridge analytics via DefiLlama (`bridge list`, `bridge details`) with per-bridge volumes and chain breakdown.
-- SQLite cache with lock-file coordination, TTL-based revalidation, and bounded stale fallback.
-- Deterministic schema export (`defi schema ...`).
+- **Lending** — query markets and rates from Aave, Morpho, and more (with DefiLlama fallback).
+- **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
+- **Bridging** — get cross-chain quotes (Across, LiFi) and bridge analytics (volume, chain breakdown).
+- **Swapping** — get on-chain swap quotes (1inch, Uniswap).
+- **Chains & protocols** — browse top chains by TVL, discover protocols, resolve asset identifiers.
+- **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
 ## Install
 
@@ -64,16 +68,16 @@ defi version --long
 ## Quick Start
 
 ```bash
-./defi providers list --results-only
-./defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
-./defi assets resolve --chain base --symbol USDC --results-only
-./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
-./defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
-./defi yield opportunities --chain base --asset USDC --limit 20 --results-only
-./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
-./defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
-./defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
-./defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi providers list --results-only
+defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
+defi assets resolve --chain base --symbol USDC --results-only
+defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
+defi yield opportunities --chain base --asset USDC --limit 20 --results-only
+defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
+defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
+defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 ```
 
 `yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho`).
@@ -81,15 +85,15 @@ defi version --long
 Bridge quote examples:
 
 ```bash
-./defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only # Defaults to Across
-./defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only # Defaults to Across
+defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 ```
 
 Swap quote example (`1inch` requires API key):
 
 ```bash
 export DEFI_1INCH_API_KEY=...
-./defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
 ```
 
 ## Command API Key Requirements
