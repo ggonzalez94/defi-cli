@@ -1,0 +1,2 @@
+- [ ] Better/Nicer ways to install the CLI. Look how other projects do this. You should not need go installed.
+- [ ] Input and output in other non-standard denominations? e.g. CAIP is good, but very hard to read if a human decides to use it.
