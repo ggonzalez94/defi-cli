@@ -1,0 +1,7 @@
+/bin/
+/dist/
+defi
+*.test
+*.out
+.coverprofile
+.DS_Store

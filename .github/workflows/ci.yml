@@ -1,0 +1,49 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ["1.26.x"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+      - run: go version
+      - run: go mod tidy
+      - run: go test ./...
+      - run: go vet ./...
+
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            goos: linux
+            goarch: amd64
+          - os: ubuntu-latest
+            goos: linux
+            goarch: arm64
+          - os: macos-latest
+            goos: darwin
+            goarch: amd64
+          - os: macos-latest
+            goos: darwin
+            goarch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.26.x"
+      - run: GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build ./cmd/defi
