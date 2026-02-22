@@ -59,19 +59,6 @@ Verify install:
 defi version --long
 ```
 
-### Install Metrics (Maintainers)
-
-The macOS/Linux installer performs a best-effort download of a release asset named `install-marker.txt` after a successful install. GitHub's per-asset `download_count` for that marker is used as the install-event proxy.
-
-Install-event snapshots are generated daily by `.github/workflows/install-metrics.yml` and stored on the `analytics` branch (`analytics/install-events.jsonl`, `analytics/latest.json`, `analytics/latest.md`).
-
-Manual query example:
-
-```bash
-gh api repos/ggonzalez94/defi-cli/releases --paginate \
-  | jq '[ .[] | .assets[]? | select(.name=="install-marker.txt") | .download_count ] | add // 0'
-```
-
 ## Quick Start
 
 ```bash
