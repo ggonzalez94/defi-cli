@@ -254,7 +254,7 @@ func (s *runtimeState) newProvidersCommand() *cobra.Command {
 func (s *runtimeState) newChainsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "chains", Short: "Chain market data"}
 	var limit int
-	cmd := &cobra.Command{
+	topCmd := &cobra.Command{
 		Use:   "top",
 		Short: "Top chains by TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -268,8 +268,46 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
-	root.AddCommand(cmd)
+	topCmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
+	root.AddCommand(topCmd)
+
+	var assetsChainArg string
+	var assetsArg string
+	var assetsLimit int
+	assetsCmd := &cobra.Command{
+		Use:   "assets",
+		Short: "TVL by asset for a chain (DefiLlama key required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, err := id.ParseChain(assetsChainArg)
+			if err != nil {
+				return err
+			}
+
+			asset, err := parseChainAssetFilter(chain, assetsArg)
+			if err != nil {
+				return err
+			}
+
+			req := map[string]any{
+				"chain": chain.CAIP2,
+				"asset": chainAssetFilterCacheValue(asset, assetsArg),
+				"limit": assetsLimit,
+			}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	assetsCmd.Flags().StringVar(&assetsChainArg, "chain", "", "Chain id/name/CAIP-2")
+	assetsCmd.Flags().StringVar(&assetsArg, "asset", "", "Asset filter (symbol/address/CAIP-19)")
+	assetsCmd.Flags().IntVar(&assetsLimit, "limit", 20, "Number of assets to return")
+	_ = assetsCmd.MarkFlagRequired("chain")
+	root.AddCommand(assetsCmd)
+
 	return root
 }
 
@@ -1126,6 +1164,59 @@ func parseChainAsset(chainArg, assetArg string) (id.Chain, id.Asset, error) {
 		return id.Chain{}, id.Asset{}, err
 	}
 	return chain, asset, nil
+}
+
+func parseChainAssetFilter(chain id.Chain, assetArg string) (id.Asset, error) {
+	assetArg = strings.TrimSpace(assetArg)
+	if assetArg == "" {
+		return id.Asset{}, nil
+	}
+
+	asset, err := id.ParseAsset(assetArg, chain)
+	if err == nil {
+		if strings.TrimSpace(asset.Symbol) == "" {
+			return id.Asset{}, clierr.New(clierr.CodeUsage, "asset filter by address/CAIP requires a known token symbol on the selected chain")
+		}
+		return asset, nil
+	}
+
+	if looksLikeAddressOrCAIP(assetArg) || !looksLikeSymbolFilter(assetArg) {
+		return id.Asset{}, err
+	}
+
+	return id.Asset{
+		ChainID: chain.CAIP2,
+		Symbol:  strings.ToUpper(assetArg),
+	}, nil
+}
+
+func looksLikeAddressOrCAIP(input string) bool {
+	norm := strings.ToLower(strings.TrimSpace(input))
+	return strings.HasPrefix(norm, "eip155:") || (strings.HasPrefix(norm, "0x") && len(norm) == 42)
+}
+
+func looksLikeSymbolFilter(input string) bool {
+	norm := strings.TrimSpace(input)
+	if norm == "" || len(norm) > 64 {
+		return false
+	}
+	if strings.ContainsAny(norm, " \t\r\n:/") {
+		return false
+	}
+	return true
+}
+
+func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
+	if strings.TrimSpace(rawInput) == "" {
+		return ""
+	}
+	if strings.TrimSpace(asset.AssetID) != "" {
+		return asset.AssetID
+	}
+	if strings.TrimSpace(asset.Symbol) != "" {
+		return "symbol:" + strings.ToUpper(strings.TrimSpace(asset.Symbol))
+	}
+	return "raw:" + strings.ToUpper(strings.TrimSpace(rawInput))
 }
 
 func cacheKey(commandPath string, req any) string {

@@ -10,9 +10,10 @@ Format:
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Added `chains assets` to return chain-level TVL broken down by asset, with optional `--asset` filtering.
 
 ### Changed
+- DefiLlama provider capability metadata now marks `chains.assets` as requiring `DEFI_DEFILLAMA_API_KEY`.
 - Expanded EVM chain normalization support for `--chain` across lending, yield, bridge, swap, and asset helpers: Mantle, Ink, Scroll, Berachain, Gnosis, Linea, Sonic, Blast, Fraxtal, World Chain, Celo, and zkSync Era.
 - Added bootstrap token registry entries (`USDC`/`USDT`/`WETH` where available) for new production chains with verified provider coverage (Gnosis, Sonic, zkSync Era, Mantle, Celo, Ink, Linea, Scroll).
 - Added first-class Taiko bootstrap asset parsing (`USDC`, `WETH`) from official network contract addresses, plus `taiko alethia` alias normalization.
@@ -23,6 +24,7 @@ Format:
 - Prevented unsafe DefiLlama symbol matching when asset symbols are unresolved, including skipping unsafe lending fallback/provider selection paths.
 
 ### Docs
+- Documented `chains assets` API key requirement alongside other key-gated commands in README and AGENTS.
 - Documented metadata-command cache bypass and unresolved-symbol fallback caveats in `README.md`/`AGENTS.md`.
 
 ### Security
