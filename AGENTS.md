@@ -94,9 +94,18 @@ README.md                         # user-facing usage + caveats
 - `go vet ./...` passes
 - smoke at least one command on each touched provider path
 - README updated for user-visible changes
+- CHANGELOG updated for user-visible changes
+
+## Changelog workflow
+
+- Keep `CHANGELOG.md` in a simple release-notes format with `## [Unreleased]` at the top.
+- Add user-facing changes under `Unreleased` using sections in this order: `Added`, `Changed`, `Fixed`, `Docs`, `Security`.
+- Keep entries concise and action-oriented (what changed for users, not internal refactors unless user impact exists).
+- On release, move `Unreleased` items into `## [vX.Y.Z] - YYYY-MM-DD` and update compare links at the bottom.
+- If a section has no updates while editing, use `- None yet.` to keep structure stable.
 
 ## Maintenance note
 
-- Keep `README.md` and `AGENTS.md` aligned when commands, routing, caveats, or folder structure change.
+- Keep `README.md`, `AGENTS.md`, and `CHANGELOG.md` aligned when commands, routing, caveats, or release-relevant behavior change.
 
 Do not commit transient binaries like `./defi`.
