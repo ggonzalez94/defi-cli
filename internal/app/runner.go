@@ -55,12 +55,15 @@ func NewRunnerWithWriters(stdout, stderr io.Writer) *Runner {
 }
 
 type runtimeState struct {
-	runner      *Runner
-	flags       config.GlobalFlags
-	settings    config.Settings
-	cache       *cache.Store
-	root        *cobra.Command
-	lastCommand string
+	runner        *Runner
+	flags         config.GlobalFlags
+	settings      config.Settings
+	cache         *cache.Store
+	root          *cobra.Command
+	lastCommand   string
+	lastWarnings  []string
+	lastProviders []model.ProviderStatus
+	lastPartial   bool
 
 	marketProvider         providers.MarketDataProvider
 	defaultLendingProvider providers.LendingProvider
@@ -76,6 +79,7 @@ func (r *Runner) Run(args []string) int {
 	state := &runtimeState{runner: r}
 	root := state.newRootCommand()
 	state.root = root
+	state.resetCommandDiagnostics()
 	root.SetArgs(args)
 	root.SetOut(r.stdout)
 	root.SetErr(r.stderr)
@@ -91,7 +95,7 @@ func (r *Runner) Run(args []string) int {
 		return 0
 	}
 
-	state.renderError("", err, nil, nil, false)
+	state.renderError("", err, state.lastWarnings, state.lastProviders, state.lastPartial)
 	if state.cache != nil {
 		_ = state.cache.Close()
 	}
@@ -163,14 +167,14 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					s.swapProviders["uniswap"].Info(),
 					s.swapProviders["jupiter"].Info(),
 				}
+			}
 
-				if settings.CacheEnabled {
-					cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
-					if err != nil {
-						return clierr.Wrap(clierr.CodeInternal, "open cache", err)
-					}
-					s.cache = cacheStore
+			if settings.CacheEnabled && shouldOpenCache(path) && s.cache == nil {
+				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
+				if err != nil {
+					return clierr.Wrap(clierr.CodeInternal, "open cache", err)
 				}
+				s.cache = cacheStore
 			}
 			return nil
 		},
@@ -259,7 +263,7 @@ func (s *runtimeState) newProvidersCommand() *cobra.Command {
 func (s *runtimeState) newChainsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "chains", Short: "Chain market data"}
 	var limit int
-	cmd := &cobra.Command{
+	topCmd := &cobra.Command{
 		Use:   "top",
 		Short: "Top chains by TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -273,8 +277,46 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
-	root.AddCommand(cmd)
+	topCmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
+	root.AddCommand(topCmd)
+
+	var assetsChainArg string
+	var assetsArg string
+	var assetsLimit int
+	assetsCmd := &cobra.Command{
+		Use:   "assets",
+		Short: "TVL by asset for a chain (DefiLlama key required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, err := id.ParseChain(assetsChainArg)
+			if err != nil {
+				return err
+			}
+
+			asset, err := parseChainAssetFilter(chain, assetsArg)
+			if err != nil {
+				return err
+			}
+
+			req := map[string]any{
+				"chain": chain.CAIP2,
+				"asset": chainAssetFilterCacheValue(asset, assetsArg),
+				"limit": assetsLimit,
+			}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	assetsCmd.Flags().StringVar(&assetsChainArg, "chain", "", "Chain id/name/CAIP-2")
+	assetsCmd.Flags().StringVar(&assetsArg, "asset", "", "Asset filter (symbol/address/CAIP-19)")
+	assetsCmd.Flags().IntVar(&assetsLimit, "limit", 20, "Number of assets to return")
+	_ = assetsCmd.MarkFlagRequired("chain")
+	root.AddCommand(assetsCmd)
+
 	return root
 }
 
@@ -404,6 +446,10 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 				if !shouldFallback(err) {
 					return nil, statuses, warnings, false, err
 				}
+				if !assetHasResolvedSymbol(asset) {
+					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
+					return nil, statuses, warnings, false, err
+				}
 
 				start = time.Now()
 				fallbackData, fallbackErr := fallback.LendMarkets(ctx, protocol, chain, asset)
@@ -454,6 +500,10 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 					return data, statuses, warnings, false, err
 				}
 				if !shouldFallback(err) {
+					return nil, statuses, warnings, false, err
+				}
+				if !assetHasResolvedSymbol(asset) {
+					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
 					return nil, statuses, warnings, false, err
 				}
 
@@ -744,9 +794,27 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
+				warnings := []string{}
+				if !assetHasResolvedSymbol(req.Asset) {
+					filteredProviders := make([]string, 0, len(selectedProviders))
+					skippedDefiLlama := false
+					for _, providerName := range selectedProviders {
+						if providerName == "defillama" {
+							skippedDefiLlama = true
+							continue
+						}
+						filteredProviders = append(filteredProviders, providerName)
+					}
+					if skippedDefiLlama {
+						warnings = append(warnings, "provider defillama skipped: unresolved asset symbol cannot be matched safely")
+					}
+					selectedProviders = filteredProviders
+					if len(selectedProviders) == 0 {
+						return nil, nil, warnings, false, clierr.New(clierr.CodeUsage, "selected providers require a resolvable asset symbol")
+					}
+				}
 				statuses := make([]model.ProviderStatus, 0, len(selectedProviders))
 				combined := make([]model.YieldOpportunity, 0)
-				warnings := []string{}
 				partial := false
 				var firstErr error
 
@@ -809,6 +877,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 type fetchFn func(ctx context.Context) (data any, providerStatus []model.ProviderStatus, warnings []string, partial bool, err error)
 
 func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Duration, fetch fetchFn) error {
+	s.resetCommandDiagnostics()
 	cacheStatus := cacheMetaMiss()
 	warnings := []string{}
 	var staleData any
@@ -824,6 +893,7 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 			if !cached.Stale {
 				var data any
 				if err := json.Unmarshal(cached.Value, &data); err == nil {
+					s.captureCommandDiagnostics(warnings, nil, false)
 					return s.emitSuccess(commandPath, data, warnings, entryStatus, nil, false)
 				}
 			} else {
@@ -843,6 +913,7 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 	defer cancel()
 	data, providerStatus, providerWarnings, partial, err := fetch(ctx)
 	warnings = append(warnings, providerWarnings...)
+	s.captureCommandDiagnostics(warnings, providerStatus, partial)
 	if err != nil {
 		if staleAvailable {
 			if !staleFallbackAllowed(err) {
@@ -860,12 +931,14 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 				return clierr.Wrap(clierr.CodeStale, "fresh provider fetch failed and cached data exceeded stale budget", err)
 			}
 			warnings = append(warnings, "provider fetch failed; serving stale data within max-stale budget")
+			s.captureCommandDiagnostics(warnings, providerStatus, false)
 			return s.emitSuccess(commandPath, staleData, warnings, staleCacheStatus, providerStatus, false)
 		}
 		return err
 	}
 
 	if partial && s.settings.Strict {
+		s.captureCommandDiagnostics(warnings, providerStatus, true)
 		return clierr.New(clierr.CodePartialStrict, "partial results returned in strict mode")
 	}
 
@@ -876,6 +949,7 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 		}
 	}
 
+	s.captureCommandDiagnostics(warnings, providerStatus, partial)
 	return s.emitSuccess(commandPath, data, warnings, cacheStatus, providerStatus, partial)
 }
 
@@ -1107,6 +1181,59 @@ func parseChainAsset(chainArg, assetArg string) (id.Chain, id.Asset, error) {
 	return chain, asset, nil
 }
 
+func parseChainAssetFilter(chain id.Chain, assetArg string) (id.Asset, error) {
+	assetArg = strings.TrimSpace(assetArg)
+	if assetArg == "" {
+		return id.Asset{}, nil
+	}
+
+	asset, err := id.ParseAsset(assetArg, chain)
+	if err == nil {
+		if strings.TrimSpace(asset.Symbol) == "" {
+			return id.Asset{}, clierr.New(clierr.CodeUsage, "asset filter by address/CAIP requires a known token symbol on the selected chain")
+		}
+		return asset, nil
+	}
+
+	if looksLikeAddressOrCAIP(assetArg) || !looksLikeSymbolFilter(assetArg) {
+		return id.Asset{}, err
+	}
+
+	return id.Asset{
+		ChainID: chain.CAIP2,
+		Symbol:  strings.ToUpper(assetArg),
+	}, nil
+}
+
+func looksLikeAddressOrCAIP(input string) bool {
+	norm := strings.ToLower(strings.TrimSpace(input))
+	return strings.HasPrefix(norm, "eip155:") || (strings.HasPrefix(norm, "0x") && len(norm) == 42)
+}
+
+func looksLikeSymbolFilter(input string) bool {
+	norm := strings.TrimSpace(input)
+	if norm == "" || len(norm) > 64 {
+		return false
+	}
+	if strings.ContainsAny(norm, " \t\r\n:/") {
+		return false
+	}
+	return true
+}
+
+func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
+	if strings.TrimSpace(rawInput) == "" {
+		return ""
+	}
+	if strings.TrimSpace(asset.AssetID) != "" {
+		return asset.AssetID
+	}
+	if strings.TrimSpace(asset.Symbol) != "" {
+		return "symbol:" + strings.ToUpper(strings.TrimSpace(asset.Symbol))
+	}
+	return "raw:" + strings.ToUpper(strings.TrimSpace(rawInput))
+}
+
 func cacheKey(commandPath string, req any) string {
 	buf, _ := json.Marshal(req)
 	sum := sha256.Sum256(append([]byte(commandPath+"|"), buf...))
@@ -1222,4 +1349,41 @@ func staleFallbackAllowed(err error) bool {
 		return false
 	}
 	return cErr.Code == clierr.CodeUnavailable || cErr.Code == clierr.CodeRateLimited
+}
+
+func shouldOpenCache(commandPath string) bool {
+	switch normalizeCommandPath(commandPath) {
+	case "", "version", "schema", "providers", "providers list":
+		return false
+	default:
+		return true
+	}
+}
+
+func normalizeCommandPath(commandPath string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(commandPath))), " ")
+}
+
+func assetHasResolvedSymbol(asset id.Asset) bool {
+	return strings.TrimSpace(asset.Symbol) != ""
+}
+
+func (s *runtimeState) resetCommandDiagnostics() {
+	s.lastWarnings = nil
+	s.lastProviders = nil
+	s.lastPartial = false
+}
+
+func (s *runtimeState) captureCommandDiagnostics(warnings []string, providers []model.ProviderStatus, partial bool) {
+	if len(warnings) == 0 {
+		s.lastWarnings = nil
+	} else {
+		s.lastWarnings = append([]string(nil), warnings...)
+	}
+	if len(providers) == 0 {
+		s.lastProviders = nil
+	} else {
+		s.lastProviders = append([]model.ProviderStatus(nil), providers...)
+	}
+	s.lastPartial = partial
 }

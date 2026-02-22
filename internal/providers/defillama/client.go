@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
 	"net/http"
@@ -53,6 +54,7 @@ func (c *Client) Info() model.ProviderInfo {
 		RequiresKey: false,
 		Capabilities: []string{
 			"chains.top",
+			"chains.assets",
 			"protocols.top",
 			"protocols.categories",
 			"lend.markets",
@@ -63,6 +65,11 @@ func (c *Client) Info() model.ProviderInfo {
 		},
 		KeyEnvVarName: "DEFI_DEFILLAMA_API_KEY",
 		CapabilityAuth: []model.ProviderCapabilityAuth{
+			{
+				Capability:  "chains.assets",
+				KeyEnvVar:   "DEFI_DEFILLAMA_API_KEY",
+				Description: "Required for chain-level TVL by asset endpoint",
+			},
 			{
 				Capability:  "bridge.details",
 				KeyEnvVar:   "DEFI_DEFILLAMA_API_KEY",
@@ -108,6 +115,72 @@ func (c *Client) ChainsTop(ctx context.Context, limit int) ([]model.ChainTVL, er
 		}
 		out = append(out, model.ChainTVL{Rank: i + 1, Chain: item.Name, ChainID: chainID, TVLUSD: item.TVL})
 	}
+	return out, nil
+}
+
+type chainAssetsCategory struct {
+	Breakdown map[string]any `json:"breakdown"`
+}
+
+func (c *Client) ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asset, limit int) ([]model.ChainAssetTVL, error) {
+	if err := c.requireChainAssetsAPIKey(); err != nil {
+		return nil, err
+	}
+
+	endpoint := c.chainAssetsURL(nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "build chain assets request", err)
+	}
+
+	var raw map[string]json.RawMessage
+	if _, err := c.http.DoJSON(ctx, req, &raw); err != nil {
+		return nil, err
+	}
+
+	assetsBySymbol, chainName, err := selectChainAssetBreakdown(raw, chain)
+	if err != nil {
+		return nil, err
+	}
+
+	filterSymbol := strings.ToUpper(strings.TrimSpace(asset.Symbol))
+	out := make([]model.ChainAssetTVL, 0, len(assetsBySymbol))
+	for symbol, tvl := range assetsBySymbol {
+		if filterSymbol != "" && symbol != filterSymbol {
+			continue
+		}
+		if tvl <= 0 {
+			continue
+		}
+		out = append(out, model.ChainAssetTVL{
+			Chain:   chainName,
+			ChainID: chain.CAIP2,
+			Asset:   symbol,
+			AssetID: knownAssetID(chain, symbol),
+			TVLUSD:  tvl,
+		})
+	}
+
+	if len(out) == 0 {
+		if filterSymbol != "" {
+			return nil, clierr.New(clierr.CodeUnavailable, "no chain asset tvl found for requested chain/asset")
+		}
+		return nil, clierr.New(clierr.CodeUnavailable, "no chain asset tvl found for requested chain")
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].TVLUSD != out[j].TVLUSD {
+			return out[i].TVLUSD > out[j].TVLUSD
+		}
+		return strings.Compare(out[i].Asset, out[j].Asset) < 0
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	for i := range out {
+		out[i].Rank = i + 1
+	}
+
 	return out, nil
 }
 
@@ -572,11 +645,27 @@ func normalizeDestinationChain(v any) string {
 	}
 }
 
+func (c *Client) requireChainAssetsAPIKey() error {
+	if strings.TrimSpace(c.apiKey) == "" {
+		return clierr.New(clierr.CodeAuth, "defillama chain asset tvl requires DEFI_DEFILLAMA_API_KEY")
+	}
+	return nil
+}
+
 func (c *Client) requireBridgeAPIKey() error {
 	if strings.TrimSpace(c.apiKey) == "" {
 		return clierr.New(clierr.CodeAuth, "defillama bridge data requires DEFI_DEFILLAMA_API_KEY")
 	}
 	return nil
+}
+
+func (c *Client) chainAssetsURL(query url.Values) string {
+	base := strings.TrimSuffix(c.bridgeBaseURL, "/")
+	endpoint := fmt.Sprintf("%s/%s/api/chainAssets", base, c.apiKey)
+	if len(query) > 0 {
+		return endpoint + "?" + query.Encode()
+	}
+	return endpoint
 }
 
 func (c *Client) bridgeURL(path string, query url.Values) string {
@@ -877,7 +966,7 @@ func matchesChain(input string, chain id.Chain) bool {
 
 func matchesAssetSymbol(symbolRaw string, expected string) bool {
 	if strings.TrimSpace(expected) == "" {
-		return true
+		return false
 	}
 	symbolRaw = strings.ToUpper(strings.TrimSpace(symbolRaw))
 	expected = strings.ToUpper(strings.TrimSpace(expected))
@@ -902,6 +991,120 @@ func numOrZero(v *float64) float64 {
 		return 0
 	}
 	return *v
+}
+
+func selectChainAssetBreakdown(raw map[string]json.RawMessage, chain id.Chain) (map[string]float64, string, error) {
+	type candidate struct {
+		name   string
+		rank   int
+		assets map[string]float64
+	}
+	matches := make([]candidate, 0, 2)
+	for name, body := range raw {
+		if strings.EqualFold(strings.TrimSpace(name), "timestamp") {
+			continue
+		}
+		if !matchesChain(name, chain) {
+			continue
+		}
+		assets, err := parseChainAssetBreakdown(body)
+		if err != nil {
+			return nil, "", clierr.Wrap(clierr.CodeInternal, "parse defillama chain asset payload", err)
+		}
+		if len(assets) == 0 {
+			continue
+		}
+		rank := 3
+		switch {
+		case strings.EqualFold(strings.TrimSpace(name), chain.Name):
+			rank = 1
+		case strings.EqualFold(strings.TrimSpace(name), chain.Slug):
+			rank = 2
+		}
+		matches = append(matches, candidate{name: name, rank: rank, assets: assets})
+	}
+
+	if len(matches) == 0 {
+		return nil, "", clierr.New(clierr.CodeUnsupported, "defillama has no chain asset data for requested chain")
+	}
+	sort.Slice(matches, func(i, j int) bool {
+		if matches[i].rank != matches[j].rank {
+			return matches[i].rank < matches[j].rank
+		}
+		return strings.Compare(strings.ToLower(matches[i].name), strings.ToLower(matches[j].name)) < 0
+	})
+	return matches[0].assets, matches[0].name, nil
+}
+
+func parseChainAssetBreakdown(raw json.RawMessage) (map[string]float64, error) {
+	var categories map[string]chainAssetsCategory
+	if err := json.Unmarshal(raw, &categories); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]float64)
+	for _, category := range categories {
+		for symbol, value := range category.Breakdown {
+			normSymbol := strings.ToUpper(strings.TrimSpace(symbol))
+			if normSymbol == "" {
+				continue
+			}
+			amount, ok := parseLooseFloat(value)
+			if !ok || amount <= 0 {
+				continue
+			}
+			out[normSymbol] += amount
+		}
+	}
+	return out, nil
+}
+
+func parseLooseFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		if math.IsNaN(t) || math.IsInf(t, 0) {
+			return 0, false
+		}
+		return t, true
+	case json.Number:
+		n, err := t.Float64()
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	case string:
+		value := strings.TrimSpace(t)
+		if value == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case int32:
+		return float64(t), true
+	case uint:
+		return float64(t), true
+	case uint64:
+		return float64(t), true
+	case uint32:
+		return float64(t), true
+	default:
+		return 0, false
+	}
+}
+
+func knownAssetID(chain id.Chain, symbol string) string {
+	token, ok := id.KnownToken(chain.CAIP2, symbol)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%s/erc20:%s", chain.CAIP2, strings.ToLower(token.Address))
 }
 
 func choosePositive(primary, fallback float64) float64 {

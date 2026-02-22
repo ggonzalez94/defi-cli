@@ -14,7 +14,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
 - **Bridging** — get cross-chain quotes (Across, LiFi) and bridge analytics (volume, chain breakdown).
 - **Swapping** — get on-chain swap quotes (1inch, Uniswap, Jupiter for Solana).
-- **Chains & protocols** — browse top chains by TVL, discover protocols, resolve asset identifiers.
+- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
 ## Install
@@ -64,6 +64,7 @@ defi version --long
 ```bash
 defi providers list --results-only
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
+defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi assets resolve --chain base --symbol USDC --results-only
 defi assets resolve --chain solana --symbol USDC --results-only
 defi lend markets --protocol aave --chain 1 --asset USDC --results-only
@@ -111,6 +112,7 @@ When a provider requires authentication, bring your own key:
 - `defi swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
 - `defi swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
 - `defi swap quote --provider jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
+- `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
 
@@ -121,7 +123,7 @@ When a provider requires authentication, bring your own key:
 - `DEFI_1INCH_API_KEY` (required for `swap quote --provider 1inch`)
 - `DEFI_UNISWAP_API_KEY` (required for `swap quote --provider uniswap`)
 - `DEFI_JUPITER_API_KEY` (optional for `swap quote --provider jupiter`)
-- `DEFI_DEFILLAMA_API_KEY` (required for `bridge list` and `bridge details`)
+- `DEFI_DEFILLAMA_API_KEY` (required for `chains assets`, `bridge list`, and `bridge details`)
 
 Configure keys with environment variables (recommended):
 
@@ -167,18 +169,23 @@ cache:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
+- Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
 
 ## Caveats
 
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
 - Kamino direct adapter currently supports Solana mainnet (`solana`) only.
+- `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
+- `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
+- For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 
 ## Exit Codes
 
