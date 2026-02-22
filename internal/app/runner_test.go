@@ -94,6 +94,59 @@ func TestRunnerVersionLong(t *testing.T) {
 	}
 }
 
+func TestRunnerVersionBypassesCacheOpen(t *testing.T) {
+	setUnopenableCacheEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"version"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	if got := strings.TrimSpace(stdout.String()); got != version.CLIVersion {
+		t.Fatalf("unexpected version output: %q", got)
+	}
+}
+
+func TestRunnerSchemaBypassesCacheOpen(t *testing.T) {
+	setUnopenableCacheEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "yield opportunities", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &schema); err != nil {
+		t.Fatalf("failed to parse schema json: %v output=%s", err, stdout.String())
+	}
+	if schema["path"] != "defi yield opportunities" {
+		t.Fatalf("unexpected schema path: %v", schema["path"])
+	}
+}
+
+func TestRunnerProvidersListBypassesCacheOpen(t *testing.T) {
+	setUnopenableCacheEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"providers", "list", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse providers output json: %v output=%s", err, stdout.String())
+	}
+	if len(out) == 0 {
+		t.Fatalf("expected providers output, got empty")
+	}
+}
+
 func TestRunnerProtocolsCategories(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -227,4 +280,10 @@ func (f fakeMarketProvider) ProtocolsTop(context.Context, string, int) ([]model.
 
 func (f fakeMarketProvider) ProtocolsCategories(context.Context) ([]model.ProtocolCategory, error) {
 	return f.categories, nil
+}
+
+func setUnopenableCacheEnv(t *testing.T) {
+	t.Helper()
+	t.Setenv("DEFI_CACHE_PATH", "/dev/null/cache.db")
+	t.Setenv("DEFI_CACHE_LOCK_PATH", "/dev/null/cache.lock")
 }

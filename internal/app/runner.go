@@ -53,12 +53,15 @@ func NewRunnerWithWriters(stdout, stderr io.Writer) *Runner {
 }
 
 type runtimeState struct {
-	runner      *Runner
-	flags       config.GlobalFlags
-	settings    config.Settings
-	cache       *cache.Store
-	root        *cobra.Command
-	lastCommand string
+	runner        *Runner
+	flags         config.GlobalFlags
+	settings      config.Settings
+	cache         *cache.Store
+	root          *cobra.Command
+	lastCommand   string
+	lastWarnings  []string
+	lastProviders []model.ProviderStatus
+	lastPartial   bool
 
 	marketProvider         providers.MarketDataProvider
 	defaultLendingProvider providers.LendingProvider
@@ -74,6 +77,7 @@ func (r *Runner) Run(args []string) int {
 	state := &runtimeState{runner: r}
 	root := state.newRootCommand()
 	state.root = root
+	state.resetCommandDiagnostics()
 	root.SetArgs(args)
 	root.SetOut(r.stdout)
 	root.SetErr(r.stderr)
@@ -89,7 +93,7 @@ func (r *Runner) Run(args []string) int {
 		return 0
 	}
 
-	state.renderError("", err, nil, nil, false)
+	state.renderError("", err, state.lastWarnings, state.lastProviders, state.lastPartial)
 	if state.cache != nil {
 		_ = state.cache.Close()
 	}
@@ -154,14 +158,14 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					s.swapProviders["1inch"].Info(),
 					s.swapProviders["uniswap"].Info(),
 				}
+			}
 
-				if settings.CacheEnabled {
-					cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
-					if err != nil {
-						return clierr.Wrap(clierr.CodeInternal, "open cache", err)
-					}
-					s.cache = cacheStore
+			if settings.CacheEnabled && shouldOpenCache(path) && s.cache == nil {
+				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
+				if err != nil {
+					return clierr.Wrap(clierr.CodeInternal, "open cache", err)
 				}
+				s.cache = cacheStore
 			}
 			return nil
 		},
@@ -395,6 +399,10 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 				if !shouldFallback(err) {
 					return nil, statuses, warnings, false, err
 				}
+				if !assetHasResolvedSymbol(asset) {
+					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
+					return nil, statuses, warnings, false, err
+				}
 
 				start = time.Now()
 				fallbackData, fallbackErr := fallback.LendMarkets(ctx, protocol, chain, asset)
@@ -445,6 +453,10 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 					return data, statuses, warnings, false, err
 				}
 				if !shouldFallback(err) {
+					return nil, statuses, warnings, false, err
+				}
+				if !assetHasResolvedSymbol(asset) {
+					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
 					return nil, statuses, warnings, false, err
 				}
 
@@ -731,9 +743,27 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
+				warnings := []string{}
+				if !assetHasResolvedSymbol(req.Asset) {
+					filteredProviders := make([]string, 0, len(selectedProviders))
+					skippedDefiLlama := false
+					for _, providerName := range selectedProviders {
+						if providerName == "defillama" {
+							skippedDefiLlama = true
+							continue
+						}
+						filteredProviders = append(filteredProviders, providerName)
+					}
+					if skippedDefiLlama {
+						warnings = append(warnings, "provider defillama skipped: unresolved asset symbol cannot be matched safely")
+					}
+					selectedProviders = filteredProviders
+					if len(selectedProviders) == 0 {
+						return nil, nil, warnings, false, clierr.New(clierr.CodeUsage, "selected providers require a resolvable asset symbol")
+					}
+				}
 				statuses := make([]model.ProviderStatus, 0, len(selectedProviders))
 				combined := make([]model.YieldOpportunity, 0)
-				warnings := []string{}
 				partial := false
 				var firstErr error
 
@@ -796,6 +826,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 type fetchFn func(ctx context.Context) (data any, providerStatus []model.ProviderStatus, warnings []string, partial bool, err error)
 
 func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Duration, fetch fetchFn) error {
+	s.resetCommandDiagnostics()
 	cacheStatus := cacheMetaMiss()
 	warnings := []string{}
 	var staleData any
@@ -811,6 +842,7 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 			if !cached.Stale {
 				var data any
 				if err := json.Unmarshal(cached.Value, &data); err == nil {
+					s.captureCommandDiagnostics(warnings, nil, false)
 					return s.emitSuccess(commandPath, data, warnings, entryStatus, nil, false)
 				}
 			} else {
@@ -830,6 +862,7 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 	defer cancel()
 	data, providerStatus, providerWarnings, partial, err := fetch(ctx)
 	warnings = append(warnings, providerWarnings...)
+	s.captureCommandDiagnostics(warnings, providerStatus, partial)
 	if err != nil {
 		if staleAvailable {
 			if !staleFallbackAllowed(err) {
@@ -847,12 +880,14 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 				return clierr.Wrap(clierr.CodeStale, "fresh provider fetch failed and cached data exceeded stale budget", err)
 			}
 			warnings = append(warnings, "provider fetch failed; serving stale data within max-stale budget")
+			s.captureCommandDiagnostics(warnings, providerStatus, false)
 			return s.emitSuccess(commandPath, staleData, warnings, staleCacheStatus, providerStatus, false)
 		}
 		return err
 	}
 
 	if partial && s.settings.Strict {
+		s.captureCommandDiagnostics(warnings, providerStatus, true)
 		return clierr.New(clierr.CodePartialStrict, "partial results returned in strict mode")
 	}
 
@@ -863,6 +898,7 @@ func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Durati
 		}
 	}
 
+	s.captureCommandDiagnostics(warnings, providerStatus, partial)
 	return s.emitSuccess(commandPath, data, warnings, cacheStatus, providerStatus, partial)
 }
 
@@ -1207,4 +1243,41 @@ func staleFallbackAllowed(err error) bool {
 		return false
 	}
 	return cErr.Code == clierr.CodeUnavailable || cErr.Code == clierr.CodeRateLimited
+}
+
+func shouldOpenCache(commandPath string) bool {
+	switch normalizeCommandPath(commandPath) {
+	case "", "version", "schema", "providers", "providers list":
+		return false
+	default:
+		return true
+	}
+}
+
+func normalizeCommandPath(commandPath string) string {
+	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(commandPath))), " ")
+}
+
+func assetHasResolvedSymbol(asset id.Asset) bool {
+	return strings.TrimSpace(asset.Symbol) != ""
+}
+
+func (s *runtimeState) resetCommandDiagnostics() {
+	s.lastWarnings = nil
+	s.lastProviders = nil
+	s.lastPartial = false
+}
+
+func (s *runtimeState) captureCommandDiagnostics(warnings []string, providers []model.ProviderStatus, partial bool) {
+	if len(warnings) == 0 {
+		s.lastWarnings = nil
+	} else {
+		s.lastWarnings = append([]string(nil), warnings...)
+	}
+	if len(providers) == 0 {
+		s.lastProviders = nil
+	} else {
+		s.lastProviders = append([]model.ProviderStatus(nil), providers...)
+	}
+	s.lastPartial = partial
 }

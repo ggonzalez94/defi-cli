@@ -68,6 +68,8 @@ README.md                         # user-facing usage + caveats
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
+- Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+- For `lend`/`yield`, unresolved asset symbols skip DefiLlama symbol matching and fallback/provider selection where symbol-based matching would be unsafe.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
 - `scripts/install.sh` installs the latest tagged release artifact into a writable user-space `PATH` directory by default (fallback `~/.local/bin`) and never uses sudo unless explicitly requested.
