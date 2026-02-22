@@ -279,21 +279,14 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 				return err
 			}
 
-			asset := id.Asset{}
-			if strings.TrimSpace(assetsArg) != "" {
-				parsedAsset, err := id.ParseAsset(assetsArg, chain)
-				if err != nil {
-					return err
-				}
-				if strings.TrimSpace(parsedAsset.Symbol) == "" {
-					return clierr.New(clierr.CodeUsage, "asset filter requires a token with known symbol on the selected chain")
-				}
-				asset = parsedAsset
+			asset, err := parseChainAssetFilter(chain, assetsArg)
+			if err != nil {
+				return err
 			}
 
 			req := map[string]any{
 				"chain": chain.CAIP2,
-				"asset": asset.AssetID,
+				"asset": chainAssetFilterCacheValue(asset, assetsArg),
 				"limit": assetsLimit,
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
@@ -1135,6 +1128,59 @@ func parseChainAsset(chainArg, assetArg string) (id.Chain, id.Asset, error) {
 		return id.Chain{}, id.Asset{}, err
 	}
 	return chain, asset, nil
+}
+
+func parseChainAssetFilter(chain id.Chain, assetArg string) (id.Asset, error) {
+	assetArg = strings.TrimSpace(assetArg)
+	if assetArg == "" {
+		return id.Asset{}, nil
+	}
+
+	asset, err := id.ParseAsset(assetArg, chain)
+	if err == nil {
+		if strings.TrimSpace(asset.Symbol) == "" {
+			return id.Asset{}, clierr.New(clierr.CodeUsage, "asset filter by address/CAIP requires a known token symbol on the selected chain")
+		}
+		return asset, nil
+	}
+
+	if looksLikeAddressOrCAIP(assetArg) || !looksLikeSymbolFilter(assetArg) {
+		return id.Asset{}, err
+	}
+
+	return id.Asset{
+		ChainID: chain.CAIP2,
+		Symbol:  strings.ToUpper(assetArg),
+	}, nil
+}
+
+func looksLikeAddressOrCAIP(input string) bool {
+	norm := strings.ToLower(strings.TrimSpace(input))
+	return strings.HasPrefix(norm, "eip155:") || (strings.HasPrefix(norm, "0x") && len(norm) == 42)
+}
+
+func looksLikeSymbolFilter(input string) bool {
+	norm := strings.TrimSpace(input)
+	if norm == "" || len(norm) > 64 {
+		return false
+	}
+	if strings.ContainsAny(norm, " \t\r\n:/") {
+		return false
+	}
+	return true
+}
+
+func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
+	if strings.TrimSpace(rawInput) == "" {
+		return ""
+	}
+	if strings.TrimSpace(asset.AssetID) != "" {
+		return asset.AssetID
+	}
+	if strings.TrimSpace(asset.Symbol) != "" {
+		return "symbol:" + strings.ToUpper(strings.TrimSpace(asset.Symbol))
+	}
+	return "raw:" + strings.ToUpper(strings.TrimSpace(rawInput))
 }
 
 func cacheKey(commandPath string, req any) string {

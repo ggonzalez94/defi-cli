@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,6 +26,34 @@ func TestSplitCSV(t *testing.T) {
 	items := splitCSV("Aave, morpho ,")
 	if len(items) != 2 || items[0] != "aave" || items[1] != "morpho" {
 		t.Fatalf("unexpected split: %#v", items)
+	}
+}
+
+func TestParseChainAssetFilterAllowsUnknownSymbol(t *testing.T) {
+	chain, err := id.ParseChain("ethereum")
+	if err != nil {
+		t.Fatalf("parse chain: %v", err)
+	}
+	asset, err := parseChainAssetFilter(chain, "UNI")
+	if err != nil {
+		t.Fatalf("expected unknown symbol to be accepted, got err=%v", err)
+	}
+	if asset.Symbol != "UNI" {
+		t.Fatalf("expected UNI symbol, got %+v", asset)
+	}
+	if asset.AssetID != "" {
+		t.Fatalf("expected empty asset id for non-registry symbol, got %s", asset.AssetID)
+	}
+}
+
+func TestParseChainAssetFilterRejectsUnknownAddress(t *testing.T) {
+	chain, err := id.ParseChain("ethereum")
+	if err != nil {
+		t.Fatalf("parse chain: %v", err)
+	}
+	_, err = parseChainAssetFilter(chain, "0x0000000000000000000000000000000000000001")
+	if err == nil {
+		t.Fatal("expected error for address without known chain symbol")
 	}
 }
 
@@ -222,6 +251,54 @@ func TestRunnerChainsAssets(t *testing.T) {
 	}
 }
 
+func TestRunnerChainsAssetsAllowsUnknownSymbolFilter(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		marketProvider: fakeMarketProvider{
+			expectedAssetSymbol: "UNI",
+			chainAssets: []model.ChainAssetTVL{
+				{
+					Rank:    1,
+					Chain:   "Ethereum",
+					ChainID: "eip155:1",
+					Asset:   "UNI",
+					AssetID: "",
+					TVLUSD:  456.78,
+				},
+			},
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newChainsCommand())
+	root.SetArgs([]string{"chains", "assets", "--chain", "1", "--asset", "UNI"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected chains assets command success for unknown symbol, err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if env["success"] != true {
+		t.Fatalf("expected success=true, got %v", env["success"])
+	}
+}
+
 func TestRunnerBridgeListRejectsProviderFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -273,8 +350,9 @@ func TestRunnerBridgeDetailsRequiresBridgeFlag(t *testing.T) {
 }
 
 type fakeMarketProvider struct {
-	categories  []model.ProtocolCategory
-	chainAssets []model.ChainAssetTVL
+	categories          []model.ProtocolCategory
+	chainAssets         []model.ChainAssetTVL
+	expectedAssetSymbol string
 }
 
 func (f fakeMarketProvider) Info() model.ProviderInfo {
@@ -290,7 +368,13 @@ func (f fakeMarketProvider) ChainsTop(context.Context, int) ([]model.ChainTVL, e
 	return nil, nil
 }
 
-func (f fakeMarketProvider) ChainsAssets(context.Context, id.Chain, id.Asset, int) ([]model.ChainAssetTVL, error) {
+func (f fakeMarketProvider) ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asset, limit int) ([]model.ChainAssetTVL, error) {
+	_ = ctx
+	_ = chain
+	_ = limit
+	if strings.TrimSpace(f.expectedAssetSymbol) != "" && !strings.EqualFold(asset.Symbol, f.expectedAssetSymbol) {
+		return nil, fmt.Errorf("unexpected asset symbol: %s", asset.Symbol)
+	}
 	return f.chainAssets, nil
 }
 
