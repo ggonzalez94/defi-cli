@@ -10,16 +10,16 @@ Format:
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Added MegaETH mainnet chain normalization (`megaeth`, `mega eth`, `mega-eth`) with canonical ID mapping to `eip155:4326`.
 
 ### Changed
-- None yet.
+- Added MegaETH bootstrap token parsing for `WETH` and `USDT` (mapped to MegaETH's `USDT0` contract address) to improve lending/bridge symbol workflows.
 
 ### Fixed
 - None yet.
 
 ### Docs
-- None yet.
+- Updated README and AGENTS MegaETH chain alias coverage and bootstrap token caveats.
 
 ### Security
 - None yet.

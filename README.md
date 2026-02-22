@@ -167,7 +167,8 @@ cache:
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
-- `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- MegaETH bootstrap symbol parsing currently supports `WETH` and `USDT` (`USDT` maps to the chain's `USDT0` contract address).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 

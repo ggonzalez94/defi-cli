@@ -56,6 +56,9 @@ var chainBySlug = map[string]Chain{
 	"world chain":   {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
 	"world-chain":   {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
 	"mantle":        {Name: "Mantle", Slug: "mantle", CAIP2: "eip155:5000", EVMChainID: 5000},
+	"megaeth":       {Name: "MegaETH", Slug: "megaeth", CAIP2: "eip155:4326", EVMChainID: 4326},
+	"mega eth":      {Name: "MegaETH", Slug: "megaeth", CAIP2: "eip155:4326", EVMChainID: 4326},
+	"mega-eth":      {Name: "MegaETH", Slug: "megaeth", CAIP2: "eip155:4326", EVMChainID: 4326},
 	"base":          {Name: "Base", Slug: "base", CAIP2: "eip155:8453", EVMChainID: 8453},
 	"blast":         {Name: "Blast", Slug: "blast", CAIP2: "eip155:81457", EVMChainID: 81457},
 	"berachain":     {Name: "Berachain", Slug: "berachain", CAIP2: "eip155:80094", EVMChainID: 80094},
@@ -81,6 +84,7 @@ var chainByID = map[int64]Chain{
 	324:    chainBySlug["zksync"],
 	480:    chainBySlug["world-chain"],
 	5000:   chainBySlug["mantle"],
+	4326:   chainBySlug["megaeth"],
 	8453:   chainBySlug["base"],
 	42220:  chainBySlug["celo"],
 	42161:  chainBySlug["arbitrum"],
@@ -152,6 +156,10 @@ var tokenRegistry = map[string][]Token{
 	"eip155:5000": {
 		{Symbol: "USDC", Address: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9", Decimals: 6},
 		{Symbol: "WETH", Address: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", Decimals: 18},
+	},
+	"eip155:4326": {
+		{Symbol: "USDT", Address: "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb", Decimals: 6},
+		{Symbol: "WETH", Address: "0x4200000000000000000000000000000000000006", Decimals: 18},
 	},
 	"eip155:42220": {
 		{Symbol: "USDC", Address: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C", Decimals: 6},
