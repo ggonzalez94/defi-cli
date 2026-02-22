@@ -10,16 +10,16 @@ Format:
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Added scheduled install metrics snapshots via `.github/workflows/install-metrics.yml`, persisting historical install-event data to the `analytics` branch.
 
 ### Changed
-- None yet.
+- Installer now performs a best-effort post-install fetch of `install-marker.txt`, and tagged releases now upload that marker asset for cleaner install-event counting.
 
 ### Fixed
 - None yet.
 
 ### Docs
-- None yet.
+- Documented install-event measurement (marker asset counting), manual query command, and snapshot output locations in `README.md` and `AGENTS.md`.
 
 ### Security
 - None yet.

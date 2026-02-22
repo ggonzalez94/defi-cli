@@ -149,6 +149,14 @@ install_binary() {
 	fail "no write access to $INSTALL_DIR (set DEFI_INSTALL_DIR=<writable-dir> or DEFI_USE_SUDO=1)"
 }
 
+emit_install_marker() {
+	marker_url="$BASE_URL/$MARKER_ASSET"
+	marker_path="$TMP_DIR/$MARKER_ASSET"
+
+	# Best-effort signal for install-event counting; never block installation.
+	curl -fsSL "$marker_url" -o "$marker_path" >/dev/null 2>&1 || true
+}
+
 need_cmd curl
 need_cmd tar
 need_cmd mktemp
@@ -161,6 +169,7 @@ TAG="$(resolve_tag)"
 VERSION="${TAG#v}"
 ARCHIVE="${BIN_NAME}_${VERSION}_${OS}_${ARCH}.tar.gz"
 CHECKSUMS="checksums.txt"
+MARKER_ASSET="install-marker.txt"
 BASE_URL="https://github.com/$REPO/releases/download/$TAG"
 TMP_DIR="$(mktemp -d)"
 ARCHIVE_PATH="$TMP_DIR/$ARCHIVE"
@@ -194,6 +203,7 @@ chmod +x "$BIN_PATH"
 
 ensure_install_dir
 install_binary
+emit_install_marker
 
 echo "Installed to $INSTALL_DIR/$BIN_NAME"
 "$INSTALL_DIR/$BIN_NAME" version --long || true

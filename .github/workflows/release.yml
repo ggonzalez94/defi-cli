@@ -31,3 +31,15 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: upload install marker
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          cat > install-marker.txt <<EOF
+          install event marker for defi-cli installer analytics
+          repository=${GITHUB_REPOSITORY}
+          tag=${GITHUB_REF_NAME}
+          generated_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          EOF
+          gh release upload "${GITHUB_REF_NAME}" install-marker.txt --clobber

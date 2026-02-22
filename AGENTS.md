@@ -49,6 +49,7 @@ internal/
 
 .github/workflows/ci.yml          # CI (test/vet/build)
 .github/workflows/release.yml     # tagged release pipeline (GoReleaser)
+.github/workflows/install-metrics.yml # daily install-event snapshots from release assets
 scripts/install.sh                # macOS/Linux installer from GitHub Releases
 .goreleaser.yml                   # cross-platform release artifact config
 assets/                            # static assets (logo, images)
@@ -75,6 +76,8 @@ README.md                         # user-facing usage + caveats
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
 - `scripts/install.sh` installs the latest tagged release artifact into a writable user-space `PATH` directory by default (fallback `~/.local/bin`) and never uses sudo unless explicitly requested.
+- `scripts/install.sh` performs a best-effort post-install download of release asset `install-marker.txt`; the marker `download_count` is the install-event proxy.
+- `.github/workflows/install-metrics.yml` snapshots install-event counters daily and persists history in the `analytics` branch.
 
 ## Change patterns
 
