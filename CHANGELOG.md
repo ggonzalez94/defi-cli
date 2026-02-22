@@ -13,6 +13,9 @@ Format:
 - None yet.
 
 ### Changed
+- Expanded EVM chain normalization support for `--chain` across lending, yield, bridge, swap, and asset helpers: Mantle, Ink, Scroll, Berachain, Gnosis, Linea, Sonic, Blast, Fraxtal, World Chain, Celo, and zkSync Era.
+- Added bootstrap token registry entries (`USDC`/`USDT`/`WETH` where available) for new production chains with verified provider coverage (Gnosis, Sonic, zkSync Era, Mantle, Celo, Ink, Linea, Scroll).
+- Added first-class Taiko bootstrap asset parsing (`USDC`, `WETH`) from official network contract addresses, plus `taiko alethia` alias normalization.
 - `version`, `schema`, and `providers list` now bypass cache initialization so metadata commands are not blocked by cache path failures.
 
 ### Fixed
