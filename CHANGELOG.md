@@ -10,6 +10,23 @@ Format:
 ## [Unreleased]
 
 ### Added
+- None yet.
+
+### Changed
+- None yet.
+
+### Fixed
+- None yet.
+
+### Docs
+- None yet.
+
+### Security
+- None yet.
+
+## [v0.2.0] - 2026-02-22
+
+### Added
 - Added `chains assets` to return chain-level TVL broken down by asset, with optional `--asset` filtering.
 - Added broader EVM `--chain` support across lending, yield, bridge, swap, and asset helpers.
 - Added full support for Mantle, Ink, Scroll, Gnosis, Linea, Sonic, Celo, and zkSync Era, including bootstrap token registry coverage (`USDC`/`USDT`/`WETH`, where available) and verified provider coverage.
@@ -49,6 +66,7 @@ Format:
 ### Changed
 - Project/module path migrated to `github.com/ggonzalez94/defi-cli`.
 
-[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.1...HEAD
+[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...HEAD
+[v0.2.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/ggonzalez94/defi-cli/releases/tag/v0.1.0
