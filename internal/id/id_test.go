@@ -151,13 +151,75 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 	}
 }
 
-func TestParseAssetRequiresAddressOnAddressOnlyChains(t *testing.T) {
+func TestParseAssetExpandedTop20AndTaikoSymbols(t *testing.T) {
+	tests := []struct {
+		chainInput string
+		symbol     string
+	}{
+		{chainInput: "ethereum", symbol: "AAVE"},
+		{chainInput: "base", symbol: "USDE"},
+		{chainInput: "base", symbol: "USDS"},
+		{chainInput: "arbitrum", symbol: "MORPHO"},
+		{chainInput: "bsc", symbol: "CAKE"},
+		{chainInput: "ethereum", symbol: "CRVUSD"},
+		{chainInput: "ethereum", symbol: "TUSD"},
+		{chainInput: "avalanche", symbol: "EURC"},
+		{chainInput: "base", symbol: "FRAX"},
+		{chainInput: "fraxtal", symbol: "FRAX"},
+		{chainInput: "ethereum", symbol: "LDO"},
+		{chainInput: "arbitrum", symbol: "UNI"},
+		{chainInput: "base", symbol: "ZRO"},
+		{chainInput: "scroll", symbol: "ETHFI"},
+		{chainInput: "taiko", symbol: "TAIKO"},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.chainInput+"-"+tc.symbol, func(t *testing.T) {
+			chain, err := ParseChain(tc.chainInput)
+			if err != nil {
+				t.Fatalf("ParseChain(%s) failed: %v", tc.chainInput, err)
+			}
+			asset, err := ParseAsset(tc.symbol, chain)
+			if err != nil {
+				t.Fatalf("ParseAsset(%s) failed: %v", tc.symbol, err)
+			}
+			if asset.Symbol != tc.symbol {
+				t.Fatalf("expected symbol %s, got %s", tc.symbol, asset.Symbol)
+			}
+			if asset.ChainID != chain.CAIP2 {
+				t.Fatalf("expected chain id %s, got %s", chain.CAIP2, asset.ChainID)
+			}
+		})
+	}
+}
+
+func TestParseAssetFraxtalFraxAddress(t *testing.T) {
+	chain, err := ParseChain("fraxtal")
+	if err != nil {
+		t.Fatalf("ParseChain(fraxtal) failed: %v", err)
+	}
+
+	asset, err := ParseAsset("FRAX", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(FRAX) failed: %v", err)
+	}
+
+	if asset.Address != "0xfc00000000000000000000000000000000000001" {
+		t.Fatalf("unexpected FRAX address on fraxtal: %s", asset.Address)
+	}
+	if asset.Decimals != 18 {
+		t.Fatalf("unexpected FRAX decimals on fraxtal: %d", asset.Decimals)
+	}
+}
+
+func TestParseAssetRequiresAddressWhenSymbolMissingOnChain(t *testing.T) {
 	chain, err := ParseChain("blast")
 	if err != nil {
 		t.Fatalf("ParseChain(blast) failed: %v", err)
 	}
 	_, err = ParseAsset("USDC", chain)
 	if err == nil {
-		t.Fatal("expected symbol lookup to fail for address-only chain")
+		t.Fatal("expected symbol lookup to fail when symbol is missing on chain")
 	}
 }
