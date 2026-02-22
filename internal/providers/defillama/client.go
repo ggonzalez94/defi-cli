@@ -875,7 +875,7 @@ func matchesChain(input string, chain id.Chain) bool {
 
 func matchesAssetSymbol(symbolRaw string, expected string) bool {
 	if strings.TrimSpace(expected) == "" {
-		return true
+		return false
 	}
 	symbolRaw = strings.ToUpper(strings.TrimSpace(symbolRaw))
 	expected = strings.ToUpper(strings.TrimSpace(expected))

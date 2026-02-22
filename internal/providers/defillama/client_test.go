@@ -87,6 +87,18 @@ func TestYieldOpportunitiesFilters(t *testing.T) {
 	}
 }
 
+func TestMatchesAssetSymbolRequiresExpectedSymbol(t *testing.T) {
+	if matchesAssetSymbol("USDC", "") {
+		t.Fatal("expected empty symbol filter to be rejected")
+	}
+	if !matchesAssetSymbol("USDC", "USDC") {
+		t.Fatal("expected exact symbol match")
+	}
+	if !matchesAssetSymbol("USDC-WETH", "USDC") {
+		t.Fatal("expected split symbol match")
+	}
+}
+
 func TestProtocolsCategoriesAggregation(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {

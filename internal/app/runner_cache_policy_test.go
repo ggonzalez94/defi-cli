@@ -169,6 +169,63 @@ func TestRunCachedCommandDoesNotFallbackStaleOnAuthFailure(t *testing.T) {
 	}
 }
 
+func TestRunCachedCommandStrictPartialErrorPreservesDiagnostics(t *testing.T) {
+	state, _ := newCachePolicyTestState(t, 5*time.Second, false)
+	state.settings.Strict = true
+	key := "runner-cache-policy-strict-partial"
+
+	err := state.runCachedCommand("test command", key, time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		return map[string]any{"source": "provider"},
+			[]model.ProviderStatus{
+				{Name: "aave", Status: "ok", LatencyMS: 12},
+				{Name: "morpho", Status: "unavailable", LatencyMS: 34},
+			},
+			[]string{"provider morpho failed: timeout"},
+			true,
+			nil
+	})
+	if err == nil {
+		t.Fatal("expected strict partial error, got nil")
+	}
+	if code := clierr.ExitCode(err); code != int(clierr.CodePartialStrict) {
+		t.Fatalf("expected partial strict exit code %d, got %d err=%v", int(clierr.CodePartialStrict), code, err)
+	}
+
+	stderrBuf, ok := state.runner.stderr.(*bytes.Buffer)
+	if !ok {
+		t.Fatalf("expected stderr buffer, got %T", state.runner.stderr)
+	}
+	state.renderError("test command", err, state.lastWarnings, state.lastProviders, state.lastPartial)
+
+	var env struct {
+		Success  bool            `json:"success"`
+		Warnings []string        `json:"warnings"`
+		Error    model.ErrorBody `json:"error"`
+		Meta     struct {
+			Partial   bool                   `json:"partial"`
+			Providers []model.ProviderStatus `json:"providers"`
+		} `json:"meta"`
+	}
+	if decodeErr := json.Unmarshal(stderrBuf.Bytes(), &env); decodeErr != nil {
+		t.Fatalf("decode error envelope failed: %v output=%s", decodeErr, stderrBuf.String())
+	}
+	if env.Success {
+		t.Fatalf("expected success=false, got %+v", env)
+	}
+	if env.Error.Type != "partial_results" {
+		t.Fatalf("expected partial_results error type, got %+v", env.Error)
+	}
+	if !env.Meta.Partial {
+		t.Fatalf("expected meta.partial=true, got %+v", env.Meta)
+	}
+	if len(env.Meta.Providers) != 2 {
+		t.Fatalf("expected provider statuses in error meta, got %+v", env.Meta.Providers)
+	}
+	if !containsWarning(env.Warnings, "provider morpho failed: timeout") {
+		t.Fatalf("expected warning propagation, got %+v", env.Warnings)
+	}
+}
+
 func newCachePolicyTestState(t *testing.T, maxStale time.Duration, noStale bool) (*runtimeState, *bytes.Buffer) {
 	t.Helper()
 	tmp := t.TempDir()
