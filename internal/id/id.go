@@ -196,6 +196,7 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "CRV", Address: "0x331b9182088e2a7d6d3fe4742aba1fb231aecc56", Decimals: 18},
 		{Symbol: "CRVUSD", Address: "0xb102f7efa0d5de071a8d37b3548e1c7cb148caf3", Decimals: 18},
 		{Symbol: "ENA", Address: "0x58538e6a46e07434d7e7375bc268d3cb839c0133", Decimals: 18},
+		{Symbol: "FRAX", Address: "0xfc00000000000000000000000000000000000001", Decimals: 18},
 		{Symbol: "LINK", Address: "0xd6a6ba37faac229b9665e86739ca501401f5a940", Decimals: 18},
 		{Symbol: "USDC", Address: "0xdcc0f2d8f90fde85b10ac1c8ab57dc0ae946a543", Decimals: 6},
 		{Symbol: "USDE", Address: "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34", Decimals: 18},

@@ -165,6 +165,7 @@ func TestParseAssetExpandedTop20AndTaikoSymbols(t *testing.T) {
 		{chainInput: "ethereum", symbol: "TUSD"},
 		{chainInput: "avalanche", symbol: "EURC"},
 		{chainInput: "base", symbol: "FRAX"},
+		{chainInput: "fraxtal", symbol: "FRAX"},
 		{chainInput: "ethereum", symbol: "LDO"},
 		{chainInput: "arbitrum", symbol: "UNI"},
 		{chainInput: "base", symbol: "ZRO"},
@@ -190,6 +191,25 @@ func TestParseAssetExpandedTop20AndTaikoSymbols(t *testing.T) {
 				t.Fatalf("expected chain id %s, got %s", chain.CAIP2, asset.ChainID)
 			}
 		})
+	}
+}
+
+func TestParseAssetFraxtalFraxAddress(t *testing.T) {
+	chain, err := ParseChain("fraxtal")
+	if err != nil {
+		t.Fatalf("ParseChain(fraxtal) failed: %v", err)
+	}
+
+	asset, err := ParseAsset("FRAX", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(FRAX) failed: %v", err)
+	}
+
+	if asset.Address != "0xfc00000000000000000000000000000000000001" {
+		t.Fatalf("unexpected FRAX address on fraxtal: %s", asset.Address)
+	}
+	if asset.Decimals != 18 {
+		t.Fatalf("unexpected FRAX decimals on fraxtal: %d", asset.Decimals)
 	}
 }
 

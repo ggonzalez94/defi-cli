@@ -16,7 +16,7 @@ Format:
 - None yet.
 
 ### Fixed
-- None yet.
+- Added missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
 
 ### Docs
 - None yet.
