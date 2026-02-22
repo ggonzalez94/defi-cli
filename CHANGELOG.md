@@ -13,13 +13,14 @@ Format:
 - None yet.
 
 ### Changed
-- None yet.
+- `version`, `schema`, and `providers list` now bypass cache initialization so metadata commands are not blocked by cache path failures.
 
 ### Fixed
-- None yet.
+- Preserved provider statuses, warnings, and `meta.partial=true` in strict-mode partial-result error envelopes (exit code `15`).
+- Prevented unsafe DefiLlama symbol matching when asset symbols are unresolved, including skipping unsafe lending fallback/provider selection paths.
 
 ### Docs
-- None yet.
+- Documented metadata-command cache bypass and unresolved-symbol fallback caveats in `README.md`/`AGENTS.md`.
 
 ### Security
 - None yet.
