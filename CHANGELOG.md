@@ -11,12 +11,13 @@ Format:
 
 ### Added
 - Added MegaETH mainnet chain normalization (`megaeth`, `mega eth`, `mega-eth`) with canonical ID mapping to `eip155:4326`.
+- Expanded bootstrap token registry symbol support across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
 
 ### Changed
 - Added MegaETH bootstrap token parsing for `MEGA`, `WETH`, and `USDT` (mapped to MegaETH's `USDT0` contract address) to improve lending/bridge symbol workflows.
 
 ### Fixed
-- None yet.
+- Added missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
 
 ### Docs
 - Updated README and AGENTS MegaETH chain alias coverage and bootstrap token caveats.

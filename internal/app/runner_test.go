@@ -34,12 +34,12 @@ func TestParseChainAssetFilterAllowsUnknownSymbol(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse chain: %v", err)
 	}
-	asset, err := parseChainAssetFilter(chain, "UNI")
+	asset, err := parseChainAssetFilter(chain, "NOTAREALTOKEN")
 	if err != nil {
 		t.Fatalf("expected unknown symbol to be accepted, got err=%v", err)
 	}
-	if asset.Symbol != "UNI" {
-		t.Fatalf("expected UNI symbol, got %+v", asset)
+	if asset.Symbol != "NOTAREALTOKEN" {
+		t.Fatalf("expected NOTAREALTOKEN symbol, got %+v", asset)
 	}
 	if asset.AssetID != "" {
 		t.Fatalf("expected empty asset id for non-registry symbol, got %s", asset.AssetID)
