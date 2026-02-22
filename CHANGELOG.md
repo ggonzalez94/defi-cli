@@ -13,7 +13,8 @@ Format:
 - None yet.
 
 ### Changed
-- None yet.
+- Expanded EVM chain normalization support for `--chain` across lending, yield, bridge, swap, and asset helpers: Mantle, Ink, Scroll, Berachain, Gnosis, Linea, Sonic, Blast, Fraxtal, World Chain, Celo, and zkSync Era.
+- Added bootstrap token registry entries (`USDC`/`USDT`/`WETH` where available) for new production chains with verified provider coverage (Gnosis, Sonic, zkSync Era, Mantle, Celo, Ink, Linea, Scroll).
 
 ### Fixed
 - None yet.

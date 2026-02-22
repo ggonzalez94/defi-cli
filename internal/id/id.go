@@ -38,26 +38,57 @@ type Token struct {
 }
 
 var chainBySlug = map[string]Chain{
-	"ethereum":  {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
-	"mainnet":   {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
-	"base":      {Name: "Base", Slug: "base", CAIP2: "eip155:8453", EVMChainID: 8453},
-	"arbitrum":  {Name: "Arbitrum", Slug: "arbitrum", CAIP2: "eip155:42161", EVMChainID: 42161},
-	"optimism":  {Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10},
-	"polygon":   {Name: "Polygon", Slug: "polygon", CAIP2: "eip155:137", EVMChainID: 137},
-	"avalanche": {Name: "Avalanche", Slug: "avalanche", CAIP2: "eip155:43114", EVMChainID: 43114},
-	"bsc":       {Name: "BSC", Slug: "bsc", CAIP2: "eip155:56", EVMChainID: 56},
-	"taiko":     {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
+	"ethereum":    {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
+	"mainnet":     {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
+	"optimism":    {Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10},
+	"op mainnet":  {Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10},
+	"op-mainnet":  {Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10},
+	"bsc":         {Name: "BSC", Slug: "bsc", CAIP2: "eip155:56", EVMChainID: 56},
+	"gnosis":      {Name: "Gnosis", Slug: "gnosis", CAIP2: "eip155:100", EVMChainID: 100},
+	"xdai":        {Name: "Gnosis", Slug: "gnosis", CAIP2: "eip155:100", EVMChainID: 100},
+	"polygon":     {Name: "Polygon", Slug: "polygon", CAIP2: "eip155:137", EVMChainID: 137},
+	"sonic":       {Name: "Sonic", Slug: "sonic", CAIP2: "eip155:146", EVMChainID: 146},
+	"fraxtal":     {Name: "Fraxtal", Slug: "fraxtal", CAIP2: "eip155:252", EVMChainID: 252},
+	"zksync":      {Name: "zkSync Era", Slug: "zksync", CAIP2: "eip155:324", EVMChainID: 324},
+	"zksync era":  {Name: "zkSync Era", Slug: "zksync", CAIP2: "eip155:324", EVMChainID: 324},
+	"zksync-era":  {Name: "zkSync Era", Slug: "zksync", CAIP2: "eip155:324", EVMChainID: 324},
+	"worldchain":  {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
+	"world chain": {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
+	"world-chain": {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
+	"mantle":      {Name: "Mantle", Slug: "mantle", CAIP2: "eip155:5000", EVMChainID: 5000},
+	"base":        {Name: "Base", Slug: "base", CAIP2: "eip155:8453", EVMChainID: 8453},
+	"blast":       {Name: "Blast", Slug: "blast", CAIP2: "eip155:81457", EVMChainID: 81457},
+	"berachain":   {Name: "Berachain", Slug: "berachain", CAIP2: "eip155:80094", EVMChainID: 80094},
+	"arbitrum":    {Name: "Arbitrum", Slug: "arbitrum", CAIP2: "eip155:42161", EVMChainID: 42161},
+	"avalanche":   {Name: "Avalanche", Slug: "avalanche", CAIP2: "eip155:43114", EVMChainID: 43114},
+	"linea":       {Name: "Linea", Slug: "linea", CAIP2: "eip155:59144", EVMChainID: 59144},
+	"ink":         {Name: "Ink", Slug: "ink", CAIP2: "eip155:57073", EVMChainID: 57073},
+	"scroll":      {Name: "Scroll", Slug: "scroll", CAIP2: "eip155:534352", EVMChainID: 534352},
+	"celo":        {Name: "Celo", Slug: "celo", CAIP2: "eip155:42220", EVMChainID: 42220},
+	"taiko":       {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 }
 
 var chainByID = map[int64]Chain{
 	1:      chainBySlug["ethereum"],
 	10:     chainBySlug["optimism"],
 	56:     chainBySlug["bsc"],
+	100:    chainBySlug["gnosis"],
 	137:    chainBySlug["polygon"],
+	146:    chainBySlug["sonic"],
+	252:    chainBySlug["fraxtal"],
+	324:    chainBySlug["zksync"],
+	480:    chainBySlug["world-chain"],
+	5000:   chainBySlug["mantle"],
 	8453:   chainBySlug["base"],
+	42220:  chainBySlug["celo"],
 	42161:  chainBySlug["arbitrum"],
 	43114:  chainBySlug["avalanche"],
+	57073:  chainBySlug["ink"],
+	59144:  chainBySlug["linea"],
+	80094:  chainBySlug["berachain"],
+	81457:  chainBySlug["blast"],
 	167000: chainBySlug["taiko"],
+	534352: chainBySlug["scroll"],
 }
 
 // Small bootstrap registry for deterministic asset parsing on Tier-1 chains.
@@ -102,6 +133,40 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "USDT", Address: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", Decimals: 6},
 		{Symbol: "DAI", Address: "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70", Decimals: 18},
 		{Symbol: "WETH", Address: "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB", Decimals: 18},
+	},
+	"eip155:100": {
+		{Symbol: "USDC", Address: "0xDDAfbb505ad214D7b80b1f830fcCc89B60fb7A83", Decimals: 6},
+		{Symbol: "WETH", Address: "0x6A023CCd1ff6F2045C3309768eAd9E68F978f6e1", Decimals: 18},
+	},
+	"eip155:146": {
+		{Symbol: "USDC", Address: "0x29219dd400f2Bf60E5a23d13Be72B486D4038894", Decimals: 6},
+		{Symbol: "WETH", Address: "0x50c42dEAcD8Fc9773493ED674b675bE577f2634b", Decimals: 18},
+	},
+	"eip155:324": {
+		{Symbol: "USDC", Address: "0x1d17CBcF0D6D143135aE902365D2E5e2A16538D4", Decimals: 6},
+		{Symbol: "USDT", Address: "0x493257fD37EDB34451f62EDf8D2a0C418852bA4C", Decimals: 6},
+		{Symbol: "WETH", Address: "0x5AEa5775959fBC2557Cc8789bC1bf90A239D9a91", Decimals: 18},
+	},
+	"eip155:5000": {
+		{Symbol: "USDC", Address: "0x09Bc4E0D864854c6aFB6eB9A9cdF58aC190D0dF9", Decimals: 6},
+		{Symbol: "WETH", Address: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", Decimals: 18},
+	},
+	"eip155:42220": {
+		{Symbol: "USDC", Address: "0xcebA9300f2b948710d2653dD7B07f33A8B32118C", Decimals: 6},
+		{Symbol: "WETH", Address: "0xD221812de1BD094f35587EE8E174B07B6167D9Af", Decimals: 18},
+	},
+	"eip155:57073": {
+		{Symbol: "USDC", Address: "0x2D270e6886d130D724215A266106e6832161EAEd", Decimals: 6},
+		{Symbol: "WETH", Address: "0x4200000000000000000000000000000000000006", Decimals: 18},
+	},
+	"eip155:59144": {
+		{Symbol: "USDC", Address: "0x176211869cA2b568f2A7D4EE941E073a821EE1ff", Decimals: 6},
+		{Symbol: "USDT", Address: "0xA219439258ca9da29E9Cc4cE5596924745e12B93", Decimals: 6},
+		{Symbol: "WETH", Address: "0xe5D7C2a44FfDDf6b295A15c148167daaAf5Cf34f", Decimals: 18},
+	},
+	"eip155:534352": {
+		{Symbol: "USDC", Address: "0x06eFdBFf2a14a7c8E15944D1F4A48F9F95F663A4", Decimals: 6},
+		{Symbol: "WETH", Address: "0x5300000000000000000000000000000000000004", Decimals: 18},
 	},
 }
 
