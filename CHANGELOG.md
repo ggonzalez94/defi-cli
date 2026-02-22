@@ -11,12 +11,13 @@ Format:
 
 ### Added
 - Added `chains assets` to return chain-level TVL broken down by asset, with optional `--asset` filtering.
+- Added broader EVM `--chain` support across lending, yield, bridge, swap, and asset helpers.
+- Added full support for Mantle, Ink, Scroll, Gnosis, Linea, Sonic, Celo, and zkSync Era, including bootstrap token registry coverage (`USDC`/`USDT`/`WETH`, where available) and verified provider coverage.
+- Added partial support for Berachain, Blast, Fraxtal, and World Chain via chain normalization and routing support.
+- Added partial Taiko support with first-class bootstrap asset parsing for `USDC` and `WETH` from official network contracts, plus `taiko alethia` alias normalization.
 
 ### Changed
 - DefiLlama provider capability metadata now marks `chains.assets` as requiring `DEFI_DEFILLAMA_API_KEY`.
-- Expanded EVM chain normalization support for `--chain` across lending, yield, bridge, swap, and asset helpers: Mantle, Ink, Scroll, Berachain, Gnosis, Linea, Sonic, Blast, Fraxtal, World Chain, Celo, and zkSync Era.
-- Added bootstrap token registry entries (`USDC`/`USDT`/`WETH` where available) for new production chains with verified provider coverage (Gnosis, Sonic, zkSync Era, Mantle, Celo, Ink, Linea, Scroll).
-- Added first-class Taiko bootstrap asset parsing (`USDC`, `WETH`) from official network contract addresses, plus `taiko alethia` alias normalization.
 - `version`, `schema`, and `providers list` now bypass cache initialization so metadata commands are not blocked by cache path failures.
 
 ### Fixed
