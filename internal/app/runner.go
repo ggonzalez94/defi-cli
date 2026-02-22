@@ -458,6 +458,9 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
+	_ = marketsCmd.MarkFlagRequired("protocol")
+	_ = marketsCmd.MarkFlagRequired("chain")
+	_ = marketsCmd.MarkFlagRequired("asset")
 
 	var ratesProtocol, ratesChain, ratesAsset string
 	var ratesLimit int
@@ -514,6 +517,9 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
+	_ = ratesCmd.MarkFlagRequired("protocol")
+	_ = ratesCmd.MarkFlagRequired("chain")
+	_ = ratesCmd.MarkFlagRequired("asset")
 
 	root.AddCommand(marketsCmd)
 	root.AddCommand(ratesCmd)
