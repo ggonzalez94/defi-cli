@@ -51,7 +51,10 @@ func Open(path, lockPath string) (*Store, error) {
 		}
 	}
 
-	return &Store{db: db, lock: flock.New(lockPath)}, nil
+	store := &Store{db: db, lock: flock.New(lockPath)}
+	// Prune expired entries on startup to prevent unbounded growth.
+	_ = store.Prune()
+	return store, nil
 }
 
 func (s *Store) Close() error {
@@ -59,6 +62,20 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// Prune deletes all cache entries whose TTL has fully expired (age > ttl).
+// It is called automatically on Open and can be called manually.
+func (s *Store) Prune() error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	nowUnix := time.Now().UTC().Unix()
+	_, err := s.db.Exec("DELETE FROM cache_entries WHERE created_at + ttl_seconds < ?", nowUnix)
+	if err != nil {
+		return fmt.Errorf("prune cache: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Get(key string, maxStale time.Duration) (Result, error) {
