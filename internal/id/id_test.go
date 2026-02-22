@@ -78,6 +78,9 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "world chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "world-chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "worldchain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
+		{input: "megaeth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
+		{input: "mega eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
+		{input: "mega-eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "celo", chainID: 42220, caip2: "eip155:42220", slug: "celo"},
 		{input: "taiko", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 		{input: "taiko alethia", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
@@ -91,6 +94,7 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "81457", chainID: 81457, caip2: "eip155:81457", slug: "blast"},
 		{input: "252", chainID: 252, caip2: "eip155:252", slug: "fraxtal"},
 		{input: "480", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
+		{input: "4326", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "167000", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 	}
 
@@ -125,6 +129,7 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 		{chainInput: "gnosis", symbol: "USDC"},
 		{chainInput: "linea", symbol: "USDC"},
 		{chainInput: "sonic", symbol: "USDC"},
+		{chainInput: "megaeth", symbol: "USDT"},
 		{chainInput: "celo", symbol: "USDC"},
 		{chainInput: "taiko", symbol: "USDC"},
 		{chainInput: "zksync", symbol: "USDC"},
@@ -141,8 +146,8 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ParseAsset(%s) failed: %v", tc.symbol, err)
 			}
-			if asset.Symbol != "USDC" {
-				t.Fatalf("expected symbol USDC, got %s", asset.Symbol)
+			if asset.Symbol != tc.symbol {
+				t.Fatalf("expected symbol %s, got %s", tc.symbol, asset.Symbol)
 			}
 			if asset.ChainID != chain.CAIP2 {
 				t.Fatalf("expected chain id %s, got %s", chain.CAIP2, asset.ChainID)
@@ -221,5 +226,31 @@ func TestParseAssetRequiresAddressWhenSymbolMissingOnChain(t *testing.T) {
 	_, err = ParseAsset("USDC", chain)
 	if err == nil {
 		t.Fatal("expected symbol lookup to fail when symbol is missing on chain")
+	}
+}
+
+func TestParseAssetMegaETHBootstrapAddresses(t *testing.T) {
+	chain, err := ParseChain("megaeth")
+	if err != nil {
+		t.Fatalf("ParseChain(megaeth) failed: %v", err)
+	}
+
+	tests := []struct {
+		symbol  string
+		address string
+	}{
+		{symbol: "MEGA", address: "0x28b7e77f82b25b95953825f1e3ea0e36c1c29861"},
+		{symbol: "USDT", address: "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"},
+		{symbol: "WETH", address: "0x4200000000000000000000000000000000000006"},
+	}
+
+	for _, tc := range tests {
+		asset, err := ParseAsset(tc.symbol, chain)
+		if err != nil {
+			t.Fatalf("ParseAsset(%s) failed: %v", tc.symbol, err)
+		}
+		if asset.Address != tc.address {
+			t.Fatalf("expected %s address %s, got %s", tc.symbol, tc.address, asset.Address)
+		}
 	}
 }
