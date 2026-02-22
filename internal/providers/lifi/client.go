@@ -55,6 +55,9 @@ type quoteResponse struct {
 }
 
 func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteRequest) (model.BridgeQuote, error) {
+	if !req.FromChain.IsEVM() || !req.ToChain.IsEVM() {
+		return model.BridgeQuote{}, clierr.New(clierr.CodeUnsupported, "lifi bridge quotes support only EVM chains")
+	}
 	vals := url.Values{}
 	vals.Set("fromChain", strconv.FormatInt(req.FromChain.EVMChainID, 10))
 	vals.Set("toChain", strconv.FormatInt(req.ToChain.EVMChainID, 10))

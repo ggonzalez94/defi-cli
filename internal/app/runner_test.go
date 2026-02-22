@@ -10,6 +10,7 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/config"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -204,6 +205,96 @@ func TestRunnerBridgeDetailsRequiresBridgeFlag(t *testing.T) {
 	}
 }
 
+func TestSwapDefaultsToJupiterForSolana(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	jupiter := &fakeSwapProvider{name: "jupiter"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch":   oneinch,
+			"jupiter": jupiter,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "solana",
+		"--from-asset", "USDC",
+		"--to-asset", "USDT",
+		"--amount", "1000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+	if jupiter.calls != 1 {
+		t.Fatalf("expected jupiter provider call, got %d", jupiter.calls)
+	}
+	if oneinch.calls != 0 {
+		t.Fatalf("expected no 1inch calls, got %d", oneinch.calls)
+	}
+}
+
+func TestSwapDefaultsToOneInchForEVM(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	jupiter := &fakeSwapProvider{name: "jupiter"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch":   oneinch,
+			"jupiter": jupiter,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "base",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--amount", "1000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+	if oneinch.calls != 1 {
+		t.Fatalf("expected 1inch provider call, got %d", oneinch.calls)
+	}
+	if jupiter.calls != 0 {
+		t.Fatalf("expected no jupiter calls, got %d", jupiter.calls)
+	}
+}
+
 type fakeMarketProvider struct {
 	categories []model.ProtocolCategory
 }
@@ -227,4 +318,39 @@ func (f fakeMarketProvider) ProtocolsTop(context.Context, string, int) ([]model.
 
 func (f fakeMarketProvider) ProtocolsCategories(context.Context) ([]model.ProtocolCategory, error) {
 	return f.categories, nil
+}
+
+type fakeSwapProvider struct {
+	name  string
+	calls int
+}
+
+func (f *fakeSwapProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "swap",
+		RequiresKey:  false,
+		Capabilities: []string{"swap.quote"},
+	}
+}
+
+func (f *fakeSwapProvider) QuoteSwap(_ context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	f.calls++
+	return model.SwapQuote{
+		Provider:    f.name,
+		ChainID:     req.Chain.CAIP2,
+		FromAssetID: req.FromAsset.AssetID,
+		ToAssetID:   req.ToAsset.AssetID,
+		InputAmount: model.AmountInfo{
+			AmountBaseUnits: req.AmountBaseUnits,
+			AmountDecimal:   req.AmountDecimal,
+			Decimals:        req.FromAsset.Decimals,
+		},
+		EstimatedOut: model.AmountInfo{
+			AmountBaseUnits: req.AmountBaseUnits,
+			AmountDecimal:   req.AmountDecimal,
+			Decimals:        req.ToAsset.Decimals,
+		},
+		Route: "test",
+	}, nil
 }

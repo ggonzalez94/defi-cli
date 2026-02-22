@@ -228,17 +228,23 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 }
 
 func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, asset id.Asset) ([]morphoMarket, error) {
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
+	}
+	where := map[string]any{
+		"chainId_in": []int64{chain.EVMChainID},
+		"listed":     true,
+	}
+	if addr := strings.TrimSpace(asset.Address); addr != "" {
+		where["loanAssetAddress_in"] = []string{strings.ToLower(addr)}
+	}
 	body, err := json.Marshal(map[string]any{
 		"query": marketsQuery,
 		"variables": map[string]any{
 			"first":          100,
 			"orderBy":        "SupplyAssetsUsd",
 			"orderDirection": "Desc",
-			"where": map[string]any{
-				"chainId_in":          []int64{chain.EVMChainID},
-				"listed":              true,
-				"loanAssetAddress_in": []string{strings.ToLower(asset.Address)},
-			},
+			"where":          where,
 		},
 	})
 	if err != nil {

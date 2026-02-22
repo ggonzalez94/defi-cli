@@ -175,6 +175,16 @@ func TestProtocolsCategoriesDeterministicTieBreak(t *testing.T) {
 	}
 }
 
+func TestProtocolMatcherSupportsKamino(t *testing.T) {
+	got := protocolMatcher("kamino")
+	if len(got) == 0 {
+		t.Fatal("expected kamino protocol matchers")
+	}
+	if got[0] != "kamino" {
+		t.Fatalf("unexpected first matcher: %#v", got)
+	}
+}
+
 func TestListBridgesRequiresAPIKey(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	_, err := c.ListBridges(context.Background(), providers.BridgeListRequest{Limit: 5, IncludeChains: true})

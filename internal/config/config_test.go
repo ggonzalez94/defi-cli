@@ -54,3 +54,14 @@ func TestLoadDefiLlamaAPIKeyFromEnv(t *testing.T) {
 		t.Fatalf("expected DefiLlama API key from env, got %q", settings.DefiLlamaAPIKey)
 	}
 }
+
+func TestLoadJupiterAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("DEFI_JUPITER_API_KEY", "jup-key")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.JupiterAPIKey != "jup-key" {
+		t.Fatalf("expected Jupiter API key from env, got %q", settings.JupiterAPIKey)
+	}
+}

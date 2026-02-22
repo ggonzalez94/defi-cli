@@ -823,6 +823,8 @@ func protocolMatcher(protocol string) []string {
 		return []string{"aave", "aave-v2", "aave-v3"}
 	case "morpho":
 		return []string{"morpho", "morpho-blue"}
+	case "kamino":
+		return []string{"kamino", "kamino-lend"}
 	case "spark":
 		return []string{"spark"}
 	default:

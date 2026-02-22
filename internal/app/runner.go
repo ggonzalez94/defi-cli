@@ -25,6 +25,8 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/aave"
 	"github.com/ggonzalez94/defi-cli/internal/providers/across"
 	"github.com/ggonzalez94/defi-cli/internal/providers/defillama"
+	"github.com/ggonzalez94/defi-cli/internal/providers/jupiter"
+	"github.com/ggonzalez94/defi-cli/internal/providers/kamino"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
 	"github.com/ggonzalez94/defi-cli/internal/providers/oneinch"
@@ -121,17 +123,21 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				llama := defillama.New(httpClient, settings.DefiLlamaAPIKey)
 				aaveProvider := aave.New(httpClient)
 				morphoProvider := morpho.New(httpClient)
+				kaminoProvider := kamino.New(httpClient)
+				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
 				s.marketProvider = llama
 				s.defaultLendingProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
 					"morpho": morphoProvider,
+					"kamino": kaminoProvider,
 					"spark":  llama,
 				}
 				s.yieldProviders = map[string]providers.YieldProvider{
 					"defillama": llama,
 					"aave":      aaveProvider,
 					"morpho":    morphoProvider,
+					"kamino":    kaminoProvider,
 				}
 
 				s.bridgeProviders = map[string]providers.BridgeProvider{
@@ -144,15 +150,18 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.swapProviders = map[string]providers.SwapProvider{
 					"1inch":   oneinch.New(httpClient, settings.OneInchAPIKey),
 					"uniswap": uniswap.New(httpClient, settings.UniswapAPIKey),
+					"jupiter": jupiterProvider,
 				}
 				s.providerInfos = []model.ProviderInfo{
 					llama.Info(),
 					aaveProvider.Info(),
 					morphoProvider.Info(),
+					kaminoProvider.Info(),
 					s.bridgeProviders["across"].Info(),
 					s.bridgeProviders["lifi"].Info(),
 					s.swapProviders["1inch"].Info(),
 					s.swapProviders["uniswap"].Info(),
+					s.swapProviders["jupiter"].Info(),
 				}
 
 				if settings.CacheEnabled {
@@ -408,7 +417,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, spark)")
+	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, kamino, spark)")
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
@@ -460,7 +469,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, spark)")
+	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, kamino, spark)")
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
@@ -633,17 +642,21 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		Use:   "quote",
 		Short: "Get swap quote",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, err := id.ParseChain(chainArg)
+			if err != nil {
+				return err
+			}
 			providerName := strings.ToLower(strings.TrimSpace(providerArg))
 			if providerName == "" {
-				providerName = "1inch"
+				if chain.IsSolana() {
+					providerName = "jupiter"
+				} else {
+					providerName = "1inch"
+				}
 			}
 			provider, ok := s.swapProviders[providerName]
 			if !ok {
 				return clierr.New(clierr.CodeUnsupported, "unsupported swap provider")
-			}
-			chain, err := id.ParseChain(chainArg)
-			if err != nil {
-				return err
 			}
 			fromAsset, err := id.ParseAsset(fromAssetArg, chain)
 			if err != nil {
@@ -677,7 +690,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap; both require API keys)")
+	cmd.Flags().StringVar(&providerArg, "provider", "", "Swap provider (defaults: 1inch for EVM, jupiter for Solana; options: 1inch|uniswap|jupiter)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
@@ -784,7 +797,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	cmd.Flags().Float64Var(&minTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
 	cmd.Flags().StringVar(&maxRisk, "max-risk", "high", "Maximum risk level (low|medium|high|unknown)")
 	cmd.Flags().Float64Var(&minAPY, "min-apy", 0, "Minimum total APY percent")
-	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (defillama,aave,morpho)")
+	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (defillama,aave,morpho,kamino)")
 	cmd.Flags().StringVar(&sortArg, "sort", "score", "Sort key (score|apy_total|tvl_usd|liquidity_usd)")
 	cmd.Flags().BoolVar(&includeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
 	_ = cmd.MarkFlagRequired("chain")
@@ -954,6 +967,8 @@ func normalizeLendingProtocol(input string) string {
 		return "aave"
 	case "morpho", "morpho-blue":
 		return "morpho"
+	case "kamino", "kamino-lend", "kamino-finance":
+		return "kamino"
 	case "spark":
 		return "spark"
 	default:

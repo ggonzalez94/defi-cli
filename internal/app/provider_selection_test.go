@@ -13,6 +13,9 @@ func TestNormalizeLendingProtocol(t *testing.T) {
 	if got := normalizeLendingProtocol("morpho-blue"); got != "morpho" {
 		t.Fatalf("expected morpho, got %s", got)
 	}
+	if got := normalizeLendingProtocol("kamino-finance"); got != "kamino" {
+		t.Fatalf("expected kamino, got %s", got)
+	}
 }
 
 func TestSelectYieldProviders(t *testing.T) {

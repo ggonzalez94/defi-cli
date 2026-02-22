@@ -10,16 +10,21 @@ Format:
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Solana chain support in canonical ID parsing (`solana:<reference>`) and Solana CAIP-19 token parsing (`solana:<reference>/token:<mint>`).
+- Direct Kamino adapter for `lend markets`, `lend rates`, and `yield opportunities` on Solana mainnet.
+- Direct Jupiter swap adapter for Solana quotes, with optional `DEFI_JUPITER_API_KEY` support.
 
 ### Changed
-- None yet.
+- `swap quote` now defaults provider by chain family (`1inch` for EVM chains, `jupiter` for Solana).
+- Added explicit chain-family validation across providers so unsupported EVM/Solana combinations fail with clear `unsupported` errors.
+- DefiLlama lending fallback protocol matcher now recognizes `kamino`.
 
 ### Fixed
-- None yet.
+- Tightened direct lending asset matching to prefer canonical token address/mint over symbol-only matches, reducing false positives on similarly named assets.
+- Improved Kamino reserve collection performance and reliability by fetching per-market metrics concurrently while preserving deterministic output ordering.
 
 ### Docs
-- None yet.
+- Updated README and AGENTS guidance for Solana usage, Kamino/Jupiter providers, and API key semantics.
 
 ### Security
 - None yet.

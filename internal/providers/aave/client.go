@@ -274,6 +274,9 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 }
 
 func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket, error) {
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
+	}
 	body, err := json.Marshal(map[string]any{
 		"query": marketsQuery,
 		"variables": map[string]any{
@@ -300,8 +303,9 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket
 }
 
 func matchesReserveAsset(r aaveReserve, asset id.Asset) bool {
-	if strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Address), strings.TrimSpace(asset.Address)) {
-		return true
+	assetAddress := strings.TrimSpace(asset.Address)
+	if assetAddress != "" {
+		return strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Address), assetAddress)
 	}
 	return strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Symbol), strings.TrimSpace(asset.Symbol))
 }

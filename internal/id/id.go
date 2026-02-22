@@ -11,9 +11,24 @@ import (
 )
 
 var (
-	chainPattern = regexp.MustCompile(`^eip155:[0-9]+$`)
-	assetPattern = regexp.MustCompile(`^eip155:[0-9]+/erc20:0x[0-9a-fA-F]{40}$`)
-	addrPattern  = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	eip155ChainPattern      = regexp.MustCompile(`^eip155:[0-9]+$`)
+	solanaChainPattern      = regexp.MustCompile(`^solana:[1-9A-HJ-NP-Za-km-z]{32,44}$`)
+	evmAddressPattern       = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	solanaTokenMintPattern  = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
+	eip155AssetPattern      = regexp.MustCompile(`^eip155:[0-9]+/erc20:0x[0-9a-fA-F]{40}$`)
+	solanaTokenAssetPattern = regexp.MustCompile(`^solana:[1-9A-HJ-NP-Za-km-z]{32,44}/token:[1-9A-HJ-NP-Za-km-z]{32,44}$`)
+)
+
+const (
+	solanaMainnetRef = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
+	solanaDevnetRef  = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
+	solanaTestnetRef = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z"
+)
+
+const (
+	solanaMainnetCAIP2 = "solana:" + solanaMainnetRef
+	solanaDevnetCAIP2  = "solana:" + solanaDevnetRef
+	solanaTestnetCAIP2 = "solana:" + solanaTestnetRef
 )
 
 type Chain struct {
@@ -21,6 +36,18 @@ type Chain struct {
 	Slug       string
 	CAIP2      string
 	EVMChainID int64
+}
+
+func (c Chain) Namespace() string {
+	return chainNamespace(c.CAIP2)
+}
+
+func (c Chain) IsEVM() bool {
+	return c.Namespace() == "eip155"
+}
+
+func (c Chain) IsSolana() bool {
+	return c.Namespace() == "solana"
 }
 
 type Asset struct {
@@ -38,15 +65,20 @@ type Token struct {
 }
 
 var chainBySlug = map[string]Chain{
-	"ethereum":  {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
-	"mainnet":   {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
-	"base":      {Name: "Base", Slug: "base", CAIP2: "eip155:8453", EVMChainID: 8453},
-	"arbitrum":  {Name: "Arbitrum", Slug: "arbitrum", CAIP2: "eip155:42161", EVMChainID: 42161},
-	"optimism":  {Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10},
-	"polygon":   {Name: "Polygon", Slug: "polygon", CAIP2: "eip155:137", EVMChainID: 137},
-	"avalanche": {Name: "Avalanche", Slug: "avalanche", CAIP2: "eip155:43114", EVMChainID: 43114},
-	"bsc":       {Name: "BSC", Slug: "bsc", CAIP2: "eip155:56", EVMChainID: 56},
-	"taiko":     {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
+	"ethereum":       {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
+	"mainnet":        {Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1},
+	"base":           {Name: "Base", Slug: "base", CAIP2: "eip155:8453", EVMChainID: 8453},
+	"arbitrum":       {Name: "Arbitrum", Slug: "arbitrum", CAIP2: "eip155:42161", EVMChainID: 42161},
+	"optimism":       {Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10},
+	"polygon":        {Name: "Polygon", Slug: "polygon", CAIP2: "eip155:137", EVMChainID: 137},
+	"avalanche":      {Name: "Avalanche", Slug: "avalanche", CAIP2: "eip155:43114", EVMChainID: 43114},
+	"bsc":            {Name: "BSC", Slug: "bsc", CAIP2: "eip155:56", EVMChainID: 56},
+	"taiko":          {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
+	"solana":         {Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2},
+	"solana-mainnet": {Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2},
+	"mainnet-beta":   {Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2},
+	"solana-devnet":  {Name: "Solana Devnet", Slug: "solana-devnet", CAIP2: solanaDevnetCAIP2},
+	"solana-testnet": {Name: "Solana Testnet", Slug: "solana-testnet", CAIP2: solanaTestnetCAIP2},
 }
 
 var chainByID = map[int64]Chain{
@@ -59,6 +91,14 @@ var chainByID = map[int64]Chain{
 	43114:  chainBySlug["avalanche"],
 	167000: chainBySlug["taiko"],
 }
+
+var chainByCAIP2 = func() map[string]Chain {
+	out := make(map[string]Chain, len(chainBySlug))
+	for _, chain := range chainBySlug {
+		out[chain.CAIP2] = chain
+	}
+	return out
+}()
 
 // Small bootstrap registry for deterministic asset parsing on Tier-1 chains.
 var tokenRegistry = map[string][]Token{
@@ -103,25 +143,40 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "DAI", Address: "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70", Decimals: 18},
 		{Symbol: "WETH", Address: "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB", Decimals: 18},
 	},
+	solanaMainnetCAIP2: {
+		{Symbol: "USDC", Address: "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", Decimals: 6},
+		{Symbol: "USDT", Address: "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB", Decimals: 6},
+		{Symbol: "SOL", Address: "So11111111111111111111111111111111111111112", Decimals: 9},
+		{Symbol: "JUP", Address: "JUPyiwrYJFskUPiHa7hkeR8VUtAeFoSYbKedZNsDvCN", Decimals: 6},
+		{Symbol: "JTO", Address: "jtojtomepa8beP8AuQc6eXt5FriJwfFMwGQx2v2f9mCL", Decimals: 9},
+	},
 }
 
 func ParseChain(input string) (Chain, error) {
-	norm := strings.TrimSpace(strings.ToLower(input))
-	if norm == "" {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
 		return Chain{}, clierr.New(clierr.CodeUsage, "chain is required")
 	}
+	norm := strings.ToLower(raw)
 
 	if chain, ok := chainBySlug[norm]; ok {
 		return chain, nil
 	}
 
-	if chainPattern.MatchString(norm) {
+	if eip155ChainPattern.MatchString(norm) {
 		parts := strings.Split(norm, ":")
 		id, _ := strconv.ParseInt(parts[1], 10, 64)
 		if known, ok := chainByID[id]; ok {
 			return known, nil
 		}
 		return Chain{Name: fmt.Sprintf("EVM-%d", id), Slug: fmt.Sprintf("evm-%d", id), CAIP2: norm, EVMChainID: id}, nil
+	}
+
+	if solanaChainPattern.MatchString(raw) {
+		if known, ok := chainByCAIP2[raw]; ok {
+			return known, nil
+		}
+		return Chain{Name: "Solana", Slug: "solana-custom", CAIP2: raw}, nil
 	}
 
 	if id, err := strconv.ParseInt(norm, 10, 64); err == nil {
@@ -135,28 +190,57 @@ func ParseChain(input string) (Chain, error) {
 }
 
 func ParseAsset(input string, chain Chain) (Asset, error) {
-	norm := strings.TrimSpace(input)
-	if norm == "" {
+	raw := strings.TrimSpace(input)
+	if raw == "" {
 		return Asset{}, clierr.New(clierr.CodeUsage, "asset is required")
 	}
 
-	if assetPattern.MatchString(norm) {
-		parts := strings.Split(norm, "/")
+	if strings.Contains(raw, "/") {
+		if !eip155AssetPattern.MatchString(raw) && !solanaTokenAssetPattern.MatchString(raw) {
+			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
+		}
+		parts := strings.SplitN(raw, "/", 2)
+		if len(parts) != 2 {
+			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
+		}
 		if parts[0] != chain.CAIP2 {
 			return Asset{}, clierr.New(clierr.CodeUsage, "asset chain does not match --chain")
 		}
-		addr := strings.ToLower(strings.TrimPrefix(parts[1], "erc20:"))
+		assetParts := strings.SplitN(parts[1], ":", 2)
+		if len(assetParts) != 2 {
+			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
+		}
+		assetNamespace := strings.ToLower(strings.TrimSpace(assetParts[0]))
+		address := strings.TrimSpace(assetParts[1])
+		if chain.IsEVM() {
+			if assetNamespace != "erc20" || !evmAddressPattern.MatchString(address) {
+				return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
+			}
+		} else if chain.IsSolana() {
+			if assetNamespace != "token" || !solanaTokenMintPattern.MatchString(address) {
+				return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
+			}
+		} else {
+			return Asset{}, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported chain namespace: %s", chain.Namespace()))
+		}
+		addr := normalizeTokenAddress(chain.CAIP2, address)
 		token, _ := findTokenByAddress(chain.CAIP2, addr)
-		return Asset{ChainID: chain.CAIP2, AssetID: fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
+		return Asset{ChainID: chain.CAIP2, AssetID: canonicalAssetID(chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
 	}
 
-	if addrPattern.MatchString(norm) {
-		addr := strings.ToLower(norm)
+	if chain.IsEVM() && evmAddressPattern.MatchString(raw) {
+		addr := normalizeTokenAddress(chain.CAIP2, raw)
 		token, _ := findTokenByAddress(chain.CAIP2, addr)
-		return Asset{ChainID: chain.CAIP2, AssetID: fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
+		return Asset{ChainID: chain.CAIP2, AssetID: canonicalAssetID(chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
 	}
 
-	matches := findTokensBySymbol(chain.CAIP2, norm)
+	if chain.IsSolana() && solanaTokenMintPattern.MatchString(raw) {
+		addr := normalizeTokenAddress(chain.CAIP2, raw)
+		token, _ := findTokenByAddress(chain.CAIP2, addr)
+		return Asset{ChainID: chain.CAIP2, AssetID: canonicalAssetID(chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
+	}
+
+	matches := findTokensBySymbol(chain.CAIP2, raw)
 	if len(matches) == 0 {
 		return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("symbol %s not found in registry for chain %s", input, chain.CAIP2))
 	}
@@ -169,20 +253,60 @@ func ParseAsset(input string, chain Chain) (Asset, error) {
 		return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("symbol %s is ambiguous on chain %s, use address or CAIP-19 (%s)", input, chain.CAIP2, strings.Join(addresses, ", ")))
 	}
 	t := matches[0]
-	addr := strings.ToLower(t.Address)
+	addr := normalizeTokenAddress(chain.CAIP2, t.Address)
 	return Asset{
 		ChainID:  chain.CAIP2,
-		AssetID:  fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr),
+		AssetID:  canonicalAssetID(chain.CAIP2, addr),
 		Address:  addr,
 		Symbol:   strings.ToUpper(t.Symbol),
 		Decimals: t.Decimals,
 	}, nil
 }
 
+func chainNamespace(caip2 string) string {
+	parts := strings.SplitN(strings.TrimSpace(caip2), ":", 2)
+	if len(parts) != 2 {
+		return ""
+	}
+	return strings.ToLower(parts[0])
+}
+
+func canonicalAssetID(chainID, address string) string {
+	switch chainNamespace(chainID) {
+	case "eip155":
+		return fmt.Sprintf("%s/erc20:%s", chainID, strings.ToLower(strings.TrimSpace(address)))
+	case "solana":
+		return fmt.Sprintf("%s/token:%s", chainID, strings.TrimSpace(address))
+	default:
+		return fmt.Sprintf("%s/asset:%s", chainID, strings.TrimSpace(address))
+	}
+}
+
+func normalizeTokenAddress(chainID, address string) string {
+	address = strings.TrimSpace(address)
+	if chainNamespace(chainID) == "eip155" {
+		return strings.ToLower(address)
+	}
+	return address
+}
+
+func tokenAddressEqual(chainID, a, b string) bool {
+	a = strings.TrimSpace(a)
+	b = strings.TrimSpace(b)
+	if chainNamespace(chainID) == "eip155" {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
+}
+
 func findTokenByAddress(chainID, address string) (Token, bool) {
 	for _, t := range tokenRegistry[chainID] {
-		if strings.EqualFold(t.Address, address) {
-			return Token{Symbol: strings.ToUpper(t.Symbol), Address: strings.ToLower(t.Address), Decimals: t.Decimals}, true
+		if tokenAddressEqual(chainID, t.Address, address) {
+			return Token{
+				Symbol:   strings.ToUpper(t.Symbol),
+				Address:  normalizeTokenAddress(chainID, t.Address),
+				Decimals: t.Decimals,
+			}, true
 		}
 	}
 	return Token{}, false
@@ -192,7 +316,11 @@ func findTokensBySymbol(chainID, symbol string) []Token {
 	matches := []Token{}
 	for _, t := range tokenRegistry[chainID] {
 		if strings.EqualFold(t.Symbol, symbol) {
-			matches = append(matches, Token{Symbol: strings.ToUpper(t.Symbol), Address: strings.ToLower(t.Address), Decimals: t.Decimals})
+			matches = append(matches, Token{
+				Symbol:   strings.ToUpper(t.Symbol),
+				Address:  normalizeTokenAddress(chainID, t.Address),
+				Decimals: t.Decimals,
+			})
 		}
 	}
 	return matches
@@ -207,5 +335,5 @@ func KnownToken(chainID, symbol string) (Token, bool) {
 }
 
 func LookupByAddress(chainID, address string) (Token, bool) {
-	return findTokenByAddress(chainID, strings.ToLower(address))
+	return findTokenByAddress(chainID, normalizeTokenAddress(chainID, address))
 }
