@@ -79,6 +79,9 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "world-chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "worldchain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "celo", chainID: 42220, caip2: "eip155:42220", slug: "celo"},
+		{input: "taiko", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
+		{input: "taiko alethia", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
+		{input: "taiko-alethia", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 		{input: "zksync", chainID: 324, caip2: "eip155:324", slug: "zksync"},
 		{input: "zksync era", chainID: 324, caip2: "eip155:324", slug: "zksync"},
 		{input: "zksync-era", chainID: 324, caip2: "eip155:324", slug: "zksync"},
@@ -88,6 +91,7 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "81457", chainID: 81457, caip2: "eip155:81457", slug: "blast"},
 		{input: "252", chainID: 252, caip2: "eip155:252", slug: "fraxtal"},
 		{input: "480", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
+		{input: "167000", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 	}
 
 	for _, tc := range tests {
@@ -122,6 +126,7 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 		{chainInput: "linea", symbol: "USDC"},
 		{chainInput: "sonic", symbol: "USDC"},
 		{chainInput: "celo", symbol: "USDC"},
+		{chainInput: "taiko", symbol: "USDC"},
 		{chainInput: "zksync", symbol: "USDC"},
 	}
 
