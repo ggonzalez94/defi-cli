@@ -158,6 +158,7 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "WETH", Address: "0xdEAddEaDdeadDEadDEADDEAddEADDEAddead1111", Decimals: 18},
 	},
 	"eip155:4326": {
+		{Symbol: "MEGA", Address: "0x28B7E77f82B25B95953825F1E3eA0E36c1c29861", Decimals: 18},
 		{Symbol: "USDT", Address: "0xB8CE59FC3717ada4C02eaDF9682A9e934F625ebb", Decimals: 6},
 		{Symbol: "WETH", Address: "0x4200000000000000000000000000000000000006", Decimals: 18},
 	},

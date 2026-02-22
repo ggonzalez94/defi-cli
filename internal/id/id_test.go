@@ -177,6 +177,7 @@ func TestParseAssetMegaETHBootstrapAddresses(t *testing.T) {
 		symbol  string
 		address string
 	}{
+		{symbol: "MEGA", address: "0x28b7e77f82b25b95953825f1e3ea0e36c1c29861"},
 		{symbol: "USDT", address: "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb"},
 		{symbol: "WETH", address: "0x4200000000000000000000000000000000000006"},
 	}
