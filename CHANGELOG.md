@@ -10,16 +10,16 @@ Format:
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Added `chains assets` to return chain-level TVL broken down by asset, with optional `--asset` filtering.
 
 ### Changed
-- None yet.
+- DefiLlama provider capability metadata now marks `chains.assets` as requiring `DEFI_DEFILLAMA_API_KEY`.
 
 ### Fixed
 - None yet.
 
 ### Docs
-- None yet.
+- Documented `chains assets` API key requirement alongside other key-gated commands in README and AGENTS.
 
 ### Security
 - None yet.

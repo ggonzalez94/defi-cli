@@ -250,7 +250,7 @@ func (s *runtimeState) newProvidersCommand() *cobra.Command {
 func (s *runtimeState) newChainsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "chains", Short: "Chain market data"}
 	var limit int
-	cmd := &cobra.Command{
+	topCmd := &cobra.Command{
 		Use:   "top",
 		Short: "Top chains by TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
@@ -264,8 +264,53 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
-	root.AddCommand(cmd)
+	topCmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
+	root.AddCommand(topCmd)
+
+	var assetsChainArg string
+	var assetsArg string
+	var assetsLimit int
+	assetsCmd := &cobra.Command{
+		Use:   "assets",
+		Short: "TVL by asset for a chain (DefiLlama key required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, err := id.ParseChain(assetsChainArg)
+			if err != nil {
+				return err
+			}
+
+			asset := id.Asset{}
+			if strings.TrimSpace(assetsArg) != "" {
+				parsedAsset, err := id.ParseAsset(assetsArg, chain)
+				if err != nil {
+					return err
+				}
+				if strings.TrimSpace(parsedAsset.Symbol) == "" {
+					return clierr.New(clierr.CodeUsage, "asset filter requires a token with known symbol on the selected chain")
+				}
+				asset = parsedAsset
+			}
+
+			req := map[string]any{
+				"chain": chain.CAIP2,
+				"asset": asset.AssetID,
+				"limit": assetsLimit,
+			}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	assetsCmd.Flags().StringVar(&assetsChainArg, "chain", "", "Chain id/name/CAIP-2")
+	assetsCmd.Flags().StringVar(&assetsArg, "asset", "", "Asset filter (symbol/address/CAIP-19)")
+	assetsCmd.Flags().IntVar(&assetsLimit, "limit", 20, "Number of assets to return")
+	_ = assetsCmd.MarkFlagRequired("chain")
+	root.AddCommand(assetsCmd)
+
 	return root
 }
 

@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
@@ -30,6 +32,100 @@ func TestChainsTopSortsDescending(t *testing.T) {
 	}
 	if len(items) != 2 || items[0].Chain != "A" {
 		t.Fatalf("unexpected ordering: %+v", items)
+	}
+}
+
+func TestChainsAssetsRequiresAPIKey(t *testing.T) {
+	chain, _ := id.ParseChain("ethereum")
+	c := New(httpx.New(2*time.Second, 0), "")
+	_, err := c.ChainsAssets(context.Background(), chain, id.Asset{}, 20)
+	if err == nil {
+		t.Fatal("expected API key error")
+	}
+	if code := clierr.ExitCode(err); code != int(clierr.CodeAuth) {
+		t.Fatalf("expected auth exit code, got %d err=%v", code, err)
+	}
+}
+
+func TestChainsAssetsSortsAggregatesAndLimits(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test-key/api/chainAssets", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"Ethereum":{
+				"canonical":{"total":"250.5","breakdown":{"USDC":"100","USDT":"150.5"}},
+				"native":{"total":"50","breakdown":{"ETH":"50"}},
+				"thirdParty":{"total":"205","breakdown":{"WBTC":"80","USDC":"125"}}
+			},
+			"Arbitrum":{"canonical":{"total":"10","breakdown":{"USDC":"10"}}},
+			"timestamp":1752843956
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	chain, _ := id.ParseChain("ethereum")
+	c := New(httpx.New(2*time.Second, 0), "test-key")
+	c.bridgeBaseURL = srv.URL
+
+	items, err := c.ChainsAssets(context.Background(), chain, id.Asset{}, 3)
+	if err != nil {
+		t.Fatalf("ChainsAssets failed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 results, got %d", len(items))
+	}
+	if items[0].Asset != "USDC" || items[0].TVLUSD != 225 {
+		t.Fatalf("unexpected first item: %+v", items[0])
+	}
+	if items[1].Asset != "USDT" || items[1].TVLUSD != 150.5 {
+		t.Fatalf("unexpected second item: %+v", items[1])
+	}
+	if items[2].Asset != "WBTC" || items[2].TVLUSD != 80 {
+		t.Fatalf("unexpected third item: %+v", items[2])
+	}
+	if items[0].Rank != 1 || items[1].Rank != 2 || items[2].Rank != 3 {
+		t.Fatalf("expected sequential rank values, got %+v", items)
+	}
+	if items[0].Chain != "Ethereum" || items[0].ChainID != "eip155:1" {
+		t.Fatalf("unexpected chain normalization: %+v", items[0])
+	}
+	if !strings.HasPrefix(items[0].AssetID, "eip155:1/erc20:") {
+		t.Fatalf("expected known asset ID for USDC, got %q", items[0].AssetID)
+	}
+}
+
+func TestChainsAssetsFiltersByAsset(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/test-key/api/chainAssets", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"Ethereum":{
+				"canonical":{"total":"250.5","breakdown":{"USDC":"100","USDT":"150.5"}},
+				"native":{"total":"50","breakdown":{"ETH":"50"}},
+				"thirdParty":{"total":"205","breakdown":{"WBTC":"80","USDC":"125"}}
+			},
+			"timestamp":1752843956
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	chain, _ := id.ParseChain("ethereum")
+	asset, _ := id.ParseAsset("USDC", chain)
+	c := New(httpx.New(2*time.Second, 0), "test-key")
+	c.bridgeBaseURL = srv.URL
+
+	items, err := c.ChainsAssets(context.Background(), chain, asset, 20)
+	if err != nil {
+		t.Fatalf("ChainsAssets failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected one result, got %d", len(items))
+	}
+	if items[0].Asset != "USDC" || items[0].TVLUSD != 225 {
+		t.Fatalf("unexpected filtered result: %+v", items[0])
+	}
+	if items[0].AssetID != asset.AssetID {
+		t.Fatalf("expected canonical asset id %s, got %s", asset.AssetID, items[0].AssetID)
 	}
 }
 

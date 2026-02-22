@@ -62,6 +62,15 @@ type ChainTVL struct {
 	TVLUSD  float64 `json:"tvl_usd"`
 }
 
+type ChainAssetTVL struct {
+	Rank    int     `json:"rank"`
+	Chain   string  `json:"chain"`
+	ChainID string  `json:"chain_id"`
+	Asset   string  `json:"asset"`
+	AssetID string  `json:"asset_id"`
+	TVLUSD  float64 `json:"tvl_usd"`
+}
+
 type ProtocolTVL struct {
 	Rank     int     `json:"rank"`
 	Protocol string  `json:"protocol"`
