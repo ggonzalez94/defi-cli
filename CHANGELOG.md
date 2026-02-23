@@ -12,6 +12,7 @@ Format:
 ### Added
 - Added MegaETH mainnet chain normalization (`megaeth`, `mega eth`, `mega-eth`) with canonical ID mapping to `eip155:4326`.
 - Expanded bootstrap token registry symbol support across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
+- Added additional bootstrap token mappings sourced from Bungee trending tokens (for supported EVM chains), including `USD1`, `WBTC`, `CBBTC`, `PAXG`, `PEPE`, `SHIB`, `OP`, `USDT0`, `BTCB`, `WBNB`, `ARB`, `PYUSD`, `WAVAX`, `WLFI`, `XAUT`, and `PENGU`.
 - Added Bungee Auto-mode quoting as a bridge provider (`bridge quote --provider bungee`) and swap provider (`swap quote --provider bungee`).
 - Added HyperEVM alias normalization (`hyperevm`/`hyper-evm`) for quote workflows.
 - Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
