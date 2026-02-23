@@ -24,7 +24,9 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/providers/aave"
 	"github.com/ggonzalez94/defi-cli/internal/providers/across"
+	"github.com/ggonzalez94/defi-cli/internal/providers/bungee"
 	"github.com/ggonzalez94/defi-cli/internal/providers/defillama"
+	"github.com/ggonzalez94/defi-cli/internal/providers/fibrous"
 	"github.com/ggonzalez94/defi-cli/internal/providers/jupiter"
 	"github.com/ggonzalez94/defi-cli/internal/providers/kamino"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
@@ -147,6 +149,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.bridgeProviders = map[string]providers.BridgeProvider{
 					"across": across.New(httpClient),
 					"lifi":   lifi.New(httpClient),
+					"bungee": bungee.NewBridge(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
 				}
 				s.bridgeDataProviders = map[string]providers.BridgeDataProvider{
 					"defillama": llama,
@@ -155,6 +158,8 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					"1inch":   oneinch.New(httpClient, settings.OneInchAPIKey),
 					"uniswap": uniswap.New(httpClient, settings.UniswapAPIKey),
 					"jupiter": jupiterProvider,
+					"bungee":  bungee.NewSwap(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
+					"fibrous": fibrous.New(httpClient),
 				}
 				s.providerInfos = []model.ProviderInfo{
 					llama.Info(),
@@ -163,8 +168,12 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					kaminoProvider.Info(),
 					s.bridgeProviders["across"].Info(),
 					s.bridgeProviders["lifi"].Info(),
+					s.bridgeProviders["bungee"].Info(),
 					s.swapProviders["1inch"].Info(),
 					s.swapProviders["uniswap"].Info(),
+					s.swapProviders["jupiter"].Info(),
+					s.swapProviders["bungee"].Info(),
+					s.swapProviders["fibrous"].Info(),
 					s.swapProviders["jupiter"].Info(),
 				}
 			}
@@ -172,9 +181,11 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 			if settings.CacheEnabled && shouldOpenCache(path) && s.cache == nil {
 				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
 				if err != nil {
-					return clierr.Wrap(clierr.CodeInternal, "open cache", err)
+					// Cache should be best-effort; continue without it if initialization fails.
+					s.settings.CacheEnabled = false
+				} else {
+					s.cache = cacheStore
 				}
-				s.cache = cacheStore
 			}
 			return nil
 		},
@@ -604,7 +615,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 			})
 		},
 	}
-	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "across", "Bridge provider (across|lifi; no API key required)")
+	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "across", "Bridge provider (across|lifi|bungee; no API key required)")
 	quoteCmd.Flags().StringVar(&fromArg, "from", "", "Source chain")
 	quoteCmd.Flags().StringVar(&toArg, "to", "", "Destination chain")
 	quoteCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19) on source chain")
@@ -740,7 +751,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "", "Swap provider (defaults: 1inch for EVM, jupiter for Solana; options: 1inch|uniswap|jupiter)")
+	cmd.Flags().StringVar(&providerArg, "provider", "", "Swap provider (defaults: 1inch for EVM, jupiter for Solana; options: 1inch|uniswap|jupiter|fibrous|bungee; fibrous/bungee require no API key)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
@@ -790,7 +801,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				"include_incomplete": req.IncludeIncomplete,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				selectedProviders, err := s.selectYieldProviders(req.Providers)
+				selectedProviders, err := s.selectYieldProviders(req.Providers, req.Chain)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
@@ -1069,10 +1080,13 @@ func shouldFallback(err error) bool {
 	return cErr.Code == clierr.CodeUnavailable || cErr.Code == clierr.CodeUnsupported || cErr.Code == clierr.CodeRateLimited
 }
 
-func (s *runtimeState) selectYieldProviders(filter []string) ([]string, error) {
+func (s *runtimeState) selectYieldProviders(filter []string, chain id.Chain) ([]string, error) {
 	if len(filter) == 0 {
 		keys := make([]string, 0, len(s.yieldProviders))
 		for name := range s.yieldProviders {
+			if !yieldProviderSupportsChain(name, chain) {
+				continue
+			}
 			keys = append(keys, name)
 		}
 		sort.Strings(keys)
@@ -1094,6 +1108,17 @@ func (s *runtimeState) selectYieldProviders(filter []string) ([]string, error) {
 	}
 	sort.Strings(selected)
 	return selected, nil
+}
+
+func yieldProviderSupportsChain(name string, chain id.Chain) bool {
+	switch name {
+	case "kamino":
+		return chain.IsSolana()
+	case "aave", "morpho":
+		return chain.IsEVM()
+	default:
+		return true
+	}
 }
 
 func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpportunity {

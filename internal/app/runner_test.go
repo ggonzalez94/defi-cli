@@ -17,6 +17,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func findProviderInfo(items []map[string]any, name string) (map[string]any, bool) {
+	for _, item := range items {
+		rawName, ok := item["name"].(string)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(rawName, name) {
+			return item, true
+		}
+	}
+	return nil, false
+}
+
 func TestTrimRootPath(t *testing.T) {
 	if got := trimRootPath("defi yield opportunities"); got != "yield opportunities" {
 		t.Fatalf("unexpected trim result: %s", got)
@@ -30,17 +43,80 @@ func TestSplitCSV(t *testing.T) {
 	}
 }
 
+func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
+	state := &runtimeState{
+		yieldProviders: map[string]providers.YieldProvider{
+			"defillama": nil,
+			"aave":      nil,
+			"morpho":    nil,
+			"kamino":    nil,
+		},
+	}
+
+	tests := []struct {
+		name       string
+		chainInput string
+		want       []string
+	}{
+		{name: "evm", chainInput: "base", want: []string{"aave", "defillama", "morpho"}},
+		{name: "solana", chainInput: "solana", want: []string{"defillama", "kamino"}},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			chain, err := id.ParseChain(tc.chainInput)
+			if err != nil {
+				t.Fatalf("parse chain: %v", err)
+			}
+			got, err := state.selectYieldProviders(nil, chain)
+			if err != nil {
+				t.Fatalf("selectYieldProviders failed: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("expected %v providers, got %v", tc.want, got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("expected providers %v, got %v", tc.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestSelectYieldProvidersExplicitFilterBypassesChainDefaults(t *testing.T) {
+	state := &runtimeState{
+		yieldProviders: map[string]providers.YieldProvider{
+			"defillama": nil,
+			"kamino":    nil,
+		},
+	}
+	chain, err := id.ParseChain("base")
+	if err != nil {
+		t.Fatalf("parse chain: %v", err)
+	}
+
+	got, err := state.selectYieldProviders([]string{"kamino"}, chain)
+	if err != nil {
+		t.Fatalf("selectYieldProviders failed: %v", err)
+	}
+	if len(got) != 1 || got[0] != "kamino" {
+		t.Fatalf("expected explicit provider selection to be preserved, got %v", got)
+	}
+}
+
 func TestParseChainAssetFilterAllowsUnknownSymbol(t *testing.T) {
 	chain, err := id.ParseChain("ethereum")
 	if err != nil {
 		t.Fatalf("parse chain: %v", err)
 	}
-	asset, err := parseChainAssetFilter(chain, "UNI")
+	asset, err := parseChainAssetFilter(chain, "NOTAREALTOKEN")
 	if err != nil {
 		t.Fatalf("expected unknown symbol to be accepted, got err=%v", err)
 	}
-	if asset.Symbol != "UNI" {
-		t.Fatalf("expected UNI symbol, got %+v", asset)
+	if asset.Symbol != "NOTAREALTOKEN" {
+		t.Fatalf("expected NOTAREALTOKEN symbol, got %+v", asset)
 	}
 	if asset.AssetID != "" {
 		t.Fatalf("expected empty asset id for non-registry symbol, got %s", asset.AssetID)
@@ -72,6 +148,13 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatalf("expected providers output, got empty")
+	}
+	fibrousInfo, ok := findProviderInfo(out, "fibrous")
+	if !ok {
+		t.Fatalf("expected fibrous provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
+		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
 	}
 }
 
@@ -175,6 +258,35 @@ func TestRunnerProvidersListBypassesCacheOpen(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatalf("expected providers output, got empty")
+	}
+	fibrousInfo, ok := findProviderInfo(out, "fibrous")
+	if !ok {
+		t.Fatalf("expected fibrous provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
+		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
+	}
+}
+
+func TestRunnerAssetsResolveFallsBackWhenCacheUnavailable(t *testing.T) {
+	setUnopenableCacheEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"assets", "resolve", "--chain", "1", "--asset", "USDC", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse assets resolve output json: %v output=%s", err, stdout.String())
+	}
+	if out["asset_id"] == "" {
+		t.Fatalf("expected asset_id in output, got %+v", out)
+	}
+	if chainID, _ := out["chain_id"].(string); chainID != "eip155:1" {
+		t.Fatalf("expected chain_id eip155:1, got %q", chainID)
 	}
 }
 

@@ -12,8 +12,8 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 - **Lending** — query markets and rates from Aave, Morpho, Kamino (Solana), and more (with DefiLlama fallback).
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
-- **Bridging** — get cross-chain quotes (Across, LiFi) and bridge analytics (volume, chain breakdown).
-- **Swapping** — get on-chain swap quotes (1inch, Uniswap, Jupiter for Solana).
+- **Bridging** — get cross-chain quotes (Across, LiFi, Bungee Auto) and bridge analytics (volume, chain breakdown).
+- **Swapping** — get on-chain swap quotes (1inch, Uniswap, Jupiter for Solana, Fibrous, Bungee Auto).
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
@@ -65,8 +65,8 @@ defi version --long
 defi providers list --results-only
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
-defi assets resolve --chain base --symbol USDC --results-only
-defi assets resolve --chain solana --symbol USDC --results-only
+defi assets resolve --chain base --asset USDC --results-only
+defi assets resolve --chain solana --asset USDC --results-only
 defi lend markets --protocol aave --chain 1 --asset USDC --results-only
 defi lend markets --protocol kamino --chain solana --asset USDC --results-only
 defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
@@ -77,6 +77,7 @@ defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi swap quote --chain solana --from-asset USDC --to-asset USDT --amount 1000000 --results-only
+defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 1000000 --results-only
 ```
 
 `yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho,kamino`).
@@ -86,6 +87,7 @@ Bridge quote examples:
 ```bash
 defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only # Defaults to Across
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider bungee --from 1 --to 8453 --asset USDC --amount 5000000 --results-only
 ```
 
 Swap quote examples:
@@ -93,7 +95,14 @@ Swap quote examples:
 ```bash
 export DEFI_1INCH_API_KEY=...
 defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
+```
 
+Swap quote example (`fibrous` does not require an API key):
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+ 
 # On Solana, provider defaults to jupiter.
 defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
@@ -112,9 +121,12 @@ When a provider requires authentication, bring your own key:
 - `defi swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
 - `defi swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
 - `defi swap quote --provider jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
+- `defi swap quote --provider fibrous` -> no key required
 - `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+
+Bungee quotes (`bridge quote --provider bungee`, `swap quote --provider bungee`) are keyless by default. Optional dedicated-backend mode is enabled only when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set.
 
 `defi providers list` includes both provider-level key metadata and capability-level key metadata (`capability_auth`).
 
@@ -124,6 +136,7 @@ When a provider requires authentication, bring your own key:
 - `DEFI_UNISWAP_API_KEY` (required for `swap quote --provider uniswap`)
 - `DEFI_JUPITER_API_KEY` (optional for `swap quote --provider jupiter`)
 - `DEFI_DEFILLAMA_API_KEY` (required for `chains assets`, `bridge list`, and `bridge details`)
+- `DEFI_BUNGEE_API_KEY` + `DEFI_BUNGEE_AFFILIATE` (optional pair for Bungee dedicated backend on quote routes)
 
 Configure keys with environment variables (recommended):
 
@@ -132,6 +145,8 @@ export DEFI_1INCH_API_KEY=...
 export DEFI_UNISWAP_API_KEY=...
 export DEFI_JUPITER_API_KEY=...
 export DEFI_DEFILLAMA_API_KEY=...
+export DEFI_BUNGEE_API_KEY=...
+export DEFI_BUNGEE_AFFILIATE=...
 ```
 
 For persistent shell setup, add exports to your shell profile (for example `~/.zshrc`).
@@ -167,11 +182,21 @@ cache:
   max_stale: 5m
 ```
 
+Optional Bungee dedicated-backend config:
+
+```yaml
+providers:
+  bungee:
+    api_key_env: DEFI_BUNGEE_API_KEY
+    affiliate_env: DEFI_BUNGEE_AFFILIATE
+```
+
 ## Cache Policy
 
 - Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
+- If cache initialization fails (path/permission issues), commands continue with cache disabled instead of failing.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
@@ -181,9 +206,14 @@ cache:
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
 - Kamino direct adapter currently supports Solana mainnet (`solana`) only.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
-- `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
+- `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`, `bungee`) are keyless by default.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
-- `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- `--chain` normalization supports additional aliases/IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.
+- Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
+- Bungee dedicated backend routing only activates when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set; if either is missing, requests use the public backend.
+- MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
+- `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 
@@ -213,8 +243,8 @@ internal/
   providers/                      # external adapters
     aave/ morpho/ kamino/         # direct lending + yield
     defillama/                    # normalization + fallback + bridge analytics
-    across/ lifi/                 # bridge quotes
-    oneinch/ uniswap/ jupiter/    # swap
+    across/ lifi/ bungee/         # bridge quotes
+    oneinch/ uniswap/ jupiter/ fibrous/ bungee/  # swap
     types.go                      # provider interfaces
   config/                         # file/env/flags precedence
   cache/                          # sqlite cache + file lock
