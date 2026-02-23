@@ -14,6 +14,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 )
 
 func TestChainsTopSortsDescending(t *testing.T) {
@@ -134,12 +135,12 @@ func TestYieldScoreAndSortDeterministic(t *testing.T) {
 		{OpportunityID: "b", Score: 50, APYTotal: 10, TVLUSD: 100},
 		{OpportunityID: "a", Score: 50, APYTotal: 10, TVLUSD: 100},
 	}
-	sortYield(opps, "score")
+	yieldutil.Sort(opps, "score")
 	if opps[0].OpportunityID != "a" {
 		t.Fatalf("expected lexicographic tie-break, got %+v", opps)
 	}
 
-	score := scoreOpportunity(20, 1_000_000, 700_000, "low")
+	score := yieldutil.ScoreOpportunity(20, 1_000_000, 700_000, "low")
 	if score <= 0 || score > 100 {
 		t.Fatalf("score out of range: %f", score)
 	}
