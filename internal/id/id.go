@@ -11,12 +11,9 @@ import (
 )
 
 var (
-	eip155ChainPattern      = regexp.MustCompile(`^eip155:[0-9]+$`)
-	solanaChainPattern      = regexp.MustCompile(`^solana:[1-9A-HJ-NP-Za-km-z]{32,44}$`)
-	evmAddressPattern       = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
-	solanaTokenMintPattern  = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
-	eip155AssetPattern      = regexp.MustCompile(`^eip155:[0-9]+/erc20:0x[0-9a-fA-F]{40}$`)
-	solanaTokenAssetPattern = regexp.MustCompile(`^solana:[1-9A-HJ-NP-Za-km-z]{32,44}/token:[1-9A-HJ-NP-Za-km-z]{32,44}$`)
+	eip155ChainPattern     = regexp.MustCompile(`^eip155:[0-9]+$`)
+	evmAddressPattern      = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	solanaTokenMintPattern = regexp.MustCompile(`^[1-9A-HJ-NP-Za-km-z]{32,44}$`)
 )
 
 const (
@@ -458,7 +455,7 @@ func ParseChain(input string) (Chain, error) {
 	if chain, ok := chainBySlug[norm]; ok {
 		return chain, nil
 	}
-	if chain, ok := chainByCAIP2[norm]; ok {
+	if chain, ok := lookupKnownCAIP2(raw); ok {
 		return chain, nil
 	}
 
@@ -471,11 +468,12 @@ func ParseChain(input string) (Chain, error) {
 		return Chain{Name: fmt.Sprintf("EVM-%d", id), Slug: fmt.Sprintf("evm-%d", id), CAIP2: norm, EVMChainID: id}, nil
 	}
 
-	if solanaChainPattern.MatchString(raw) {
-		if known, ok := chainByCAIP2[raw]; ok {
+	if namespace, reference, ok := parseCAIP2(raw); ok && namespace == "solana" && solanaTokenMintPattern.MatchString(reference) {
+		caip2 := "solana:" + reference
+		if known, ok := chainByCAIP2[caip2]; ok {
 			return known, nil
 		}
-		return Chain{Name: "Solana", Slug: "solana-custom", CAIP2: raw}, nil
+		return Chain{Name: "Solana", Slug: "solana-custom", CAIP2: caip2}, nil
 	}
 
 	if id, err := strconv.ParseInt(norm, 10, 64); err == nil {
@@ -494,18 +492,12 @@ func ParseAsset(input string, chain Chain) (Asset, error) {
 		return Asset{}, clierr.New(clierr.CodeUsage, "asset is required")
 	}
 	if strings.Contains(raw, "/") {
-		if !eip155AssetPattern.MatchString(raw) && !solanaTokenAssetPattern.MatchString(raw) {
-			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
-		}
 		parts := strings.SplitN(raw, "/", 2)
 		if len(parts) != 2 {
 			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
 		}
-		if chain.IsEVM() {
-			if !strings.EqualFold(parts[0], chain.CAIP2) {
-				return Asset{}, clierr.New(clierr.CodeUsage, "asset chain does not match --chain")
-			}
-		} else if parts[0] != chain.CAIP2 {
+		chainIDPart := strings.TrimSpace(parts[0])
+		if !caip2MatchesChain(chainIDPart, chain) {
 			return Asset{}, clierr.New(clierr.CodeUsage, "asset chain does not match --chain")
 		}
 		assetParts := strings.SplitN(parts[1], ":", 2)
@@ -573,11 +565,51 @@ func chainNamespace(caip2 string) string {
 	return strings.ToLower(parts[0])
 }
 
+func parseCAIP2(input string) (namespace, reference string, ok bool) {
+	parts := strings.SplitN(strings.TrimSpace(input), ":", 2)
+	if len(parts) != 2 {
+		return "", "", false
+	}
+	namespace = strings.ToLower(strings.TrimSpace(parts[0]))
+	reference = strings.TrimSpace(parts[1])
+	if namespace == "" || reference == "" {
+		return "", "", false
+	}
+	return namespace, reference, true
+}
+
+func lookupKnownCAIP2(input string) (Chain, bool) {
+	namespace, reference, ok := parseCAIP2(input)
+	if !ok {
+		return Chain{}, false
+	}
+	key := namespace + ":" + reference
+	chain, ok := chainByCAIP2[key]
+	return chain, ok
+}
+
+func caip2MatchesChain(input string, chain Chain) bool {
+	if chain.IsEVM() {
+		return strings.EqualFold(strings.TrimSpace(input), chain.CAIP2)
+	}
+	if chain.IsSolana() {
+		inputNamespace, inputReference, ok := parseCAIP2(input)
+		if !ok || inputNamespace != "solana" {
+			return false
+		}
+		chainNS, chainReference, ok := parseCAIP2(chain.CAIP2)
+		if !ok || chainNS != "solana" {
+			return false
+		}
+		return inputReference == chainReference
+	}
+	return strings.TrimSpace(input) == chain.CAIP2
+}
+
 func buildChainByCAIP2() map[string]Chain {
 	m := make(map[string]Chain, len(chainBySlug))
 	for _, chain := range chainBySlug {
 		m[chain.CAIP2] = chain
-		m[strings.ToLower(chain.CAIP2)] = chain
 	}
 	return m
 }

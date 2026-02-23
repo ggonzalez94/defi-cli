@@ -1,6 +1,9 @@
 package id
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestParseChainVariants(t *testing.T) {
 	chain, err := ParseChain("base")
@@ -41,6 +44,30 @@ func TestParseChainVariants(t *testing.T) {
 	}
 	if chain.CAIP2 != "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" {
 		t.Fatalf("unexpected solana CAIP2: %s", chain.CAIP2)
+	}
+}
+
+func TestParseChainSolanaCAIP2NamespaceCaseInsensitive(t *testing.T) {
+	chain, err := ParseChain("SOLANA:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+	if err != nil {
+		t.Fatalf("ParseChain with uppercase namespace failed: %v", err)
+	}
+	if chain.CAIP2 != "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" {
+		t.Fatalf("unexpected solana CAIP2: %s", chain.CAIP2)
+	}
+}
+
+func TestParseChainSolanaReferenceCaseSensitive(t *testing.T) {
+	lowerRef := strings.ToLower("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+	chain, err := ParseChain("solana:" + lowerRef)
+	if err != nil {
+		t.Fatalf("ParseChain with lowercased ref failed: %v", err)
+	}
+	if chain.Slug != "solana-custom" {
+		t.Fatalf("expected custom solana slug, got %s", chain.Slug)
+	}
+	if chain.CAIP2 != "solana:"+lowerRef {
+		t.Fatalf("unexpected CAIP2: %s", chain.CAIP2)
 	}
 }
 
@@ -89,6 +116,25 @@ func TestParseAssetSolanaSymbolAndMint(t *testing.T) {
 	}
 	if asset3.Symbol != "SOL" {
 		t.Fatalf("expected SOL symbol, got %s", asset3.Symbol)
+	}
+
+	asset4, err := ParseAsset("SOLANA:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/TOKEN:So11111111111111111111111111111111111111112", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(uppercase CAIP-19) on solana failed: %v", err)
+	}
+	if asset4.Symbol != "SOL" {
+		t.Fatalf("expected SOL symbol, got %s", asset4.Symbol)
+	}
+}
+
+func TestParseAssetCAIP19MixedCaseEVM(t *testing.T) {
+	chain, _ := ParseChain("ethereum")
+	asset, err := ParseAsset("EIP155:1/ERC20:0xA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(mixed-case CAIP-19) failed: %v", err)
+	}
+	if asset.AssetID != "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" {
+		t.Fatalf("unexpected canonical asset id: %s", asset.AssetID)
 	}
 }
 

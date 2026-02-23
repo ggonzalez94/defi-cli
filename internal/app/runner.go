@@ -174,7 +174,6 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					s.swapProviders["jupiter"].Info(),
 					s.swapProviders["bungee"].Info(),
 					s.swapProviders["fibrous"].Info(),
-					s.swapProviders["jupiter"].Info(),
 				}
 			}
 
@@ -1113,7 +1112,7 @@ func (s *runtimeState) selectYieldProviders(filter []string, chain id.Chain) ([]
 func yieldProviderSupportsChain(name string, chain id.Chain) bool {
 	switch name {
 	case "kamino":
-		return chain.IsSolana()
+		return chain.Slug == "solana"
 	case "aave", "morpho":
 		return chain.IsEVM()
 	default:

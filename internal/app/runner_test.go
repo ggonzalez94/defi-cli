@@ -60,6 +60,7 @@ func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
 	}{
 		{name: "evm", chainInput: "base", want: []string{"aave", "defillama", "morpho"}},
 		{name: "solana", chainInput: "solana", want: []string{"defillama", "kamino"}},
+		{name: "solana-devnet", chainInput: "solana-devnet", want: []string{"defillama"}},
 	}
 
 	for _, tc := range tests {
@@ -155,6 +156,16 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
 		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
+	}
+	jupiterCount := 0
+	for _, item := range out {
+		name, _ := item["name"].(string)
+		if strings.EqualFold(name, "jupiter") {
+			jupiterCount++
+		}
+	}
+	if jupiterCount != 1 {
+		t.Fatalf("expected exactly one jupiter provider entry, got %d", jupiterCount)
 	}
 }
 
