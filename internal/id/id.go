@@ -11,9 +11,8 @@ import (
 )
 
 var (
-	chainPattern = regexp.MustCompile(`^eip155:[0-9]+$`)
-	assetPattern = regexp.MustCompile(`^eip155:[0-9]+/erc20:0x[0-9a-fA-F]{40}$`)
-	addrPattern  = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
+	chainPattern   = regexp.MustCompile(`^eip155:[0-9]+$`)
+	evmAddrPattern = regexp.MustCompile(`^0x[0-9a-fA-F]{40}$`)
 )
 
 type Chain struct {
@@ -71,6 +70,8 @@ var chainBySlug = map[string]Chain{
 	"taiko":         {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 	"taiko alethia": {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 	"taiko-alethia": {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
+	"hyperevm":      {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:999", EVMChainID: 999},
+	"hyper-evm":     {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:999", EVMChainID: 999},
 }
 
 var chainByID = map[int64]Chain{
@@ -93,9 +94,12 @@ var chainByID = map[int64]Chain{
 	59144:  chainBySlug["linea"],
 	80094:  chainBySlug["berachain"],
 	81457:  chainBySlug["blast"],
+	999:    chainBySlug["hyperevm"],
 	167000: chainBySlug["taiko"],
 	534352: chainBySlug["scroll"],
 }
+
+var chainByCAIP2 = buildChainByCAIP2()
 
 // Small bootstrap registry for deterministic asset parsing on Tier-1 chains.
 var tokenRegistry = map[string][]Token{
@@ -349,6 +353,12 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "USDT", Address: "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", Decimals: 6},
 		{Symbol: "WETH", Address: "0x5300000000000000000000000000000000000004", Decimals: 18},
 	},
+	"eip155:999": {
+		{Symbol: "USDC", Address: "0xb88339cb7199b77e23db6e890353e22632ba630f", Decimals: 6},
+		{Symbol: "WHYPE", Address: "0x5555555555555555555555555555555555555555", Decimals: 18},
+		{Symbol: "USDE", Address: "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34", Decimals: 18},
+		{Symbol: "USDT", Address: "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", Decimals: 6},
+	},
 }
 
 func ParseChain(input string) (Chain, error) {
@@ -358,6 +368,9 @@ func ParseChain(input string) (Chain, error) {
 	}
 
 	if chain, ok := chainBySlug[norm]; ok {
+		return chain, nil
+	}
+	if chain, ok := chainByCAIP2[norm]; ok {
 		return chain, nil
 	}
 
@@ -385,21 +398,43 @@ func ParseAsset(input string, chain Chain) (Asset, error) {
 	if norm == "" {
 		return Asset{}, clierr.New(clierr.CodeUsage, "asset is required")
 	}
-
-	if assetPattern.MatchString(norm) {
-		parts := strings.Split(norm, "/")
-		if parts[0] != chain.CAIP2 {
+	if parts := strings.SplitN(norm, "/", 2); len(parts) == 2 && strings.Contains(parts[1], ":") {
+		if !strings.EqualFold(parts[0], chain.CAIP2) {
 			return Asset{}, clierr.New(clierr.CodeUsage, "asset chain does not match --chain")
 		}
-		addr := strings.ToLower(strings.TrimPrefix(parts[1], "erc20:"))
+		assetParts := strings.SplitN(parts[1], ":", 2)
+		if len(assetParts) != 2 {
+			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
+		}
+		ns := strings.ToLower(strings.TrimSpace(assetParts[0]))
+		if ns != "erc20" {
+			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("unsupported asset namespace %s for chain %s", ns, chain.CAIP2))
+		}
+		addrRaw := strings.TrimSpace(assetParts[1])
+		if !evmAddrPattern.MatchString(addrRaw) {
+			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid token address for chain %s", chain.CAIP2))
+		}
+		addr := canonicalizeAddress(chain.CAIP2, addrRaw)
 		token, _ := findTokenByAddress(chain.CAIP2, addr)
-		return Asset{ChainID: chain.CAIP2, AssetID: fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
+		return Asset{
+			ChainID:  chain.CAIP2,
+			AssetID:  fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr),
+			Address:  addr,
+			Symbol:   token.Symbol,
+			Decimals: token.Decimals,
+		}, nil
 	}
 
-	if addrPattern.MatchString(norm) {
-		addr := strings.ToLower(norm)
+	if evmAddrPattern.MatchString(norm) {
+		addr := canonicalizeAddress(chain.CAIP2, norm)
 		token, _ := findTokenByAddress(chain.CAIP2, addr)
-		return Asset{ChainID: chain.CAIP2, AssetID: fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr), Address: addr, Symbol: token.Symbol, Decimals: token.Decimals}, nil
+		return Asset{
+			ChainID:  chain.CAIP2,
+			AssetID:  fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr),
+			Address:  addr,
+			Symbol:   token.Symbol,
+			Decimals: token.Decimals,
+		}, nil
 	}
 
 	matches := findTokensBySymbol(chain.CAIP2, norm)
@@ -415,7 +450,7 @@ func ParseAsset(input string, chain Chain) (Asset, error) {
 		return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("symbol %s is ambiguous on chain %s, use address or CAIP-19 (%s)", input, chain.CAIP2, strings.Join(addresses, ", ")))
 	}
 	t := matches[0]
-	addr := strings.ToLower(t.Address)
+	addr := canonicalizeAddress(chain.CAIP2, t.Address)
 	return Asset{
 		ChainID:  chain.CAIP2,
 		AssetID:  fmt.Sprintf("%s/erc20:%s", chain.CAIP2, addr),
@@ -425,10 +460,28 @@ func ParseAsset(input string, chain Chain) (Asset, error) {
 	}, nil
 }
 
+func buildChainByCAIP2() map[string]Chain {
+	m := make(map[string]Chain, len(chainBySlug))
+	for _, chain := range chainBySlug {
+		m[strings.ToLower(chain.CAIP2)] = chain
+	}
+	return m
+}
+
+func canonicalizeAddress(chainID, address string) string {
+	addr := strings.TrimSpace(address)
+	if strings.HasPrefix(strings.ToLower(chainID), "eip155:") {
+		return strings.ToLower(addr)
+	}
+	return addr
+}
+
 func findTokenByAddress(chainID, address string) (Token, bool) {
+	target := canonicalizeAddress(chainID, address)
 	for _, t := range tokenRegistry[chainID] {
-		if strings.EqualFold(t.Address, address) {
-			return Token{Symbol: strings.ToUpper(t.Symbol), Address: strings.ToLower(t.Address), Decimals: t.Decimals}, true
+		candidate := canonicalizeAddress(chainID, t.Address)
+		if candidate == target {
+			return Token{Symbol: strings.ToUpper(t.Symbol), Address: candidate, Decimals: t.Decimals}, true
 		}
 	}
 	return Token{}, false
@@ -438,7 +491,7 @@ func findTokensBySymbol(chainID, symbol string) []Token {
 	matches := []Token{}
 	for _, t := range tokenRegistry[chainID] {
 		if strings.EqualFold(t.Symbol, symbol) {
-			matches = append(matches, Token{Symbol: strings.ToUpper(t.Symbol), Address: strings.ToLower(t.Address), Decimals: t.Decimals})
+			matches = append(matches, Token{Symbol: strings.ToUpper(t.Symbol), Address: canonicalizeAddress(chainID, t.Address), Decimals: t.Decimals})
 		}
 	}
 	return matches
@@ -453,5 +506,5 @@ func KnownToken(chainID, symbol string) (Token, bool) {
 }
 
 func LookupByAddress(chainID, address string) (Token, bool) {
-	return findTokenByAddress(chainID, strings.ToLower(address))
+	return findTokenByAddress(chainID, canonicalizeAddress(chainID, address))
 }

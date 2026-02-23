@@ -12,15 +12,24 @@ Format:
 ### Added
 - Added MegaETH mainnet chain normalization (`megaeth`, `mega eth`, `mega-eth`) with canonical ID mapping to `eip155:4326`.
 - Expanded bootstrap token registry symbol support across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
+- Added Bungee Auto-mode quoting as a bridge provider (`bridge quote --provider bungee`) and swap provider (`swap quote --provider bungee`).
+- Added HyperEVM alias normalization (`hyperevm`/`hyper-evm`) for quote workflows.
+- Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
 
 ### Changed
 - Added MegaETH bootstrap token parsing for `MEGA`, `WETH`, and `USDT` (mapped to MegaETH's `USDT0` contract address) to improve lending/bridge symbol workflows.
+- Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
+- Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
+- Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
 
 ### Fixed
 - Added missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
+- Commands now continue with cache disabled when cache initialization fails, instead of returning an internal error.
 
 ### Docs
 - Updated README and AGENTS MegaETH chain alias coverage and bootstrap token caveats.
+- Documented Bungee Auto-mode provider usage and new custom-chain alias coverage in README/AGENTS.
+- Documented optional Bungee dedicated-backend environment variables and fallback behavior when only one value is set.
 
 ### Security
 - None yet.

@@ -88,6 +88,8 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "zksync", chainID: 324, caip2: "eip155:324", slug: "zksync"},
 		{input: "zksync era", chainID: 324, caip2: "eip155:324", slug: "zksync"},
 		{input: "zksync-era", chainID: 324, caip2: "eip155:324", slug: "zksync"},
+		{input: "hyperevm", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
+		{input: "hyper-evm", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
 		{input: "5000", chainID: 5000, caip2: "eip155:5000", slug: "mantle"},
 		{input: "324", chainID: 324, caip2: "eip155:324", slug: "zksync"},
 		{input: "80094", chainID: 80094, caip2: "eip155:80094", slug: "berachain"},
@@ -95,6 +97,7 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "252", chainID: 252, caip2: "eip155:252", slug: "fraxtal"},
 		{input: "480", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "4326", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
+		{input: "999", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
 		{input: "167000", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 	}
 
@@ -133,6 +136,7 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 		{chainInput: "celo", symbol: "USDC"},
 		{chainInput: "taiko", symbol: "USDC"},
 		{chainInput: "zksync", symbol: "USDC"},
+		{chainInput: "hyperevm", symbol: "USDC"},
 	}
 
 	for _, tc := range tests {
@@ -153,6 +157,30 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 				t.Fatalf("expected chain id %s, got %s", chain.CAIP2, asset.ChainID)
 			}
 		})
+	}
+}
+
+func TestParseAssetHyperEVMAddressAndCAIP19(t *testing.T) {
+	chain, err := ParseChain("hyperevm")
+	if err != nil {
+		t.Fatalf("ParseChain(hyperevm) failed: %v", err)
+	}
+
+	asset, err := ParseAsset("0xb88339cb7199b77e23db6e890353e22632ba630f", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(hyperevm address) failed: %v", err)
+	}
+	if asset.Symbol != "USDC" {
+		t.Fatalf("expected USDC, got %s", asset.Symbol)
+	}
+
+	caip := "eip155:999/erc20:0x5555555555555555555555555555555555555555"
+	asset, err = ParseAsset(caip, chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(hyperevm caip19) failed: %v", err)
+	}
+	if asset.Symbol != "WHYPE" {
+		t.Fatalf("expected WHYPE, got %s", asset.Symbol)
 	}
 }
 

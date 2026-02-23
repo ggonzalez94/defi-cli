@@ -24,6 +24,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/providers/aave"
 	"github.com/ggonzalez94/defi-cli/internal/providers/across"
+	"github.com/ggonzalez94/defi-cli/internal/providers/bungee"
 	"github.com/ggonzalez94/defi-cli/internal/providers/defillama"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
@@ -141,6 +142,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.bridgeProviders = map[string]providers.BridgeProvider{
 					"across": across.New(httpClient),
 					"lifi":   lifi.New(httpClient),
+					"bungee": bungee.NewBridge(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
 				}
 				s.bridgeDataProviders = map[string]providers.BridgeDataProvider{
 					"defillama": llama,
@@ -148,6 +150,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.swapProviders = map[string]providers.SwapProvider{
 					"1inch":   oneinch.New(httpClient, settings.OneInchAPIKey),
 					"uniswap": uniswap.New(httpClient, settings.UniswapAPIKey),
+					"bungee":  bungee.NewSwap(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
 				}
 				s.providerInfos = []model.ProviderInfo{
 					llama.Info(),
@@ -595,7 +598,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 			})
 		},
 	}
-	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "across", "Bridge provider (across|lifi; no API key required)")
+	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "across", "Bridge provider (across|lifi|bungee; no API key required)")
 	quoteCmd.Flags().StringVar(&fromArg, "from", "", "Source chain")
 	quoteCmd.Flags().StringVar(&toArg, "to", "", "Destination chain")
 	quoteCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19) on source chain")
@@ -727,7 +730,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap; both require API keys)")
+	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap|bungee; bungee requires no API key)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
