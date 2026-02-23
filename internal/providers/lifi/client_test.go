@@ -1,4 +1,4 @@
-package across
+package lifi
 
 import (
 	"context"
@@ -9,18 +9,6 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
-
-func TestBaseUnitMathHelpers(t *testing.T) {
-	if compareBaseUnits("100", "99") <= 0 {
-		t.Fatal("compareBaseUnits expected 100 > 99")
-	}
-	if out := subtractBaseUnits("1000", "1"); out != "999" {
-		t.Fatalf("unexpected subtraction result: %s", out)
-	}
-	if out := subtractBaseUnits("1", "2"); out != "0" {
-		t.Fatalf("unexpected underflow result: %s", out)
-	}
-}
 
 func TestQuoteBridgeRejectsNonEVMChains(t *testing.T) {
 	fromChain, _ := id.ParseChain("solana")

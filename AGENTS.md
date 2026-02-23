@@ -21,6 +21,8 @@ go vet ./...
 ./defi providers list --results-only
 ./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
 ./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
+./defi lend markets --protocol kamino --chain solana --asset USDC --results-only
+./defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
 
 ## Folder structure
@@ -32,10 +34,10 @@ cmd/
 internal/
   app/runner.go                   # command wiring, provider routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/                 # direct GraphQL lending + yield
+    aave/ morpho/ kamino/         # direct GraphQL/REST lending + yield
     defillama/                    # market/yield normalization + fallback + bridge analytics
     across/ lifi/ bungee/         # bridge quotes
-    oneinch/ uniswap/ fibrous/ bungee/  # swap quotes
+    oneinch/ uniswap/ jupiter/ fibrous/ bungee/  # swap quotes
     types.go                      # provider interfaces
   config/                         # defaults + file/env/flags precedence
   cache/                          # sqlite cache + file lock
@@ -59,10 +61,12 @@ README.md                         # user-facing usage + caveats
 
 - Error output always returns a full envelope, even with `--results-only` or `--select`.
 - Config precedence is `flags > env > config file > defaults`.
-- `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
+- `yield --providers` expects provider names (`defillama,aave,morpho,kamino`), not protocol categories.
 - Lending routes by `--protocol` to direct adapters when available, then may fallback to DefiLlama on selected failures.
 - Most commands do not require provider API keys.
-- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`). `swap quote --provider fibrous` is keyless. Bungee Auto-mode quotes (`bridge quote --provider bungee`, `swap quote --provider bungee`) are keyless by default; optional dedicated-backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
+- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
+- `swap quote --provider jupiter` supports `DEFI_JUPITER_API_KEY` optionally (higher limits); Solana swap defaults to `jupiter`.
+- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`). `swap quote --provider jupiter` supports `DEFI_JUPITER_API_KEY` optionally (higher limits). `swap quote --provider fibrous` is keyless. Bungee Auto-mode quotes (`bridge quote --provider bungee`, `swap quote --provider bungee`) are keyless by default; optional dedicated-backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
 - `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
@@ -71,6 +75,8 @@ README.md                         # user-facing usage + caveats
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
+- Kamino direct routes currently support Solana mainnet only.
+- Solana devnet/testnet aliases and custom Solana CAIP-2 references are intentionally unsupported; use Solana mainnet only.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Cache initialization is best-effort; if cache path init fails (permissions/path issues), commands continue with cache disabled.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.

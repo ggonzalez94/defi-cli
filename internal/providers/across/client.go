@@ -40,6 +40,9 @@ func (c *Client) Info() model.ProviderInfo {
 }
 
 func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteRequest) (model.BridgeQuote, error) {
+	if !req.FromChain.IsEVM() || !req.ToChain.IsEVM() {
+		return model.BridgeQuote{}, clierr.New(clierr.CodeUnsupported, "across bridge quotes support only EVM chains")
+	}
 	chainFrom := strconv.FormatInt(req.FromChain.EVMChainID, 10)
 	chainTo := strconv.FormatInt(req.ToChain.EVMChainID, 10)
 

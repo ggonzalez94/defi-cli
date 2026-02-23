@@ -1,6 +1,11 @@
 package id
 
-import "testing"
+import (
+	"strings"
+	"testing"
+
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
+)
 
 func TestParseChainVariants(t *testing.T) {
 	chain, err := ParseChain("base")
@@ -26,6 +31,58 @@ func TestParseChainVariants(t *testing.T) {
 	if chain.EVMChainID != 999999 {
 		t.Fatalf("unexpected chain ID: %d", chain.EVMChainID)
 	}
+
+	chain, err = ParseChain("solana")
+	if err != nil {
+		t.Fatalf("ParseChain(solana) failed: %v", err)
+	}
+	if !chain.IsSolana() {
+		t.Fatalf("expected solana chain, got %+v", chain)
+	}
+
+	chain, err = ParseChain("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+	if err != nil {
+		t.Fatalf("ParseChain(caip2 solana) failed: %v", err)
+	}
+	if chain.CAIP2 != "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" {
+		t.Fatalf("unexpected solana CAIP2: %s", chain.CAIP2)
+	}
+}
+
+func TestParseChainSolanaCAIP2NamespaceCaseInsensitive(t *testing.T) {
+	chain, err := ParseChain("SOLANA:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+	if err != nil {
+		t.Fatalf("ParseChain with uppercase namespace failed: %v", err)
+	}
+	if chain.CAIP2 != "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp" {
+		t.Fatalf("unexpected solana CAIP2: %s", chain.CAIP2)
+	}
+}
+
+func TestParseChainSolanaReferenceCaseSensitive(t *testing.T) {
+	lowerRef := strings.ToLower("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
+	_, err := ParseChain("solana:" + lowerRef)
+	if err == nil {
+		t.Fatal("expected non-mainnet solana reference to be unsupported")
+	}
+	cErr, ok := clierr.As(err)
+	if !ok || cErr.Code != clierr.CodeUnsupported {
+		t.Fatalf("expected unsupported error, got %v", err)
+	}
+}
+
+func TestParseChainRejectsSolanaDevnetAndTestnetAliases(t *testing.T) {
+	tests := []string{"solana-devnet", "solana-testnet"}
+	for _, input := range tests {
+		_, err := ParseChain(input)
+		if err == nil {
+			t.Fatalf("expected %s to be unsupported", input)
+		}
+		cErr, ok := clierr.As(err)
+		if !ok || cErr.Code != clierr.CodeUnsupported {
+			t.Fatalf("expected unsupported error for %s, got %v", input, err)
+		}
+	}
 }
 
 func TestParseAssetSymbolAndAddress(t *testing.T) {
@@ -48,9 +105,75 @@ func TestParseAssetSymbolAndAddress(t *testing.T) {
 	}
 }
 
+func TestParseAssetSolanaSymbolAndMint(t *testing.T) {
+	chain, _ := ParseChain("solana")
+
+	asset, err := ParseAsset("USDC", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(USDC) on solana failed: %v", err)
+	}
+	if asset.AssetID != "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v" {
+		t.Fatalf("unexpected solana asset ID: %s", asset.AssetID)
+	}
+
+	asset2, err := ParseAsset("EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(mint) on solana failed: %v", err)
+	}
+	if asset2.Symbol != "USDC" {
+		t.Fatalf("expected USDC symbol, got %s", asset2.Symbol)
+	}
+
+	asset3, err := ParseAsset("solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:So11111111111111111111111111111111111111112", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(caip19) on solana failed: %v", err)
+	}
+	if asset3.Symbol != "SOL" {
+		t.Fatalf("expected SOL symbol, got %s", asset3.Symbol)
+	}
+
+	asset4, err := ParseAsset("SOLANA:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/TOKEN:So11111111111111111111111111111111111111112", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(uppercase CAIP-19) on solana failed: %v", err)
+	}
+	if asset4.Symbol != "SOL" {
+		t.Fatalf("expected SOL symbol, got %s", asset4.Symbol)
+	}
+}
+
+func TestParseAssetCAIP19MixedCaseEVM(t *testing.T) {
+	chain, _ := ParseChain("ethereum")
+	asset, err := ParseAsset("EIP155:1/ERC20:0xA0B86991C6218B36C1D19D4A2E9EB0CE3606EB48", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(mixed-case CAIP-19) failed: %v", err)
+	}
+	if asset.AssetID != "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48" {
+		t.Fatalf("unexpected canonical asset id: %s", asset.AssetID)
+	}
+}
+
+func TestParseAssetSlashWithoutCAIPNamespaceIsSymbolLookup(t *testing.T) {
+	chain, _ := ParseChain("ethereum")
+	_, err := ParseAsset("USDC/ETH", chain)
+	if err == nil {
+		t.Fatal("expected unresolved symbol error")
+	}
+	if !strings.Contains(err.Error(), "symbol USDC/ETH not found") {
+		t.Fatalf("expected symbol lookup error, got %v", err)
+	}
+}
+
 func TestParseAssetChainMismatch(t *testing.T) {
 	chain, _ := ParseChain("base")
 	_, err := ParseAsset("eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", chain)
+	if err == nil {
+		t.Fatal("expected chain mismatch error")
+	}
+}
+
+func TestParseAssetSolanaChainMismatch(t *testing.T) {
+	chain, _ := ParseChain("solana")
+	_, err := ParseAsset("solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", chain)
 	if err == nil {
 		t.Fatal("expected chain mismatch error")
 	}

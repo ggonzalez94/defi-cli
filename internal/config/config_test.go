@@ -55,6 +55,17 @@ func TestLoadDefiLlamaAPIKeyFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadJupiterAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("DEFI_JUPITER_API_KEY", "jup-key")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.JupiterAPIKey != "jup-key" {
+		t.Fatalf("expected Jupiter API key from env, got %q", settings.JupiterAPIKey)
+	}
+}
+
 func TestLoadBungeeDedicatedSettingsFromEnv(t *testing.T) {
 	t.Setenv("DEFI_BUNGEE_API_KEY", "bungee-key")
 	t.Setenv("DEFI_BUNGEE_AFFILIATE", "affiliate-id")
