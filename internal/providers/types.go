@@ -14,6 +14,7 @@ type Provider interface {
 type MarketDataProvider interface {
 	Provider
 	ChainsTop(ctx context.Context, limit int) ([]model.ChainTVL, error)
+	ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asset, limit int) ([]model.ChainAssetTVL, error)
 	ProtocolsTop(ctx context.Context, category string, limit int) ([]model.ProtocolTVL, error)
 	ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error)
 }
