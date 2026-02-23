@@ -35,7 +35,7 @@ internal/
     aave/ morpho/                 # direct GraphQL lending + yield
     defillama/                    # market/yield normalization + fallback + bridge analytics
     across/ lifi/ bungee/         # bridge quotes
-    oneinch/ uniswap/ bungee/     # swap quotes
+    oneinch/ uniswap/ fibrous/ bungee/  # swap quotes
     types.go                      # provider interfaces
   config/                         # defaults + file/env/flags precedence
   cache/                          # sqlite cache + file lock
@@ -62,10 +62,10 @@ README.md                         # user-facing usage + caveats
 - `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
 - Lending routes by `--protocol` to direct adapters when available, then may fallback to DefiLlama on selected failures.
 - Most commands do not require provider API keys.
-- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`). Bungee Auto-mode quotes (`bridge quote --provider bungee`, `swap quote --provider bungee`) are keyless by default; optional dedicated-backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
+- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`). `swap quote --provider fibrous` is keyless. Bungee Auto-mode quotes (`bridge quote --provider bungee`, `swap quote --provider bungee`) are keyless by default; optional dedicated-backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
-- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, and `hyperevm`.
+- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.

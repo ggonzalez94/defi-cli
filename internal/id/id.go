@@ -46,6 +46,7 @@ var chainBySlug = map[string]Chain{
 	"gnosis":        {Name: "Gnosis", Slug: "gnosis", CAIP2: "eip155:100", EVMChainID: 100},
 	"xdai":          {Name: "Gnosis", Slug: "gnosis", CAIP2: "eip155:100", EVMChainID: 100},
 	"polygon":       {Name: "Polygon", Slug: "polygon", CAIP2: "eip155:137", EVMChainID: 137},
+	"monad":         {Name: "Monad", Slug: "monad", CAIP2: "eip155:143", EVMChainID: 143},
 	"sonic":         {Name: "Sonic", Slug: "sonic", CAIP2: "eip155:146", EVMChainID: 146},
 	"fraxtal":       {Name: "Fraxtal", Slug: "fraxtal", CAIP2: "eip155:252", EVMChainID: 252},
 	"zksync":        {Name: "zkSync Era", Slug: "zksync", CAIP2: "eip155:324", EVMChainID: 324},
@@ -54,6 +55,10 @@ var chainBySlug = map[string]Chain{
 	"worldchain":    {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
 	"world chain":   {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
 	"world-chain":   {Name: "World Chain", Slug: "world-chain", CAIP2: "eip155:480", EVMChainID: 480},
+	"hyperevm":      {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:998", EVMChainID: 998},
+	"hyper evm":     {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:998", EVMChainID: 998},
+	"hyper-evm":     {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:998", EVMChainID: 998},
+	"citrea":        {Name: "Citrea", Slug: "citrea", CAIP2: "eip155:4114", EVMChainID: 4114},
 	"mantle":        {Name: "Mantle", Slug: "mantle", CAIP2: "eip155:5000", EVMChainID: 5000},
 	"megaeth":       {Name: "MegaETH", Slug: "megaeth", CAIP2: "eip155:4326", EVMChainID: 4326},
 	"mega eth":      {Name: "MegaETH", Slug: "megaeth", CAIP2: "eip155:4326", EVMChainID: 4326},
@@ -70,8 +75,6 @@ var chainBySlug = map[string]Chain{
 	"taiko":         {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 	"taiko alethia": {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 	"taiko-alethia": {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
-	"hyperevm":      {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:999", EVMChainID: 999},
-	"hyper-evm":     {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:999", EVMChainID: 999},
 }
 
 var chainByID = map[int64]Chain{
@@ -80,6 +83,9 @@ var chainByID = map[int64]Chain{
 	56:     chainBySlug["bsc"],
 	100:    chainBySlug["gnosis"],
 	137:    chainBySlug["polygon"],
+	143:    chainBySlug["monad"],
+	998:    chainBySlug["hyperevm"],
+	4114:   chainBySlug["citrea"],
 	146:    chainBySlug["sonic"],
 	252:    chainBySlug["fraxtal"],
 	324:    chainBySlug["zksync"],
@@ -94,7 +100,6 @@ var chainByID = map[int64]Chain{
 	59144:  chainBySlug["linea"],
 	80094:  chainBySlug["berachain"],
 	81457:  chainBySlug["blast"],
-	999:    chainBySlug["hyperevm"],
 	167000: chainBySlug["taiko"],
 	534352: chainBySlug["scroll"],
 }
@@ -381,13 +386,23 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "USDT", Address: "0xf55bec9cafdbe8730f096aa55dad6d22d44099df", Decimals: 6},
 		{Symbol: "WETH", Address: "0x5300000000000000000000000000000000000004", Decimals: 18},
 	},
-	"eip155:999": {
-		{Symbol: "LINK", Address: "0x1ac2ee68b8d038c982c1e1f73f596927dd70de59", Decimals: 18},
-		{Symbol: "PENGU", Address: "0xfa44c2634ff17cbe26dc3007d36bd61c79068c14", Decimals: 18},
-		{Symbol: "USDC", Address: "0xb88339cb7199b77e23db6e890353e22632ba630f", Decimals: 6},
-		{Symbol: "USDE", Address: "0x5d3a1ff2b6bab83b63cd9ad0787074081a52ef34", Decimals: 18},
-		{Symbol: "USDT", Address: "0xb8ce59fc3717ada4c02eadf9682a9e934f625ebb", Decimals: 6},
+	// HyperEVM mainnet (chain ID 998)
+	"eip155:998": {
+		{Symbol: "HYPE", Address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", Decimals: 18},
 		{Symbol: "WHYPE", Address: "0x5555555555555555555555555555555555555555", Decimals: 18},
+		{Symbol: "USDC", Address: "0xb88339cb7199b77e23db6e890353e22632ba630f", Decimals: 6},
+	},
+	// Monad mainnet (chain ID 143)
+	"eip155:143": {
+		{Symbol: "MON", Address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", Decimals: 18},
+		{Symbol: "WMON", Address: "0x4200000000000000000000000000000000000006", Decimals: 18},
+		{Symbol: "USDC", Address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", Decimals: 6},
+	},
+	// Citrea mainnet (chain ID 4114)
+	"eip155:4114": {
+		{Symbol: "CBTC", Address: "0x0000000000000000000000000000000000000000", Decimals: 18},
+		{Symbol: "WCBTC", Address: "0x3100000000000000000000000000000000000006", Decimals: 18},
+		{Symbol: "USDC", Address: "0xE045e6c36cF77FAA2CfB54466D71A3aEF7bBE839", Decimals: 6},
 	},
 }
 

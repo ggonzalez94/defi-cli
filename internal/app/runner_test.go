@@ -16,6 +16,19 @@ import (
 	"github.com/spf13/cobra"
 )
 
+func findProviderInfo(items []map[string]any, name string) (map[string]any, bool) {
+	for _, item := range items {
+		rawName, ok := item["name"].(string)
+		if !ok {
+			continue
+		}
+		if strings.EqualFold(rawName, name) {
+			return item, true
+		}
+	}
+	return nil, false
+}
+
 func TestTrimRootPath(t *testing.T) {
 	if got := trimRootPath("defi yield opportunities"); got != "yield opportunities" {
 		t.Fatalf("unexpected trim result: %s", got)
@@ -71,6 +84,13 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatalf("expected providers output, got empty")
+	}
+	fibrousInfo, ok := findProviderInfo(out, "fibrous")
+	if !ok {
+		t.Fatalf("expected fibrous provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
+		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
 	}
 }
 
@@ -174,6 +194,13 @@ func TestRunnerProvidersListBypassesCacheOpen(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatalf("expected providers output, got empty")
+	}
+	fibrousInfo, ok := findProviderInfo(out, "fibrous")
+	if !ok {
+		t.Fatalf("expected fibrous provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
+		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
 	}
 }
 
