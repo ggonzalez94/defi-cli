@@ -12,15 +12,20 @@ Format:
 ### Added
 - Added MegaETH mainnet chain normalization (`megaeth`, `mega eth`, `mega-eth`) with canonical ID mapping to `eip155:4326`.
 - Expanded bootstrap token registry symbol support across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
+- Added `fibrous` swap provider integration (`swap quote --provider fibrous`) for `base`, `hyperevm`, and `citrea` without requiring an API key.
 
 ### Changed
 - Added MegaETH bootstrap token parsing for `MEGA`, `WETH`, and `USDT` (mapped to MegaETH's `USDT0` contract address) to improve lending/bridge symbol workflows.
+- Added mainnet chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:998`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
 
 ### Fixed
 - Added missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
+- Fixed Fibrous route response decoding to handle nested token objects and nullable gas values.
+- Disabled Fibrous `monad` routing while Monad route responses are unstable.
 
 ### Docs
 - Updated README and AGENTS MegaETH chain alias coverage and bootstrap token caveats.
+- Documented Fibrous provider support, keyless auth behavior, and new chain aliases in `README.md` and `AGENTS.md`.
 
 ### Security
 - None yet.
