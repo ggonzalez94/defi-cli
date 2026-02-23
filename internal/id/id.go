@@ -47,6 +47,9 @@ var chainBySlug = map[string]Chain{
 	"avalanche": {Name: "Avalanche", Slug: "avalanche", CAIP2: "eip155:43114", EVMChainID: 43114},
 	"bsc":       {Name: "BSC", Slug: "bsc", CAIP2: "eip155:56", EVMChainID: 56},
 	"taiko":     {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
+	"hyperevm":  {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:999", EVMChainID: 999},
+	"monad":     {Name: "Monad", Slug: "monad", CAIP2: "eip155:10143", EVMChainID: 10143},
+	"citrea":    {Name: "Citrea", Slug: "citrea", CAIP2: "eip155:5115", EVMChainID: 5115},
 }
 
 var chainByID = map[int64]Chain{
@@ -54,7 +57,10 @@ var chainByID = map[int64]Chain{
 	10:     chainBySlug["optimism"],
 	56:     chainBySlug["bsc"],
 	137:    chainBySlug["polygon"],
+	999:    chainBySlug["hyperevm"],
+	5115:   chainBySlug["citrea"],
 	8453:   chainBySlug["base"],
+	10143:  chainBySlug["monad"],
 	42161:  chainBySlug["arbitrum"],
 	43114:  chainBySlug["avalanche"],
 	167000: chainBySlug["taiko"],
@@ -102,6 +108,22 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "USDT", Address: "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", Decimals: 6},
 		{Symbol: "DAI", Address: "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70", Decimals: 18},
 		{Symbol: "WETH", Address: "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB", Decimals: 18},
+	},
+	// HyperEVM (Hyperliquid EVM, chain ID 999)
+	"eip155:999": {
+		{Symbol: "WHYPE", Address: "0x5555555555555555555555555555555555555555", Decimals: 18},
+		{Symbol: "USDC", Address: "0x6d1e7cde53ba9467b783cb7c530ce054", Decimals: 6},
+	},
+	// Monad testnet (chain ID 10143)
+	"eip155:10143": {
+		{Symbol: "WMON", Address: "0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701", Decimals: 18},
+		{Symbol: "USDC", Address: "0xf817257fed379853cDe0fa4F97AB987181B1E5Ea", Decimals: 6},
+		{Symbol: "USDT", Address: "0x88b8E2161DEDC77EF4ab7585569D2415a1C1055D", Decimals: 6},
+	},
+	// Citrea testnet (chain ID 5115)
+	"eip155:5115": {
+		{Symbol: "WBTC", Address: "0x8aB8a7Db6A67A12d01f8f9DF9E0D1C4F9CB8F5C3", Decimals: 8},
+		{Symbol: "CBTC", Address: "0x0000000000000000000000000000000000000000", Decimals: 18},
 	},
 }
 
