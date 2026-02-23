@@ -13,7 +13,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Lending** — query markets and rates from Aave, Morpho, and more (with DefiLlama fallback).
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
 - **Bridging** — get cross-chain quotes (Across, LiFi) and bridge analytics (volume, chain breakdown).
-- **Swapping** — get on-chain swap quotes (1inch, Uniswap).
+- **Swapping** — get on-chain swap quotes (1inch, Uniswap, Fibrous).
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
@@ -91,6 +91,12 @@ export DEFI_1INCH_API_KEY=...
 defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
 ```
 
+Swap quote example (`fibrous` does not require an API key):
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+```
+
 ## Command API Key Requirements
 
 Most commands do not require provider API keys.
@@ -99,6 +105,7 @@ When a provider requires authentication, bring your own key:
 
 - `defi swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
 - `defi swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `defi swap quote --provider fibrous` -> no key required
 - `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
@@ -168,7 +175,9 @@ cache:
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
 - `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- `--chain` normalization also supports `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
+- `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 
@@ -199,7 +208,7 @@ internal/
     aave/ morpho/                 # direct lending + yield
     defillama/                    # normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes
-    oneinch/ uniswap/             # swap
+    oneinch/ uniswap/ fibrous/    # swap
     types.go                      # provider interfaces
   config/                         # file/env/flags precedence
   cache/                          # sqlite cache + file lock

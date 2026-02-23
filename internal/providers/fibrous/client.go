@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -18,7 +20,6 @@ const defaultBase = "https://api.fibrous.finance"
 
 // chainSlugs maps EVM chain IDs to Fibrous API chain slug identifiers.
 var chainSlugs = map[int64]string{
-	143:  "monad",
 	998:  "hyperevm",
 	4114: "citrea",
 	8453: "base",
@@ -48,24 +49,21 @@ func (c *Client) Info() model.ProviderInfo {
 }
 
 type routeResponse struct {
-	Success               bool    `json:"success"`
-	InputAmount           string  `json:"inputAmount"`
-	OutputAmount          string  `json:"outputAmount"`
-	EstimatedGasUsed      string  `json:"estimatedGasUsed"`
-	EstimatedGasUsedInUsd float64 `json:"estimatedGasUsedInUsd"`
-	InputToken            string  `json:"inputToken"`
-	OutputToken           string  `json:"outputToken"`
+	Success               bool     `json:"success"`
+	OutputAmount          string   `json:"outputAmount"`
+	EstimatedGasUsedInUsd *float64 `json:"estimatedGasUsedInUsd"`
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
 	chainSlug, ok := chainSlugs[req.Chain.EVMChainID]
 	if !ok {
 		supported := make([]string, 0, len(chainSlugs))
-		for _, s := range chainSlugs {
-			supported = append(supported, s)
+		for _, slug := range chainSlugs {
+			supported = append(supported, slug)
 		}
+		sort.Strings(supported)
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported,
-			fmt.Sprintf("fibrous does not support chain %s (supported: base, hyperevm, monad, citrea)", req.Chain.Slug))
+			fmt.Sprintf("fibrous does not support chain %s (supported: %s)", req.Chain.Slug, strings.Join(supported, ", ")))
 	}
 
 	vals := url.Values{}
@@ -90,6 +88,10 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	if resp.OutputAmount == "" {
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "fibrous route missing output amount")
 	}
+	estimatedGasUSD := 0.0
+	if resp.EstimatedGasUsedInUsd != nil {
+		estimatedGasUSD = *resp.EstimatedGasUsedInUsd
+	}
 
 	return model.SwapQuote{
 		Provider:    "fibrous",
@@ -106,7 +108,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 			AmountDecimal:   id.FormatDecimalCompat(resp.OutputAmount, req.ToAsset.Decimals),
 			Decimals:        req.ToAsset.Decimals,
 		},
-		EstimatedGasUSD: resp.EstimatedGasUsedInUsd,
+		EstimatedGasUSD: estimatedGasUSD,
 		PriceImpactPct:  0,
 		Route:           "fibrous",
 		SourceURL:       "https://fibrous.finance",

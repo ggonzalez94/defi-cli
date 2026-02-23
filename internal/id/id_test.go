@@ -71,6 +71,7 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "op mainnet", chainID: 10, caip2: "eip155:10", slug: "optimism"},
 		{input: "op-mainnet", chainID: 10, caip2: "eip155:10", slug: "optimism"},
 		{input: "xdai", chainID: 100, caip2: "eip155:100", slug: "gnosis"},
+		{input: "monad", chainID: 143, caip2: "eip155:143", slug: "monad"},
 		{input: "linea", chainID: 59144, caip2: "eip155:59144", slug: "linea"},
 		{input: "sonic", chainID: 146, caip2: "eip155:146", slug: "sonic"},
 		{input: "blast", chainID: 81457, caip2: "eip155:81457", slug: "blast"},
@@ -78,6 +79,10 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "world chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "world-chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "worldchain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
+		{input: "hyperevm", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
+		{input: "hyper evm", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
+		{input: "hyper-evm", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
+		{input: "citrea", chainID: 4114, caip2: "eip155:4114", slug: "citrea"},
 		{input: "megaeth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "mega eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "mega-eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
@@ -94,7 +99,10 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "81457", chainID: 81457, caip2: "eip155:81457", slug: "blast"},
 		{input: "252", chainID: 252, caip2: "eip155:252", slug: "fraxtal"},
 		{input: "480", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
+		{input: "998", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
+		{input: "4114", chainID: 4114, caip2: "eip155:4114", slug: "citrea"},
 		{input: "4326", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
+		{input: "143", chainID: 143, caip2: "eip155:143", slug: "monad"},
 		{input: "167000", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 	}
 
@@ -129,6 +137,9 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 		{chainInput: "gnosis", symbol: "USDC"},
 		{chainInput: "linea", symbol: "USDC"},
 		{chainInput: "sonic", symbol: "USDC"},
+		{chainInput: "hyperevm", symbol: "USDC"},
+		{chainInput: "monad", symbol: "USDC"},
+		{chainInput: "citrea", symbol: "USDC"},
 		{chainInput: "megaeth", symbol: "USDT"},
 		{chainInput: "celo", symbol: "USDC"},
 		{chainInput: "taiko", symbol: "USDC"},
@@ -251,6 +262,35 @@ func TestParseAssetMegaETHBootstrapAddresses(t *testing.T) {
 		}
 		if asset.Address != tc.address {
 			t.Fatalf("expected %s address %s, got %s", tc.symbol, tc.address, asset.Address)
+		}
+	}
+}
+
+func TestParseAssetFibrousChainBootstrapAddresses(t *testing.T) {
+	tests := []struct {
+		chainInput string
+		symbol     string
+		address    string
+	}{
+		{chainInput: "hyperevm", symbol: "WHYPE", address: "0x5555555555555555555555555555555555555555"},
+		{chainInput: "hyperevm", symbol: "HYPE", address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+		{chainInput: "monad", symbol: "WMON", address: "0x4200000000000000000000000000000000000006"},
+		{chainInput: "monad", symbol: "MON", address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
+		{chainInput: "citrea", symbol: "WCBTC", address: "0x3100000000000000000000000000000000000006"},
+		{chainInput: "citrea", symbol: "CBTC", address: "0x0000000000000000000000000000000000000000"},
+	}
+
+	for _, tc := range tests {
+		chain, err := ParseChain(tc.chainInput)
+		if err != nil {
+			t.Fatalf("ParseChain(%s) failed: %v", tc.chainInput, err)
+		}
+		asset, err := ParseAsset(tc.symbol, chain)
+		if err != nil {
+			t.Fatalf("ParseAsset(%s) failed: %v", tc.symbol, err)
+		}
+		if asset.Address != tc.address {
+			t.Fatalf("expected %s on %s to resolve to %s, got %s", tc.symbol, tc.chainInput, tc.address, asset.Address)
 		}
 	}
 }

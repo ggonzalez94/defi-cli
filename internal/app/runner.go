@@ -25,9 +25,9 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/aave"
 	"github.com/ggonzalez94/defi-cli/internal/providers/across"
 	"github.com/ggonzalez94/defi-cli/internal/providers/defillama"
+	"github.com/ggonzalez94/defi-cli/internal/providers/fibrous"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
-	"github.com/ggonzalez94/defi-cli/internal/providers/fibrous"
 	"github.com/ggonzalez94/defi-cli/internal/providers/oneinch"
 	"github.com/ggonzalez94/defi-cli/internal/providers/uniswap"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
@@ -730,7 +730,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap; both require API keys)")
+	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap|fibrous)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
