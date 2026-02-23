@@ -152,6 +152,17 @@ func TestParseAssetCAIP19MixedCaseEVM(t *testing.T) {
 	}
 }
 
+func TestParseAssetSlashWithoutCAIPNamespaceIsSymbolLookup(t *testing.T) {
+	chain, _ := ParseChain("ethereum")
+	_, err := ParseAsset("USDC/ETH", chain)
+	if err == nil {
+		t.Fatal("expected unresolved symbol error")
+	}
+	if !strings.Contains(err.Error(), "symbol USDC/ETH not found") {
+		t.Fatalf("expected symbol lookup error, got %v", err)
+	}
+}
+
 func TestParseAssetChainMismatch(t *testing.T) {
 	chain, _ := ParseChain("base")
 	_, err := ParseAsset("eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", chain)

@@ -494,11 +494,7 @@ func ParseAsset(input string, chain Chain) (Asset, error) {
 	if raw == "" {
 		return Asset{}, clierr.New(clierr.CodeUsage, "asset is required")
 	}
-	if strings.Contains(raw, "/") {
-		parts := strings.SplitN(raw, "/", 2)
-		if len(parts) != 2 {
-			return Asset{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("invalid CAIP-19 asset format: %s", input))
-		}
+	if parts := strings.SplitN(raw, "/", 2); len(parts) == 2 && strings.Contains(parts[1], ":") {
 		chainIDPart := strings.TrimSpace(parts[0])
 		if !caip2MatchesChain(chainIDPart, chain) {
 			return Asset{}, clierr.New(clierr.CodeUsage, "asset chain does not match --chain")
