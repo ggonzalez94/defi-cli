@@ -30,6 +30,19 @@ func TestQuoteSwapRejectsNonSolanaChains(t *testing.T) {
 	}
 }
 
+func TestQuoteSwapRejectsNonMainnetSolanaChain(t *testing.T) {
+	chain := id.Chain{
+		Name:  "Solana Devnet",
+		Slug:  "solana-devnet",
+		CAIP2: "solana:EtWTRABZaYq6iMfeYKouRu166VU2xqa1",
+	}
+	c := New(httpx.New(2*time.Second, 0), "")
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{Chain: chain})
+	if err == nil {
+		t.Fatal("expected non-mainnet solana chain error")
+	}
+}
+
 func TestQuoteSwapParsesJupiterResponse(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/quote", func(w http.ResponseWriter, r *http.Request) {

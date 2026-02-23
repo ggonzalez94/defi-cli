@@ -330,10 +330,10 @@ func (c *Client) fetchReserves(ctx context.Context, chain id.Chain) ([]reserveWi
 			collected = append(collected, reserveWithMarket{Market: result.market, Reserve: reserve})
 		}
 	}
+	if firstErr != nil {
+		return nil, clierr.Wrap(clierr.CodeUnavailable, "kamino reserve fetch incomplete", firstErr)
+	}
 	if len(collected) == 0 {
-		if firstErr != nil {
-			return nil, firstErr
-		}
 		return nil, clierr.New(clierr.CodeUnavailable, "kamino returned no reserves")
 	}
 	return collected, nil

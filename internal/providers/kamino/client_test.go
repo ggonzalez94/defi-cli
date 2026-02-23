@@ -195,3 +195,42 @@ func TestLendMarketsPrefersMintMatchOverSymbol(t *testing.T) {
 		t.Fatal("expected no market match due mint mismatch")
 	}
 }
+
+func TestLendMarketsFailsWhenAnyMarketReserveFetchFails(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/kamino-market", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"lendingMarket":"market-good","name":"Good Market","isPrimary":true,"isCurated":false},
+			{"lendingMarket":"market-fail","name":"Fail Market","isPrimary":false,"isCurated":false}
+		]`))
+	})
+	mux.HandleFunc("/kamino-market/market-good/reserves/metrics", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{
+				"reserve":"reserve-usdc-good",
+				"liquidityToken":"USDC",
+				"liquidityTokenMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+				"borrowApy":"0.03",
+				"supplyApy":"0.02",
+				"totalSupplyUsd":"1000000",
+				"totalBorrowUsd":"500000"
+			}
+		]`))
+	})
+	mux.HandleFunc("/kamino-market/market-fail/reserves/metrics", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte(`{"error":"temporary failure"}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	chain, _ := id.ParseChain("solana")
+	asset, _ := id.ParseAsset("USDC", chain)
+	c := New(httpx.New(2*time.Second, 0))
+	c.baseURL = srv.URL
+
+	_, err := c.LendMarkets(context.Background(), "kamino", chain, asset)
+	if err == nil {
+		t.Fatal("expected reserve fetch failure to fail command")
+	}
+}

@@ -17,8 +17,9 @@ import (
 )
 
 const (
-	defaultLiteBase = "https://lite-api.jup.ag/swap/v1"
-	defaultProBase  = "https://api.jup.ag/swap/v1"
+	defaultLiteBase    = "https://lite-api.jup.ag/swap/v1"
+	defaultProBase     = "https://api.jup.ag/swap/v1"
+	solanaMainnetCAIP2 = "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
 )
 
 type Client struct {
@@ -74,6 +75,9 @@ type quoteResponse struct {
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
 	if !req.Chain.IsSolana() {
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "jupiter swap quotes support only Solana chains")
+	}
+	if req.Chain.CAIP2 != solanaMainnetCAIP2 {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "jupiter swap quotes support only Solana mainnet")
 	}
 
 	vals := url.Values{}
