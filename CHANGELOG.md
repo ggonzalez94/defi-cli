@@ -15,7 +15,7 @@ Format:
 - Added additional bootstrap token mappings sourced from Bungee trending tokens (for supported EVM chains), including `USD1`, `WBTC`, `CBBTC`, `PAXG`, `PEPE`, `SHIB`, `OP`, `USDT0`, `BTCB`, `WBNB`, `ARB`, `PYUSD`, `WAVAX`, `WLFI`, `XAUT`, and `PENGU`.
 - Added Bungee Auto-mode quoting as a bridge provider (`bridge quote --provider bungee`) and swap provider (`swap quote --provider bungee`).
 - Added `fibrous` swap provider integration (`swap quote --provider fibrous`) for `base`, `hyperevm`, and `citrea` without requiring an API key.
-- Added chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:998`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
+- Added chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
 - Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
 
 ### Changed
@@ -26,6 +26,8 @@ Format:
 
 ### Fixed
 - Added missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
+- Corrected HyperEVM canonical mainnet mapping to `eip155:999` across chain normalization and provider routing.
+- Corrected Monad bootstrap token addresses for `WMON` and `USDC` to match the official Monad token list.
 - Commands now continue with cache disabled when cache initialization fails, instead of returning an internal error.
 - Fixed Fibrous route response decoding to handle nested token objects and nullable gas values.
 - Disabled Fibrous `monad` routing while Monad route responses are unstable.

@@ -231,8 +231,8 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 
 func (c *Client) quote(ctx context.Context, fromChain, toChain id.Chain, fromToken, toToken, amountBase string) (quoteResponse, error) {
 	vals := url.Values{}
-	vals.Set("originChainId", strconv.FormatInt(bungeeChainID(fromChain), 10))
-	vals.Set("destinationChainId", strconv.FormatInt(bungeeChainID(toChain), 10))
+	vals.Set("originChainId", strconv.FormatInt(fromChain.EVMChainID, 10))
+	vals.Set("destinationChainId", strconv.FormatInt(toChain.EVMChainID, 10))
 	vals.Set("inputToken", fromToken)
 	vals.Set("outputToken", toToken)
 	vals.Set("inputAmount", amountBase)
@@ -368,14 +368,6 @@ func uniqueStrings(items []string) []string {
 func defaultAddressForChain(chain id.Chain) string {
 	_ = chain
 	return defaultEVMUserAddress
-}
-
-func bungeeChainID(chain id.Chain) int64 {
-	// Bungee currently expects HyperEVM quotes on chain ID 999.
-	if chain.CAIP2 == "eip155:998" {
-		return 999
-	}
-	return chain.EVMChainID
 }
 
 func positiveOrFallback(v, fallback int) int {

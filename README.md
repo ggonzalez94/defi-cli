@@ -65,7 +65,7 @@ defi version --long
 defi providers list --results-only
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
-defi assets resolve --chain base --symbol USDC --results-only
+defi assets resolve --chain base --asset USDC --results-only
 defi lend markets --protocol aave --chain 1 --asset USDC --results-only
 defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
 defi yield opportunities --chain base --asset USDC --limit 20 --results-only
