@@ -48,9 +48,11 @@ func (c *Client) Info() model.ProviderInfo {
 const marketsQuery = `query Markets($request: MarketsRequest!) {
   markets(request: $request) {
     name
+    address
     chain { chainId name }
     reserves {
       underlyingToken { address symbol decimals }
+      aToken { address }
       size { usd }
       supplyInfo { apy { value } total { value } }
       borrowInfo { apy { value } total { usd } utilizationRate { value } }
@@ -68,8 +70,9 @@ type marketsResponse struct {
 }
 
 type aaveMarket struct {
-	Name  string `json:"name"`
-	Chain struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Chain   struct {
 		ChainID int64  `json:"chainId"`
 		Name    string `json:"name"`
 	} `json:"chain"`
@@ -82,6 +85,9 @@ type aaveReserve struct {
 		Symbol   string `json:"symbol"`
 		Decimals int    `json:"decimals"`
 	} `json:"underlyingToken"`
+	AToken struct {
+		Address string `json:"address"`
+	} `json:"aToken"`
 	Size struct {
 		USD string `json:"usd"`
 	} `json:"size"`
@@ -132,15 +138,19 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 			}
 
 			out = append(out, model.LendMarket{
-				Protocol:     "aave",
-				ChainID:      chain.CAIP2,
-				AssetID:      canonicalAssetID(asset, r.UnderlyingToken.Address),
-				SupplyAPY:    supplyAPY,
-				BorrowAPY:    borrowAPY,
-				TVLUSD:       tvlUSD,
-				LiquidityUSD: tvlUSD,
-				SourceURL:    "https://app.aave.com",
-				FetchedAt:    c.now().UTC().Format(time.RFC3339),
+				Protocol:         "aave",
+				ChainID:          chain.CAIP2,
+				AssetID:          canonicalAssetID(asset, r.UnderlyingToken.Address),
+				ProviderNativeID: providerNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
+				MarketAddress:    normalizeEVMAddress(m.Address),
+				VaultAddress:     normalizeEVMAddress(r.AToken.Address),
+				PoolAddress:      normalizeEVMAddress(m.Address),
+				SupplyAPY:        supplyAPY,
+				BorrowAPY:        borrowAPY,
+				TVLUSD:           tvlUSD,
+				LiquidityUSD:     tvlUSD,
+				SourceURL:        "https://app.aave.com",
+				FetchedAt:        c.now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -180,14 +190,18 @@ func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain,
 				utilization = parseFloat(r.BorrowInfo.UtilizationRate.Value)
 			}
 			out = append(out, model.LendRate{
-				Protocol:    "aave",
-				ChainID:     chain.CAIP2,
-				AssetID:     canonicalAssetID(asset, r.UnderlyingToken.Address),
-				SupplyAPY:   supplyAPY,
-				BorrowAPY:   borrowAPY,
-				Utilization: utilization,
-				SourceURL:   "https://app.aave.com",
-				FetchedAt:   c.now().UTC().Format(time.RFC3339),
+				Protocol:         "aave",
+				ChainID:          chain.CAIP2,
+				AssetID:          canonicalAssetID(asset, r.UnderlyingToken.Address),
+				ProviderNativeID: providerNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
+				MarketAddress:    normalizeEVMAddress(m.Address),
+				VaultAddress:     normalizeEVMAddress(r.AToken.Address),
+				PoolAddress:      normalizeEVMAddress(m.Address),
+				SupplyAPY:        supplyAPY,
+				BorrowAPY:        borrowAPY,
+				Utilization:      utilization,
+				SourceURL:        "https://app.aave.com",
+				FetchedAt:        c.now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -239,26 +253,33 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			}
 
 			assetID := canonicalAssetID(req.Asset, r.UnderlyingToken.Address)
-			opportunityID := hashOpportunity("aave", req.Chain.CAIP2, fmt.Sprintf("%s:%s", m.Name, strings.ToLower(r.UnderlyingToken.Address)), assetID)
+			normalizedMarket := normalizeEVMAddress(m.Address)
+			normalizedUnderlying := normalizeEVMAddress(r.UnderlyingToken.Address)
+			nativeID := providerNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
+			opportunityID := hashOpportunity("aave", req.Chain.CAIP2, nativeID, assetID)
 			out = append(out, model.YieldOpportunity{
-				OpportunityID:   opportunityID,
-				Provider:        "aave",
-				Protocol:        "aave",
-				ChainID:         req.Chain.CAIP2,
-				AssetID:         assetID,
-				Type:            "lend",
-				APYBase:         apy,
-				APYReward:       0,
-				APYTotal:        apy,
-				TVLUSD:          tvl,
-				LiquidityUSD:    tvl,
-				LockupDays:      0,
-				WithdrawalTerms: "variable",
-				RiskLevel:       riskLevel,
-				RiskReasons:     reasons,
-				Score:           scoreOpportunity(apy, tvl, tvl, riskLevel),
-				SourceURL:       "https://app.aave.com",
-				FetchedAt:       c.now().UTC().Format(time.RFC3339),
+				OpportunityID:    opportunityID,
+				Provider:         "aave",
+				Protocol:         "aave",
+				ChainID:          req.Chain.CAIP2,
+				AssetID:          assetID,
+				ProviderNativeID: nativeID,
+				MarketAddress:    normalizedMarket,
+				VaultAddress:     normalizeEVMAddress(r.AToken.Address),
+				PoolAddress:      normalizedMarket,
+				Type:             "lend",
+				APYBase:          apy,
+				APYReward:        0,
+				APYTotal:         apy,
+				TVLUSD:           tvl,
+				LiquidityUSD:     tvl,
+				LockupDays:       0,
+				WithdrawalTerms:  "variable",
+				RiskLevel:        riskLevel,
+				RiskReasons:      reasons,
+				Score:            scoreOpportunity(apy, tvl, tvl, riskLevel),
+				SourceURL:        "https://app.aave.com",
+				FetchedAt:        c.now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -312,6 +333,18 @@ func canonicalAssetID(asset id.Asset, address string) string {
 		return asset.AssetID
 	}
 	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
+}
+
+func normalizeEVMAddress(address string) string {
+	addr := strings.ToLower(strings.TrimSpace(address))
+	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
+		return ""
+	}
+	return addr
+}
+
+func providerNativeID(provider, chainID, marketAddress, underlyingAddress string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(marketAddress), normalizeEVMAddress(underlyingAddress))
 }
 
 func parseFloat(v string) float64 {

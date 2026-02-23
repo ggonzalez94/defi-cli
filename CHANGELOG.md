@@ -17,11 +17,14 @@ Format:
 - Added `fibrous` swap provider integration (`swap quote --provider fibrous`) for `base`, `hyperevm`, and `citrea` without requiring an API key.
 - Added chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
 - Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
+- Added stable execution identifiers on lending/yield rows (`provider_native_id`) plus provider-supplied address fields where available (`market_address`, `vault_address`, `pool_address`).
+- Added bridge quote `fee_breakdown` output with component fees (`lp_fee`, `relayer_fee`, `gas_fee`), aggregate totals, and amount-delta consistency metadata.
 
 ### Changed
 - Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
 - Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
 - Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
+- Across quote normalization now reads provider `outputAmount` when available and fills `estimated_fee_usd` from stable-asset token-fee approximation when native USD fee fields are omitted.
 
 ### Fixed
 - Fixed missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
@@ -30,6 +33,7 @@ Format:
 - Commands now continue with cache disabled when cache initialization fails, instead of returning an internal error.
 - Fixed Fibrous route response decoding to handle nested token objects and nullable gas values.
 - Disabled Fibrous `monad` routing while Monad route responses are unstable.
+- Reduced sqlite cache lock contention under parallel runs by adding open-time lock coordination, sqlite busy-timeout, and retry/backoff on busy/locked operations.
 
 ### Docs
 - None yet.

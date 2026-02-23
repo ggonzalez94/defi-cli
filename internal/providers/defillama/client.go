@@ -746,15 +746,17 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 			continue
 		}
 		out = append(out, model.LendMarket{
-			Protocol:     canonicalProtocol(p.Project, protocol),
-			ChainID:      chain.CAIP2,
-			AssetID:      asset.AssetID,
-			SupplyAPY:    choosePositive(apyBase, apyTotal),
-			BorrowAPY:    0,
-			TVLUSD:       tvl,
-			LiquidityUSD: tvl,
-			SourceURL:    p.URL,
-			FetchedAt:    c.now().UTC().Format(time.RFC3339),
+			Protocol:         canonicalProtocol(p.Project, protocol),
+			ChainID:          chain.CAIP2,
+			AssetID:          asset.AssetID,
+			ProviderNativeID: strings.TrimSpace(p.Pool),
+			PoolAddress:      maybeEVMAddress(p.Pool),
+			SupplyAPY:        choosePositive(apyBase, apyTotal),
+			BorrowAPY:        0,
+			TVLUSD:           tvl,
+			LiquidityUSD:     tvl,
+			SourceURL:        p.URL,
+			FetchedAt:        c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -792,14 +794,16 @@ func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain,
 		apyTotal := numOrZero(p.APY)
 		apyBase := numOrZero(p.APYBase)
 		out = append(out, model.LendRate{
-			Protocol:    canonicalProtocol(p.Project, protocol),
-			ChainID:     chain.CAIP2,
-			AssetID:     asset.AssetID,
-			SupplyAPY:   choosePositive(apyBase, apyTotal),
-			BorrowAPY:   0,
-			Utilization: 0,
-			SourceURL:   p.URL,
-			FetchedAt:   c.now().UTC().Format(time.RFC3339),
+			Protocol:         canonicalProtocol(p.Project, protocol),
+			ChainID:          chain.CAIP2,
+			AssetID:          asset.AssetID,
+			ProviderNativeID: strings.TrimSpace(p.Pool),
+			PoolAddress:      maybeEVMAddress(p.Pool),
+			SupplyAPY:        choosePositive(apyBase, apyTotal),
+			BorrowAPY:        0,
+			Utilization:      0,
+			SourceURL:        p.URL,
+			FetchedAt:        c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -870,24 +874,26 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		oppID := opportunityID("defillama", req.Chain.CAIP2, p.Pool, req.Asset.AssetID)
 
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:   oppID,
-			Provider:        "defillama",
-			Protocol:        p.Project,
-			ChainID:         req.Chain.CAIP2,
-			AssetID:         req.Asset.AssetID,
-			Type:            deriveType(p),
-			APYBase:         numOrZero(p.APYBase),
-			APYReward:       numOrZero(p.APYReward),
-			APYTotal:        apyTotal,
-			TVLUSD:          tvl,
-			LiquidityUSD:    liq,
-			LockupDays:      0,
-			WithdrawalTerms: "variable",
-			RiskLevel:       riskLevel,
-			RiskReasons:     riskReasons,
-			Score:           score,
-			SourceURL:       p.URL,
-			FetchedAt:       c.now().UTC().Format(time.RFC3339),
+			OpportunityID:    oppID,
+			Provider:         "defillama",
+			Protocol:         p.Project,
+			ChainID:          req.Chain.CAIP2,
+			AssetID:          req.Asset.AssetID,
+			ProviderNativeID: strings.TrimSpace(p.Pool),
+			PoolAddress:      maybeEVMAddress(p.Pool),
+			Type:             deriveType(p),
+			APYBase:          numOrZero(p.APYBase),
+			APYReward:        numOrZero(p.APYReward),
+			APYTotal:         apyTotal,
+			TVLUSD:           tvl,
+			LiquidityUSD:     liq,
+			LockupDays:       0,
+			WithdrawalTerms:  "variable",
+			RiskLevel:        riskLevel,
+			RiskReasons:      riskReasons,
+			Score:            score,
+			SourceURL:        p.URL,
+			FetchedAt:        c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -979,6 +985,14 @@ func matchesAssetSymbol(symbolRaw string, expected string) bool {
 		}
 	}
 	return symbolRaw == expected
+}
+
+func maybeEVMAddress(value string) string {
+	v := strings.ToLower(strings.TrimSpace(value))
+	if len(v) != 42 || !strings.HasPrefix(v, "0x") {
+		return ""
+	}
+	return v
 }
 
 func numOrZero(v *float64) float64 {

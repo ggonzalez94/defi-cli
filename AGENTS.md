@@ -71,8 +71,12 @@ README.md                         # user-facing usage + caveats
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
+- `lend`/`yield` rows now expose `provider_native_id` for stable execution mapping, plus `market_address` / `vault_address` / `pool_address` when provider metadata includes them.
+- Bridge quotes now include `fee_breakdown` with provider-reported components (`lp_fee`, `relayer_fee`, `gas_fee`) and amount-delta consistency checks.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
+- Cache locking uses sqlite WAL + busy timeout + lock/backoff retries to reduce `database is locked` contention under parallel runs.
 - Cache initialization is best-effort; if cache path init fails (permissions/path issues), commands continue with cache disabled.
+- Across may omit native USD fee fields for some routes; when missing and the input asset is a known stable token, `estimated_fee_usd` falls back to a token-denominated approximation while exact token-unit fees remain in `fee_breakdown`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama symbol matching and fallback/provider selection where symbol-based matching would be unsafe.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.

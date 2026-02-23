@@ -14,6 +14,8 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee Auto) and bridge analytics (volume, chain breakdown).
 - **Swapping** — get on-chain swap quotes (1inch, Uniswap, Fibrous, Bungee Auto).
+- **Execution IDs** — lend/yield rows include stable `provider_native_id` and, when available, `market_address` / `vault_address` / `pool_address`.
+- **Fee transparency** — bridge quotes include `fee_breakdown` (`lp_fee`, `relayer_fee`, `gas_fee`, `total_fee_usd`) plus consistency checks against amount deltas.
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
@@ -181,6 +183,7 @@ providers:
 - Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
+- Cache writes use SQLite WAL + busy timeout + lock/retry backoff to reduce lock contention in parallel agent runs.
 - If cache initialization fails (path/permission issues), commands continue with cache disabled instead of failing.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
@@ -189,8 +192,10 @@ providers:
 ## Caveats
 
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
+- Execution address fields are provider-dependent; when unavailable, use `provider_native_id` as the stable execution key.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`, `bungee`) are keyless by default.
+- Across can omit native USD fee fields on some routes; in those cases `estimated_fee_usd` falls back to a stable-asset approximation and exact token-denominated fees remain in `fee_breakdown`.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
 - `--chain` normalization supports additional aliases/IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.

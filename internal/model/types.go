@@ -96,32 +96,56 @@ type AssetResolution struct {
 }
 
 type LendMarket struct {
-	Protocol     string  `json:"protocol"`
-	ChainID      string  `json:"chain_id"`
-	AssetID      string  `json:"asset_id"`
-	SupplyAPY    float64 `json:"supply_apy"`
-	BorrowAPY    float64 `json:"borrow_apy"`
-	TVLUSD       float64 `json:"tvl_usd"`
-	LiquidityUSD float64 `json:"liquidity_usd"`
-	SourceURL    string  `json:"source_url,omitempty"`
-	FetchedAt    string  `json:"fetched_at"`
+	Protocol         string  `json:"protocol"`
+	ChainID          string  `json:"chain_id"`
+	AssetID          string  `json:"asset_id"`
+	ProviderNativeID string  `json:"provider_native_id,omitempty"`
+	MarketAddress    string  `json:"market_address,omitempty"`
+	VaultAddress     string  `json:"vault_address,omitempty"`
+	PoolAddress      string  `json:"pool_address,omitempty"`
+	SupplyAPY        float64 `json:"supply_apy"`
+	BorrowAPY        float64 `json:"borrow_apy"`
+	TVLUSD           float64 `json:"tvl_usd"`
+	LiquidityUSD     float64 `json:"liquidity_usd"`
+	SourceURL        string  `json:"source_url,omitempty"`
+	FetchedAt        string  `json:"fetched_at"`
 }
 
 type LendRate struct {
-	Protocol    string  `json:"protocol"`
-	ChainID     string  `json:"chain_id"`
-	AssetID     string  `json:"asset_id"`
-	SupplyAPY   float64 `json:"supply_apy"`
-	BorrowAPY   float64 `json:"borrow_apy"`
-	Utilization float64 `json:"utilization"`
-	SourceURL   string  `json:"source_url,omitempty"`
-	FetchedAt   string  `json:"fetched_at"`
+	Protocol         string  `json:"protocol"`
+	ChainID          string  `json:"chain_id"`
+	AssetID          string  `json:"asset_id"`
+	ProviderNativeID string  `json:"provider_native_id,omitempty"`
+	MarketAddress    string  `json:"market_address,omitempty"`
+	VaultAddress     string  `json:"vault_address,omitempty"`
+	PoolAddress      string  `json:"pool_address,omitempty"`
+	SupplyAPY        float64 `json:"supply_apy"`
+	BorrowAPY        float64 `json:"borrow_apy"`
+	Utilization      float64 `json:"utilization"`
+	SourceURL        string  `json:"source_url,omitempty"`
+	FetchedAt        string  `json:"fetched_at"`
 }
 
 type AmountInfo struct {
 	AmountBaseUnits string `json:"amount_base_units"`
 	AmountDecimal   string `json:"amount_decimal"`
 	Decimals        int    `json:"decimals"`
+}
+
+type FeeAmount struct {
+	AmountBaseUnits string  `json:"amount_base_units,omitempty"`
+	AmountDecimal   string  `json:"amount_decimal,omitempty"`
+	AmountUSD       float64 `json:"amount_usd,omitempty"`
+}
+
+type BridgeFeeBreakdown struct {
+	LPFee                     *FeeAmount `json:"lp_fee,omitempty"`
+	RelayerFee                *FeeAmount `json:"relayer_fee,omitempty"`
+	GasFee                    *FeeAmount `json:"gas_fee,omitempty"`
+	TotalFeeBaseUnits         string     `json:"total_fee_base_units,omitempty"`
+	TotalFeeDecimal           string     `json:"total_fee_decimal,omitempty"`
+	TotalFeeUSD               float64    `json:"total_fee_usd,omitempty"`
+	ConsistentWithAmountDelta *bool      `json:"consistent_with_amount_delta,omitempty"`
 }
 
 type BridgeVolumes struct {
@@ -181,18 +205,19 @@ type BridgeDetails struct {
 }
 
 type BridgeQuote struct {
-	Provider        string     `json:"provider"`
-	FromChainID     string     `json:"from_chain_id"`
-	ToChainID       string     `json:"to_chain_id"`
-	FromAssetID     string     `json:"from_asset_id"`
-	ToAssetID       string     `json:"to_asset_id"`
-	InputAmount     AmountInfo `json:"input_amount"`
-	EstimatedOut    AmountInfo `json:"estimated_out"`
-	EstimatedFeeUSD float64    `json:"estimated_fee_usd"`
-	EstimatedTimeS  int64      `json:"estimated_time_s"`
-	Route           string     `json:"route"`
-	SourceURL       string     `json:"source_url,omitempty"`
-	FetchedAt       string     `json:"fetched_at"`
+	Provider        string              `json:"provider"`
+	FromChainID     string              `json:"from_chain_id"`
+	ToChainID       string              `json:"to_chain_id"`
+	FromAssetID     string              `json:"from_asset_id"`
+	ToAssetID       string              `json:"to_asset_id"`
+	InputAmount     AmountInfo          `json:"input_amount"`
+	EstimatedOut    AmountInfo          `json:"estimated_out"`
+	EstimatedFeeUSD float64             `json:"estimated_fee_usd"`
+	FeeBreakdown    *BridgeFeeBreakdown `json:"fee_breakdown,omitempty"`
+	EstimatedTimeS  int64               `json:"estimated_time_s"`
+	Route           string              `json:"route"`
+	SourceURL       string              `json:"source_url,omitempty"`
+	FetchedAt       string              `json:"fetched_at"`
 }
 
 type SwapQuote struct {
@@ -210,22 +235,26 @@ type SwapQuote struct {
 }
 
 type YieldOpportunity struct {
-	OpportunityID   string   `json:"opportunity_id"`
-	Provider        string   `json:"provider"`
-	Protocol        string   `json:"protocol"`
-	ChainID         string   `json:"chain_id"`
-	AssetID         string   `json:"asset_id"`
-	Type            string   `json:"type"`
-	APYBase         float64  `json:"apy_base"`
-	APYReward       float64  `json:"apy_reward"`
-	APYTotal        float64  `json:"apy_total"`
-	TVLUSD          float64  `json:"tvl_usd"`
-	LiquidityUSD    float64  `json:"liquidity_usd"`
-	LockupDays      float64  `json:"lockup_days"`
-	WithdrawalTerms string   `json:"withdrawal_terms"`
-	RiskLevel       string   `json:"risk_level"`
-	RiskReasons     []string `json:"risk_reasons,omitempty"`
-	Score           float64  `json:"score"`
-	SourceURL       string   `json:"source_url,omitempty"`
-	FetchedAt       string   `json:"fetched_at"`
+	OpportunityID    string   `json:"opportunity_id"`
+	Provider         string   `json:"provider"`
+	Protocol         string   `json:"protocol"`
+	ChainID          string   `json:"chain_id"`
+	AssetID          string   `json:"asset_id"`
+	ProviderNativeID string   `json:"provider_native_id,omitempty"`
+	MarketAddress    string   `json:"market_address,omitempty"`
+	VaultAddress     string   `json:"vault_address,omitempty"`
+	PoolAddress      string   `json:"pool_address,omitempty"`
+	Type             string   `json:"type"`
+	APYBase          float64  `json:"apy_base"`
+	APYReward        float64  `json:"apy_reward"`
+	APYTotal         float64  `json:"apy_total"`
+	TVLUSD           float64  `json:"tvl_usd"`
+	LiquidityUSD     float64  `json:"liquidity_usd"`
+	LockupDays       float64  `json:"lockup_days"`
+	WithdrawalTerms  string   `json:"withdrawal_terms"`
+	RiskLevel        string   `json:"risk_level"`
+	RiskReasons      []string `json:"risk_reasons,omitempty"`
+	Score            float64  `json:"score"`
+	SourceURL        string   `json:"source_url,omitempty"`
+	FetchedAt        string   `json:"fetched_at"`
 }

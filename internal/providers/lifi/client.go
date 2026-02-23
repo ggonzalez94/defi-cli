@@ -78,18 +78,33 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		return model.BridgeQuote{}, clierr.New(clierr.CodeUnavailable, "lifi quote missing output amount")
 	}
 
-	feeUSD := 0.0
+	protocolFeeUSD := 0.0
 	for _, item := range resp.Estimate.FeeCosts {
 		v, _ := strconv.ParseFloat(item.AmountUSD, 64)
-		feeUSD += v
+		protocolFeeUSD += v
 	}
+	gasFeeUSD := 0.0
 	for _, item := range resp.Estimate.GasCosts {
 		v, _ := strconv.ParseFloat(item.AmountUSD, 64)
-		feeUSD += v
+		gasFeeUSD += v
 	}
+	feeUSD := protocolFeeUSD + gasFeeUSD
 	route := resp.ToolDetails.Name
 	if route == "" {
 		route = fmt.Sprintf("%s->%s", req.FromChain.Slug, req.ToChain.Slug)
+	}
+
+	feeBreakdown := &model.BridgeFeeBreakdown{
+		TotalFeeUSD: feeUSD,
+	}
+	if protocolFeeUSD > 0 {
+		feeBreakdown.RelayerFee = &model.FeeAmount{AmountUSD: protocolFeeUSD}
+	}
+	if gasFeeUSD > 0 {
+		feeBreakdown.GasFee = &model.FeeAmount{AmountUSD: gasFeeUSD}
+	}
+	if feeBreakdown.RelayerFee == nil && feeBreakdown.GasFee == nil {
+		feeBreakdown = nil
 	}
 
 	return model.BridgeQuote{
@@ -109,6 +124,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			Decimals:        req.ToAsset.Decimals,
 		},
 		EstimatedFeeUSD: feeUSD,
+		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  resp.Estimate.ExecutionDuration,
 		Route:           route,
 		SourceURL:       "https://li.quest",

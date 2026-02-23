@@ -171,6 +171,13 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 	if err != nil {
 		return model.BridgeQuote{}, err
 	}
+	var feeBreakdown *model.BridgeFeeBreakdown
+	if feeUSD > 0 {
+		feeBreakdown = &model.BridgeFeeBreakdown{
+			GasFee:      &model.FeeAmount{AmountUSD: feeUSD},
+			TotalFeeUSD: feeUSD,
+		}
+	}
 
 	return model.BridgeQuote{
 		Provider:    "bungee",
@@ -189,6 +196,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			Decimals:        outDecimals,
 		},
 		EstimatedFeeUSD: feeUSD,
+		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  serviceTime,
 		Route:           route,
 		SourceURL:       "https://www.bungee.exchange",

@@ -151,7 +151,7 @@ func TestYieldOpportunitiesFilters(t *testing.T) {
 		_, _ = w.Write([]byte(`{
 			"status":"success",
 			"data":[
-				{"pool":"p1","chain":"Base","project":"aave-v3","symbol":"USDC","apy":5,"apyBase":4,"apyReward":1,"tvlUsd":1000000,"ilRisk":"no","stablecoin":true},
+				{"pool":"0x1111111111111111111111111111111111111111","chain":"Base","project":"aave-v3","symbol":"USDC","apy":5,"apyBase":4,"apyReward":1,"tvlUsd":1000000,"ilRisk":"no","stablecoin":true},
 				{"pool":"p2","chain":"Base","project":"curve","symbol":"USDC","apy":2,"tvlUsd":10000,"ilRisk":"yes","stablecoin":false}
 			]
 		}`))
@@ -180,6 +180,12 @@ func TestYieldOpportunitiesFilters(t *testing.T) {
 	}
 	if got[0].Protocol != "aave-v3" {
 		t.Fatalf("unexpected protocol: %+v", got[0])
+	}
+	if got[0].ProviderNativeID != "0x1111111111111111111111111111111111111111" {
+		t.Fatalf("unexpected provider native id: %+v", got[0])
+	}
+	if got[0].PoolAddress != "0x1111111111111111111111111111111111111111" {
+		t.Fatalf("unexpected pool address: %+v", got[0])
 	}
 }
 
