@@ -140,14 +140,14 @@ func TestQuoteSwap_HyperEVM(t *testing.T) {
 
 	chain, _ := id.ParseChain("hyperevm")
 	fromAsset := id.Asset{
-		ChainID:  "eip155:999",
-		AssetID:  "eip155:999/erc20:0x5555555555555555555555555555555555555555",
+		ChainID:  "eip155:998",
+		AssetID:  "eip155:998/erc20:0x5555555555555555555555555555555555555555",
 		Address:  "0x5555555555555555555555555555555555555555",
 		Decimals: 18,
 	}
 	toAsset := id.Asset{
-		ChainID:  "eip155:999",
-		AssetID:  "eip155:999/erc20:0x6666666666666666666666666666666666666666",
+		ChainID:  "eip155:998",
+		AssetID:  "eip155:998/erc20:0x6666666666666666666666666666666666666666",
 		Address:  "0x6666666666666666666666666666666666666666",
 		Decimals: 18,
 	}
@@ -163,8 +163,8 @@ func TestQuoteSwap_HyperEVM(t *testing.T) {
 	if err != nil {
 		t.Fatalf("QuoteSwap HyperEVM failed: %v", err)
 	}
-	if quote.ChainID != "eip155:999" {
-		t.Errorf("expected chain eip155:999, got %s", quote.ChainID)
+	if quote.ChainID != "eip155:998" {
+		t.Errorf("expected chain eip155:998, got %s", quote.ChainID)
 	}
 	if quote.EstimatedOut.AmountBaseUnits != "998000000000000000" {
 		t.Errorf("unexpected output: %s", quote.EstimatedOut.AmountBaseUnits)

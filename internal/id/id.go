@@ -47,9 +47,9 @@ var chainBySlug = map[string]Chain{
 	"avalanche": {Name: "Avalanche", Slug: "avalanche", CAIP2: "eip155:43114", EVMChainID: 43114},
 	"bsc":       {Name: "BSC", Slug: "bsc", CAIP2: "eip155:56", EVMChainID: 56},
 	"taiko":     {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
-	"hyperevm":  {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:999", EVMChainID: 999},
-	"monad":     {Name: "Monad", Slug: "monad", CAIP2: "eip155:10143", EVMChainID: 10143},
-	"citrea":    {Name: "Citrea", Slug: "citrea", CAIP2: "eip155:5115", EVMChainID: 5115},
+	"hyperevm":  {Name: "HyperEVM", Slug: "hyperevm", CAIP2: "eip155:998", EVMChainID: 998},
+	"monad":     {Name: "Monad", Slug: "monad", CAIP2: "eip155:143", EVMChainID: 143},
+	"citrea":    {Name: "Citrea", Slug: "citrea", CAIP2: "eip155:4114", EVMChainID: 4114},
 }
 
 var chainByID = map[int64]Chain{
@@ -57,10 +57,10 @@ var chainByID = map[int64]Chain{
 	10:     chainBySlug["optimism"],
 	56:     chainBySlug["bsc"],
 	137:    chainBySlug["polygon"],
-	999:    chainBySlug["hyperevm"],
-	5115:   chainBySlug["citrea"],
+	143:    chainBySlug["monad"],
+	998:    chainBySlug["hyperevm"],
+	4114:   chainBySlug["citrea"],
 	8453:   chainBySlug["base"],
-	10143:  chainBySlug["monad"],
 	42161:  chainBySlug["arbitrum"],
 	43114:  chainBySlug["avalanche"],
 	167000: chainBySlug["taiko"],
@@ -109,21 +109,23 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "DAI", Address: "0xd586E7F844cEa2F87f50152665BCbc2C279D8d70", Decimals: 18},
 		{Symbol: "WETH", Address: "0x49D5c2BdFfac6CE2BFdB6640F4F80f226bc10bAB", Decimals: 18},
 	},
-	// HyperEVM (Hyperliquid EVM, chain ID 999)
-	"eip155:999": {
+	// HyperEVM mainnet (chain ID 998)
+	"eip155:998": {
+		{Symbol: "HYPE", Address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", Decimals: 18},
 		{Symbol: "WHYPE", Address: "0x5555555555555555555555555555555555555555", Decimals: 18},
-		{Symbol: "USDC", Address: "0x6d1e7cde53ba9467b783cb7c530ce054", Decimals: 6},
+		{Symbol: "USDC", Address: "0xb88339cb7199b77e23db6e890353e22632ba630f", Decimals: 6},
 	},
-	// Monad testnet (chain ID 10143)
-	"eip155:10143": {
-		{Symbol: "WMON", Address: "0x760AfE86e5de5fa0Ee542fc7B7B713e1c5425701", Decimals: 18},
-		{Symbol: "USDC", Address: "0xf817257fed379853cDe0fa4F97AB987181B1E5Ea", Decimals: 6},
-		{Symbol: "USDT", Address: "0x88b8E2161DEDC77EF4ab7585569D2415a1C1055D", Decimals: 6},
+	// Monad mainnet (chain ID 143)
+	"eip155:143": {
+		{Symbol: "MON", Address: "0xEeeeeEeeeEeEeeEeEeEeeEEEeeeeEeeeeeeeEEeE", Decimals: 18},
+		{Symbol: "WMON", Address: "0x4200000000000000000000000000000000000006", Decimals: 18},
+		{Symbol: "USDC", Address: "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", Decimals: 6},
 	},
-	// Citrea testnet (chain ID 5115)
-	"eip155:5115": {
-		{Symbol: "WBTC", Address: "0x8aB8a7Db6A67A12d01f8f9DF9E0D1C4F9CB8F5C3", Decimals: 8},
+	// Citrea mainnet (chain ID 4114)
+	"eip155:4114": {
 		{Symbol: "CBTC", Address: "0x0000000000000000000000000000000000000000", Decimals: 18},
+		{Symbol: "WCBTC", Address: "0x3100000000000000000000000000000000000006", Decimals: 18},
+		{Symbol: "USDC", Address: "0xE045e6c36cF77FAA2CfB54466D71A3aEF7bBE839", Decimals: 6},
 	},
 }
 

@@ -18,10 +18,10 @@ const defaultBase = "https://api.fibrous.finance"
 
 // chainSlugs maps EVM chain IDs to Fibrous API chain slug identifiers.
 var chainSlugs = map[int64]string{
-	8453:  "base",
-	999:   "hyperevm",
-	10143: "monad",
-	5115:  "citrea",
+	143:  "monad",
+	998:  "hyperevm",
+	4114: "citrea",
+	8453: "base",
 }
 
 type Client struct {
