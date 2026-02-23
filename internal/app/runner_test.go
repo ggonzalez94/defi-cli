@@ -177,6 +177,28 @@ func TestRunnerProvidersListBypassesCacheOpen(t *testing.T) {
 	}
 }
 
+func TestRunnerAssetsResolveFallsBackWhenCacheUnavailable(t *testing.T) {
+	setUnopenableCacheEnv(t)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"assets", "resolve", "--chain", "1", "--asset", "USDC", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	var out map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse assets resolve output json: %v output=%s", err, stdout.String())
+	}
+	if out["asset_id"] == "" {
+		t.Fatalf("expected asset_id in output, got %+v", out)
+	}
+	if chainID, _ := out["chain_id"].(string); chainID != "eip155:1" {
+		t.Fatalf("expected chain_id eip155:1, got %q", chainID)
+	}
+}
+
 func TestRunnerProtocolsCategories(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

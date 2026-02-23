@@ -160,11 +160,21 @@ cache:
   max_stale: 5m
 ```
 
+Optional Bungee dedicated-backend config:
+
+```yaml
+providers:
+  bungee:
+    api_key_env: DEFI_BUNGEE_API_KEY
+    affiliate_env: DEFI_BUNGEE_AFFILIATE
+```
+
 ## Cache Policy
 
 - Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
+- If cache initialization fails (path/permission issues), commands continue with cache disabled instead of failing.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.

@@ -158,17 +158,21 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					morphoProvider.Info(),
 					s.bridgeProviders["across"].Info(),
 					s.bridgeProviders["lifi"].Info(),
+					s.bridgeProviders["bungee"].Info(),
 					s.swapProviders["1inch"].Info(),
 					s.swapProviders["uniswap"].Info(),
+					s.swapProviders["bungee"].Info(),
 				}
 			}
 
 			if settings.CacheEnabled && shouldOpenCache(path) && s.cache == nil {
 				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
 				if err != nil {
-					return clierr.Wrap(clierr.CodeInternal, "open cache", err)
+					// Cache should be best-effort; continue without it if initialization fails.
+					s.settings.CacheEnabled = false
+				} else {
+					s.cache = cacheStore
 				}
-				s.cache = cacheStore
 			}
 			return nil
 		},
