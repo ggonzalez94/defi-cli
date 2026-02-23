@@ -79,9 +79,9 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "world chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "world-chain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
 		{input: "worldchain", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
-		{input: "hyperevm", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
-		{input: "hyper evm", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
-		{input: "hyper-evm", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
+		{input: "hyperevm", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
+		{input: "hyper evm", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
+		{input: "hyper-evm", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
 		{input: "citrea", chainID: 4114, caip2: "eip155:4114", slug: "citrea"},
 		{input: "megaeth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "mega eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
@@ -99,7 +99,7 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "81457", chainID: 81457, caip2: "eip155:81457", slug: "blast"},
 		{input: "252", chainID: 252, caip2: "eip155:252", slug: "fraxtal"},
 		{input: "480", chainID: 480, caip2: "eip155:480", slug: "world-chain"},
-		{input: "998", chainID: 998, caip2: "eip155:998", slug: "hyperevm"},
+		{input: "999", chainID: 999, caip2: "eip155:999", slug: "hyperevm"},
 		{input: "4114", chainID: 4114, caip2: "eip155:4114", slug: "citrea"},
 		{input: "4326", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "143", chainID: 143, caip2: "eip155:143", slug: "monad"},
@@ -167,25 +167,58 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 	}
 }
 
+func TestParseAssetHyperEVMAddressAndCAIP19(t *testing.T) {
+	chain, err := ParseChain("hyperevm")
+	if err != nil {
+		t.Fatalf("ParseChain(hyperevm) failed: %v", err)
+	}
+
+	asset, err := ParseAsset("0xb88339cb7199b77e23db6e890353e22632ba630f", chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(hyperevm address) failed: %v", err)
+	}
+	if asset.Symbol != "USDC" {
+		t.Fatalf("expected USDC, got %s", asset.Symbol)
+	}
+
+	caip := "eip155:999/erc20:0x5555555555555555555555555555555555555555"
+	asset, err = ParseAsset(caip, chain)
+	if err != nil {
+		t.Fatalf("ParseAsset(hyperevm caip19) failed: %v", err)
+	}
+	if asset.Symbol != "WHYPE" {
+		t.Fatalf("expected WHYPE, got %s", asset.Symbol)
+	}
+}
+
 func TestParseAssetExpandedTop20AndTaikoSymbols(t *testing.T) {
 	tests := []struct {
 		chainInput string
 		symbol     string
 	}{
 		{chainInput: "ethereum", symbol: "AAVE"},
+		{chainInput: "ethereum", symbol: "WBTC"},
+		{chainInput: "ethereum", symbol: "USD1"},
 		{chainInput: "base", symbol: "USDE"},
 		{chainInput: "base", symbol: "USDS"},
+		{chainInput: "base", symbol: "CBBTC"},
+		{chainInput: "base", symbol: "SNX"},
 		{chainInput: "arbitrum", symbol: "MORPHO"},
+		{chainInput: "arbitrum", symbol: "ARB"},
 		{chainInput: "bsc", symbol: "CAKE"},
+		{chainInput: "bsc", symbol: "WBNB"},
 		{chainInput: "ethereum", symbol: "CRVUSD"},
 		{chainInput: "ethereum", symbol: "TUSD"},
 		{chainInput: "avalanche", symbol: "EURC"},
+		{chainInput: "avalanche", symbol: "WAVAX"},
 		{chainInput: "base", symbol: "FRAX"},
 		{chainInput: "fraxtal", symbol: "FRAX"},
 		{chainInput: "ethereum", symbol: "LDO"},
 		{chainInput: "arbitrum", symbol: "UNI"},
 		{chainInput: "base", symbol: "ZRO"},
 		{chainInput: "scroll", symbol: "ETHFI"},
+		{chainInput: "optimism", symbol: "OP"},
+		{chainInput: "optimism", symbol: "USDT0"},
 		{chainInput: "taiko", symbol: "TAIKO"},
 	}
 
@@ -274,7 +307,8 @@ func TestParseAssetFibrousChainBootstrapAddresses(t *testing.T) {
 	}{
 		{chainInput: "hyperevm", symbol: "WHYPE", address: "0x5555555555555555555555555555555555555555"},
 		{chainInput: "hyperevm", symbol: "HYPE", address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
-		{chainInput: "monad", symbol: "WMON", address: "0x4200000000000000000000000000000000000006"},
+		{chainInput: "monad", symbol: "WMON", address: "0x3bd359c1119da7da1d913d1c4d2b7c461115433a"},
+		{chainInput: "monad", symbol: "USDC", address: "0x754704bc059f8c67012fed69bc8a327a5aafb603"},
 		{chainInput: "monad", symbol: "MON", address: "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"},
 		{chainInput: "citrea", symbol: "WCBTC", address: "0x3100000000000000000000000000000000000006"},
 		{chainInput: "citrea", symbol: "CBTC", address: "0x0000000000000000000000000000000000000000"},

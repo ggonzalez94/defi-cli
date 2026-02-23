@@ -12,20 +12,30 @@ Format:
 ### Added
 - Added MegaETH mainnet chain normalization (`megaeth`, `mega eth`, `mega-eth`) with canonical ID mapping to `eip155:4326`.
 - Expanded bootstrap token registry symbol support across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
+- Added additional bootstrap token mappings sourced from Bungee trending tokens (for supported EVM chains), including `USD1`, `WBTC`, `CBBTC`, `PAXG`, `PEPE`, `SHIB`, `OP`, `USDT0`, `BTCB`, `WBNB`, `ARB`, `PYUSD`, `WAVAX`, `WLFI`, `XAUT`, and `PENGU`.
+- Added Bungee Auto-mode quoting as a bridge provider (`bridge quote --provider bungee`) and swap provider (`swap quote --provider bungee`).
 - Added `fibrous` swap provider integration (`swap quote --provider fibrous`) for `base`, `hyperevm`, and `citrea` without requiring an API key.
+- Added chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
+- Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
 
 ### Changed
 - Added MegaETH bootstrap token parsing for `MEGA`, `WETH`, and `USDT` (mapped to MegaETH's `USDT0` contract address) to improve lending/bridge symbol workflows.
-- Added mainnet chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:998`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
+- Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
+- Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
+- Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
 
 ### Fixed
 - Added missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
+- Corrected HyperEVM canonical mainnet mapping to `eip155:999` across chain normalization and provider routing.
+- Corrected Monad bootstrap token addresses for `WMON` and `USDC` to match the official Monad token list.
+- Commands now continue with cache disabled when cache initialization fails, instead of returning an internal error.
 - Fixed Fibrous route response decoding to handle nested token objects and nullable gas values.
 - Disabled Fibrous `monad` routing while Monad route responses are unstable.
 
 ### Docs
 - Updated README and AGENTS MegaETH chain alias coverage and bootstrap token caveats.
-- Documented Fibrous provider support, keyless auth behavior, and new chain aliases in `README.md` and `AGENTS.md`.
+- Documented Fibrous and Bungee provider support, keyless auth behavior, and new chain aliases in `README.md` and `AGENTS.md`.
+- Documented optional Bungee dedicated-backend environment variables and fallback behavior when only one value is set.
 
 ### Security
 - None yet.
