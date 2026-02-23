@@ -108,6 +108,8 @@ README.md                         # user-facing usage + caveats
 - Keep `CHANGELOG.md` in a simple release-notes format with `## [Unreleased]` at the top.
 - Add user-facing changes under `Unreleased` using sections in this order: `Added`, `Changed`, `Fixed`, `Docs`, `Security`.
 - Keep entries concise and action-oriented (what changed for users, not internal refactors unless user impact exists).
+- Record only the net user-facing outcome in `Unreleased`; omit intermediate implementation steps and fixes for regressions that never shipped in a release.
+- Do not add changelog entries for README-only or `AGENTS.md`-only edits.
 - On release, move `Unreleased` items into `## [vX.Y.Z] - YYYY-MM-DD` and update compare links at the bottom.
 - If a section has no updates while editing, use `- None yet.` to keep structure stable.
 
