@@ -60,7 +60,6 @@ func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
 	}{
 		{name: "evm", chainInput: "base", want: []string{"aave", "defillama", "morpho"}},
 		{name: "solana", chainInput: "solana", want: []string{"defillama", "kamino"}},
-		{name: "solana-devnet", chainInput: "solana-devnet", want: []string{"defillama"}},
 	}
 
 	for _, tc := range tests {

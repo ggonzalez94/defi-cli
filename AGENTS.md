@@ -76,6 +76,7 @@ README.md                         # user-facing usage + caveats
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Kamino direct routes currently support Solana mainnet only.
+- Solana devnet/testnet aliases and custom Solana CAIP-2 references are intentionally unsupported; use Solana mainnet only.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Cache initialization is best-effort; if cache path init fails (permissions/path issues), commands continue with cache disabled.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.

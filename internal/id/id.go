@@ -18,14 +18,10 @@ var (
 
 const (
 	solanaMainnetRef = "5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp"
-	solanaDevnetRef  = "EtWTRABZaYq6iMfeYKouRu166VU2xqa1"
-	solanaTestnetRef = "4uhcVJyU9pJkvQyS88uRDiswHXSCkY3z"
 )
 
 const (
 	solanaMainnetCAIP2 = "solana:" + solanaMainnetRef
-	solanaDevnetCAIP2  = "solana:" + solanaDevnetRef
-	solanaTestnetCAIP2 = "solana:" + solanaTestnetRef
 )
 
 type Chain struct {
@@ -104,9 +100,7 @@ var chainBySlug = map[string]Chain{
 	"solana-mainnet": {
 		Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2,
 	},
-	"mainnet-beta":   {Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2},
-	"solana-devnet":  {Name: "Solana Devnet", Slug: "solana-devnet", CAIP2: solanaDevnetCAIP2},
-	"solana-testnet": {Name: "Solana Testnet", Slug: "solana-testnet", CAIP2: solanaTestnetCAIP2},
+	"mainnet-beta": {Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2},
 }
 
 var chainByID = map[int64]Chain{
@@ -452,10 +446,10 @@ func ParseChain(input string) (Chain, error) {
 	}
 	norm := strings.ToLower(raw)
 
-	if chain, ok := chainBySlug[norm]; ok {
-		return chain, nil
+	if norm == "solana-devnet" || norm == "solana-testnet" {
+		return Chain{}, clierr.New(clierr.CodeUnsupported, "solana devnet/testnet are not supported; only solana mainnet is supported")
 	}
-	if chain, ok := lookupKnownCAIP2(raw); ok {
+	if chain, ok := chainBySlug[norm]; ok {
 		return chain, nil
 	}
 
@@ -468,12 +462,21 @@ func ParseChain(input string) (Chain, error) {
 		return Chain{Name: fmt.Sprintf("EVM-%d", id), Slug: fmt.Sprintf("evm-%d", id), CAIP2: norm, EVMChainID: id}, nil
 	}
 
-	if namespace, reference, ok := parseCAIP2(raw); ok && namespace == "solana" && solanaTokenMintPattern.MatchString(reference) {
-		caip2 := "solana:" + reference
-		if known, ok := chainByCAIP2[caip2]; ok {
-			return known, nil
+	if namespace, reference, ok := parseCAIP2(raw); ok && namespace == "solana" {
+		if reference == solanaMainnetRef {
+			if known, ok := chainByCAIP2[solanaMainnetCAIP2]; ok {
+				return known, nil
+			}
+			return chainBySlug["solana"], nil
 		}
-		return Chain{Name: "Solana", Slug: "solana-custom", CAIP2: caip2}, nil
+		if solanaTokenMintPattern.MatchString(reference) {
+			return Chain{}, clierr.New(clierr.CodeUnsupported, "solana non-mainnet references are not supported; only solana mainnet is supported")
+		}
+		return Chain{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("unsupported chain input: %s", input))
+	}
+
+	if chain, ok := lookupKnownCAIP2(raw); ok {
+		return chain, nil
 	}
 
 	if id, err := strconv.ParseInt(norm, 10, 64); err == nil {

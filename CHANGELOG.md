@@ -25,6 +25,7 @@ Format:
 - `swap quote` now defaults provider by chain family (`1inch` for EVM chains, `jupiter` for Solana).
 - Added explicit chain-family validation across providers so unsupported EVM/Solana combinations fail with clear `unsupported` errors.
 - DefiLlama lending fallback protocol matcher now recognizes `kamino`.
+- Solana chain parsing is now mainnet-only; `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are rejected.
 - Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
 - Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
 - Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.

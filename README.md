@@ -111,6 +111,7 @@ Solana identifiers:
 
 - Chain: `solana` (mainnet), or CAIP-2 `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`
 - Asset (CAIP-19): `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:<mint>`
+- Non-mainnet Solana references (`solana-devnet`, `solana-testnet`, custom `solana:<ref>`) are unsupported.
 
 ## Command API Key Requirements
 
@@ -205,6 +206,7 @@ providers:
 
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
 - Kamino direct adapter currently supports Solana mainnet (`solana`) only.
+- Solana devnet/testnet and custom Solana CAIP-2 references are rejected; only Solana mainnet is supported.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`, `bungee`) are keyless by default.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.

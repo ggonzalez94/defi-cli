@@ -3,6 +3,8 @@ package id
 import (
 	"strings"
 	"testing"
+
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 )
 
 func TestParseChainVariants(t *testing.T) {
@@ -59,15 +61,27 @@ func TestParseChainSolanaCAIP2NamespaceCaseInsensitive(t *testing.T) {
 
 func TestParseChainSolanaReferenceCaseSensitive(t *testing.T) {
 	lowerRef := strings.ToLower("5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp")
-	chain, err := ParseChain("solana:" + lowerRef)
-	if err != nil {
-		t.Fatalf("ParseChain with lowercased ref failed: %v", err)
+	_, err := ParseChain("solana:" + lowerRef)
+	if err == nil {
+		t.Fatal("expected non-mainnet solana reference to be unsupported")
 	}
-	if chain.Slug != "solana-custom" {
-		t.Fatalf("expected custom solana slug, got %s", chain.Slug)
+	cErr, ok := clierr.As(err)
+	if !ok || cErr.Code != clierr.CodeUnsupported {
+		t.Fatalf("expected unsupported error, got %v", err)
 	}
-	if chain.CAIP2 != "solana:"+lowerRef {
-		t.Fatalf("unexpected CAIP2: %s", chain.CAIP2)
+}
+
+func TestParseChainRejectsSolanaDevnetAndTestnetAliases(t *testing.T) {
+	tests := []string{"solana-devnet", "solana-testnet"}
+	for _, input := range tests {
+		_, err := ParseChain(input)
+		if err == nil {
+			t.Fatalf("expected %s to be unsupported", input)
+		}
+		cErr, ok := clierr.As(err)
+		if !ok || cErr.Code != clierr.CodeUnsupported {
+			t.Fatalf("expected unsupported error for %s, got %v", input, err)
+		}
 	}
 }
 

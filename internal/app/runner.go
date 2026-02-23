@@ -1112,7 +1112,7 @@ func (s *runtimeState) selectYieldProviders(filter []string, chain id.Chain) ([]
 func yieldProviderSupportsChain(name string, chain id.Chain) bool {
 	switch name {
 	case "kamino":
-		return chain.Slug == "solana"
+		return chain.IsSolana()
 	case "aave", "morpho":
 		return chain.IsEVM()
 	default:
