@@ -47,8 +47,8 @@ Format:
 
 ### Docs
 - Updated README and AGENTS guidance for Solana usage, Kamino/Jupiter providers, and API key semantics.
-- Added a dedicated Mintlify documentation site (`docs.json` + structured MDX pages) with setup, guides, automation patterns, and command reference.
-- Added versioned docs navigation with a `v0.2.0` compatibility snapshot so users can select docs by CLI version.
+- Added a dedicated Mintlify documentation site (`docs/docs.json` + structured MDX pages) with setup, guides, automation patterns, and command reference.
+- Moved Mintlify docs into a dedicated `docs/` directory and simplified navigation to latest-only docs for lower maintenance.
 - Added a docs CI workflow that runs `mint validate` and `mint broken-links` on docs-related changes.
 - Refined docs IA by removing overlapping cookbook content, clarifying provider-driven API key requirements, and updating header branding with a lobster wordmark logo.
 

@@ -3,19 +3,11 @@ name: docs
 on:
   push:
     paths:
-      - 'docs.json'
-      - '**/*.mdx'
-      - 'assets/**'
-      - 'README.md'
-      - 'AGENTS.md'
+      - 'docs/**'
       - '.github/workflows/docs.yml'
   pull_request:
     paths:
-      - 'docs.json'
-      - '**/*.mdx'
-      - 'assets/**'
-      - 'README.md'
-      - 'AGENTS.md'
+      - 'docs/**'
       - '.github/workflows/docs.yml'
   workflow_dispatch:
 
@@ -33,7 +25,9 @@ jobs:
           node-version: '22'
 
       - name: Validate docs build
+        working-directory: docs
         run: npx --yes mint@${MINT_CLI_VERSION} validate
 
       - name: Check broken links
+        working-directory: docs
         run: npx --yes mint@${MINT_CLI_VERSION} broken-links

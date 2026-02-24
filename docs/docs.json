@@ -1,0 +1,118 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "defi-cli",
+  "description": "Agent-first DeFi retrieval CLI documentation",
+  "colors": {
+    "primary": "#0F766E",
+    "light": "#14B8A6",
+    "dark": "#0F766E"
+  },
+  "favicon": "/images/docs-lobster.png",
+  "logo": {
+    "light": "/images/docs-logo-lobster-light.png",
+    "dark": "/images/docs-logo-lobster-dark.png"
+  },
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Learn",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "index",
+              "installation",
+              "quickstart"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/output-contract",
+              "concepts/ids-and-amounts",
+              "concepts/config-and-cache",
+              "concepts/providers-and-auth"
+            ]
+          },
+          {
+            "group": "Workflow Guides",
+            "pages": [
+              "guides/market-discovery",
+              "guides/lending",
+              "guides/yield",
+              "guides/bridge",
+              "guides/swap"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Agents",
+        "groups": [
+          {
+            "group": "Automation",
+            "pages": [
+              "agents/overview",
+              "agents/schema-driven",
+              "agents/reliability-patterns"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Reference",
+        "groups": [
+          {
+            "group": "CLI Commands",
+            "pages": [
+              "reference/commands-overview",
+              "reference/market-commands",
+              "reference/lending-and-yield-commands",
+              "reference/bridge-and-swap-commands",
+              "reference/meta-commands"
+            ]
+          },
+          {
+            "group": "Contracts",
+            "pages": [
+              "reference/envelope-schema",
+              "reference/exit-codes",
+              "reference/chain-aliases"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "navbar": {
+    "links": [
+      {
+        "label": "GitHub",
+        "href": "https://github.com/ggonzalez94/defi-cli"
+      }
+    ],
+    "primary": {
+      "type": "button",
+      "label": "Install",
+      "href": "https://github.com/ggonzalez94/defi-cli#install"
+    }
+  },
+  "contextual": {
+    "options": [
+      "copy",
+      "view",
+      "chatgpt",
+      "claude",
+      "perplexity",
+      "mcp",
+      "cursor",
+      "vscode"
+    ]
+  },
+  "footer": {
+    "socials": {
+      "github": "https://github.com/ggonzalez94/defi-cli"
+    }
+  }
+}
