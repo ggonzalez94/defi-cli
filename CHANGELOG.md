@@ -20,15 +20,19 @@ Format:
 - Added `fibrous` swap provider integration (`swap quote --provider fibrous`) for `base`, `hyperevm`, and `citrea` without requiring an API key.
 - Added chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
 - Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
+- Added simplified retrieval-first identifier metadata on lending/yield rows: `provider`, `provider_native_id`, and `provider_native_id_kind`.
+- Added bridge quote `fee_breakdown` output with component fees (`lp_fee`, `relayer_fee`, `gas_fee`), aggregate totals, and amount-delta consistency metadata.
 
 ### Changed
 - `swap quote` now defaults provider by chain family (`1inch` for EVM chains, `jupiter` for Solana).
 - Added explicit chain-family validation across providers so unsupported EVM/Solana combinations fail with clear `unsupported` errors.
-- DefiLlama lending fallback protocol matcher now recognizes `kamino`.
+- Removed DefiLlama from `lend markets`, `lend rates`, and `yield opportunities` provider routing; these commands now use direct protocol adapters only.
+- Removed `spark` lending protocol routing from the CLI command surface.
 - Solana chain parsing is now mainnet-only; `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are rejected.
 - Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
 - Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
 - Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
+- Across quote normalization now reads provider `outputAmount` when available and fills `estimated_fee_usd` from stable-asset token-fee approximation when native USD fee fields are omitted.
 
 ### Fixed
 - Tightened direct lending asset matching to prefer canonical token address/mint over symbol-only matches, reducing false positives on similarly named assets.
@@ -39,6 +43,7 @@ Format:
 - Commands now continue with cache disabled when cache initialization fails, instead of returning an internal error.
 - Fixed Fibrous route response decoding to handle nested token objects and nullable gas values.
 - Disabled Fibrous `monad` routing while Monad route responses are unstable.
+- Reduced sqlite cache lock contention under parallel runs by adding open-time lock coordination, sqlite busy-timeout, and retry/backoff on busy/locked operations.
 
 ### Docs
 - Updated README and AGENTS guidance for Solana usage, Kamino/Jupiter providers, and API key semantics.

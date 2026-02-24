@@ -9,6 +9,7 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
@@ -89,6 +90,9 @@ func TestLendMarketsAndRatesFromKaminoAPI(t *testing.T) {
 	if markets[0].SupplyAPY != 2 {
 		t.Fatalf("expected APY in percentage points, got %+v", markets[0])
 	}
+	if markets[0].Provider != "kamino" || markets[0].ProviderNativeIDKind != model.NativeIDKindPoolID || markets[0].ProviderNativeID == "" {
+		t.Fatalf("expected kamino provider id metadata, got %+v", markets[0])
+	}
 
 	rates, err := c.LendRates(context.Background(), "kamino", chain, asset)
 	if err != nil {
@@ -99,6 +103,9 @@ func TestLendMarketsAndRatesFromKaminoAPI(t *testing.T) {
 	}
 	if rates[0].Utilization != 0.5 {
 		t.Fatalf("expected utilization 0.5, got %+v", rates[0])
+	}
+	if rates[0].Provider != "kamino" || rates[0].ProviderNativeIDKind != model.NativeIDKindPoolID || rates[0].ProviderNativeID == "" {
+		t.Fatalf("expected kamino provider id metadata, got %+v", rates[0])
 	}
 }
 
@@ -156,6 +163,9 @@ func TestYieldOpportunitiesFiltersByAPYAndTVL(t *testing.T) {
 	}
 	if opps[0].Provider != "kamino" || opps[0].Protocol != "kamino" {
 		t.Fatalf("unexpected opportunity provider/protocol: %+v", opps[0])
+	}
+	if opps[0].ProviderNativeIDKind != model.NativeIDKindPoolID || opps[0].ProviderNativeID != "reserve-1" {
+		t.Fatalf("expected kamino provider-native id metadata, got %+v", opps[0])
 	}
 	if opps[0].APYTotal != 4 {
 		t.Fatalf("expected APY total 4, got %+v", opps[0])

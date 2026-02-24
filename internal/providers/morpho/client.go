@@ -47,7 +47,9 @@ func (c *Client) Info() model.ProviderInfo {
 const marketsQuery = `query Markets($first:Int,$where:MarketFilters,$orderBy:MarketOrderBy,$orderDirection:OrderDirection){
   markets(first:$first, where:$where, orderBy:$orderBy, orderDirection:$orderDirection){
     items{
+      id
       uniqueKey
+      irmAddress
       loanAsset{ address symbol decimals chain{ id network } }
       collateralAsset{ address symbol }
       state{ supplyApy borrowApy utilization supplyAssetsUsd liquidityAssetsUsd totalLiquidityUsd }
@@ -67,8 +69,10 @@ type marketsResponse struct {
 }
 
 type morphoMarket struct {
-	UniqueKey string `json:"uniqueKey"`
-	LoanAsset struct {
+	ID         string `json:"id"`
+	UniqueKey  string `json:"uniqueKey"`
+	IRMAddress string `json:"irmAddress"`
+	LoanAsset  struct {
 		Address  string `json:"address"`
 		Symbol   string `json:"symbol"`
 		Decimals int    `json:"decimals"`
@@ -109,15 +113,18 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 		supplyAPY := m.State.SupplyAPY * 100
 		borrowAPY := m.State.BorrowAPY * 100
 		out = append(out, model.LendMarket{
-			Protocol:     "morpho",
-			ChainID:      chain.CAIP2,
-			AssetID:      canonicalAssetID(asset, m.LoanAsset.Address),
-			SupplyAPY:    supplyAPY,
-			BorrowAPY:    borrowAPY,
-			TVLUSD:       tvl,
-			LiquidityUSD: yieldutil.PositiveFirst(m.State.LiquidityAssetsUSD, m.State.TotalLiquidityUSD, tvl),
-			SourceURL:    "https://app.morpho.org",
-			FetchedAt:    c.now().UTC().Format(time.RFC3339),
+			Protocol:             "morpho",
+			Provider:             "morpho",
+			ChainID:              chain.CAIP2,
+			AssetID:              canonicalAssetID(asset, m.LoanAsset.Address),
+			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
+			ProviderNativeIDKind: model.NativeIDKindMarketID,
+			SupplyAPY:            supplyAPY,
+			BorrowAPY:            borrowAPY,
+			TVLUSD:               tvl,
+			LiquidityUSD:         yieldutil.PositiveFirst(m.State.LiquidityAssetsUSD, m.State.TotalLiquidityUSD, tvl),
+			SourceURL:            "https://app.morpho.org",
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -145,14 +152,17 @@ func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain,
 	out := make([]model.LendRate, 0, len(markets))
 	for _, m := range markets {
 		out = append(out, model.LendRate{
-			Protocol:    "morpho",
-			ChainID:     chain.CAIP2,
-			AssetID:     canonicalAssetID(asset, m.LoanAsset.Address),
-			SupplyAPY:   m.State.SupplyAPY * 100,
-			BorrowAPY:   m.State.BorrowAPY * 100,
-			Utilization: m.State.Utilization,
-			SourceURL:   "https://app.morpho.org",
-			FetchedAt:   c.now().UTC().Format(time.RFC3339),
+			Protocol:             "morpho",
+			Provider:             "morpho",
+			ChainID:              chain.CAIP2,
+			AssetID:              canonicalAssetID(asset, m.LoanAsset.Address),
+			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
+			ProviderNativeIDKind: model.NativeIDKindMarketID,
+			SupplyAPY:            m.State.SupplyAPY * 100,
+			BorrowAPY:            m.State.BorrowAPY * 100,
+			Utilization:          m.State.Utilization,
+			SourceURL:            "https://app.morpho.org",
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -196,24 +206,26 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		liq := yieldutil.PositiveFirst(m.State.LiquidityAssetsUSD, m.State.TotalLiquidityUSD, tvl)
 		assetID := canonicalAssetID(req.Asset, m.LoanAsset.Address)
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:   hashOpportunity("morpho", req.Chain.CAIP2, m.UniqueKey, assetID),
-			Provider:        "morpho",
-			Protocol:        "morpho",
-			ChainID:         req.Chain.CAIP2,
-			AssetID:         assetID,
-			Type:            "lend",
-			APYBase:         apy,
-			APYReward:       0,
-			APYTotal:        apy,
-			TVLUSD:          tvl,
-			LiquidityUSD:    liq,
-			LockupDays:      0,
-			WithdrawalTerms: "variable",
-			RiskLevel:       riskLevel,
-			RiskReasons:     reasons,
-			Score:           yieldutil.ScoreOpportunity(apy, tvl, liq, riskLevel),
-			SourceURL:       "https://app.morpho.org",
-			FetchedAt:       c.now().UTC().Format(time.RFC3339),
+			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, m.UniqueKey, assetID),
+			Provider:             "morpho",
+			Protocol:             "morpho",
+			ChainID:              req.Chain.CAIP2,
+			AssetID:              assetID,
+			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
+			ProviderNativeIDKind: model.NativeIDKindMarketID,
+			Type:                 "lend",
+			APYBase:              apy,
+			APYReward:            0,
+			APYTotal:             apy,
+			TVLUSD:               tvl,
+			LiquidityUSD:         liq,
+			LockupDays:           0,
+			WithdrawalTerms:      "variable",
+			RiskLevel:            riskLevel,
+			RiskReasons:          reasons,
+			Score:                yieldutil.ScoreOpportunity(apy, tvl, liq, riskLevel),
+			SourceURL:            "https://app.morpho.org",
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 

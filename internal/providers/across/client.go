@@ -78,17 +78,30 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		return model.BridgeQuote{}, err
 	}
 
-	feeBase := pickNumberString(fees, "totalRelayFee", "relayFeeTotal", "relayFeePct")
-	if feeBase == "" {
+	feeBaseAbs := pickNumberString(fees, "totalRelayFee", "relayFeeTotal")
+	feeBase := feeBaseAbs
+	hasAbsoluteFee := strings.TrimSpace(feeBaseAbs) != ""
+	if !hasAbsoluteFee {
 		feeBase = "0"
 	}
 
-	estOut := subtractBaseUnits(req.AmountBaseUnits, feeBase)
+	estOut := pickNumberString(fees, "outputAmount")
+	hasProviderOutputAmount := strings.TrimSpace(estOut) != ""
+	if !hasProviderOutputAmount && hasAbsoluteFee {
+		estOut = subtractBaseUnits(req.AmountBaseUnits, feeBase)
+	}
+	if strings.TrimSpace(estOut) == "" {
+		estOut = req.AmountBaseUnits
+	}
 	feeUSD := pickFloat(fees, "totalRelayFeeUsd", "feeUsd")
+	if feeUSD == 0 && hasAbsoluteFee {
+		feeUSD = approximateStableUSD(req.FromAsset.Symbol, feeBase, req.FromAsset.Decimals)
+	}
 	estTime := int64(pickFloat(fees, "estimatedFillTimeSec", "estimatedFillTime"))
 	if estTime == 0 {
 		estTime = 120
 	}
+	feeBreakdown := buildAcrossFeeBreakdown(req, fees, feeBaseAbs, estOut, feeUSD, hasProviderOutputAmount)
 
 	return model.BridgeQuote{
 		Provider:    "across",
@@ -107,6 +120,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			Decimals:        req.ToAsset.Decimals,
 		},
 		EstimatedFeeUSD: feeUSD,
+		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  estTime,
 		Route:           fmt.Sprintf("%s->%s", req.FromChain.Slug, req.ToChain.Slug),
 		SourceURL:       "https://app.across.to",
@@ -129,13 +143,8 @@ func checkAmountWithinLimits(amount string, limits map[string]any) bool {
 func pickNumberString(m map[string]any, keys ...string) string {
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
-			switch t := v.(type) {
-			case string:
-				if t != "" {
-					return t
-				}
-			case float64:
-				return strconv.FormatFloat(t, 'f', 0, 64)
+			if out := numberString(v); out != "" {
+				return out
 			}
 		}
 	}
@@ -145,16 +154,121 @@ func pickNumberString(m map[string]any, keys ...string) string {
 func pickFloat(m map[string]any, keys ...string) float64 {
 	for _, key := range keys {
 		if v, ok := m[key]; ok {
-			switch t := v.(type) {
-			case float64:
-				return t
-			case string:
-				f, _ := strconv.ParseFloat(t, 64)
-				return f
+			if out, ok := floatValue(v); ok {
+				return out
 			}
 		}
 	}
 	return 0
+}
+
+func numberString(v any) string {
+	switch t := v.(type) {
+	case string:
+		s := strings.TrimSpace(t)
+		if s == "" {
+			return ""
+		}
+		return trimLeadingZeros(s)
+	case float64:
+		return trimLeadingZeros(strconv.FormatFloat(t, 'f', 0, 64))
+	case map[string]any:
+		if out := numberString(t["total"]); out != "" {
+			return out
+		}
+		return numberString(t["amount"])
+	default:
+		return ""
+	}
+}
+
+func floatValue(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		return t, true
+	case string:
+		if strings.TrimSpace(t) == "" {
+			return 0, false
+		}
+		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
+		if err != nil {
+			return 0, false
+		}
+		return f, true
+	case map[string]any:
+		if f, ok := floatValue(t["usd"]); ok {
+			return f, true
+		}
+		if f, ok := floatValue(t["value"]); ok {
+			return f, true
+		}
+		return 0, false
+	default:
+		return 0, false
+	}
+}
+
+func buildAcrossFeeBreakdown(req providers.BridgeQuoteRequest, fees map[string]any, totalFeeBase, estimatedOut string, totalFeeUSD float64, hasProviderOutputAmount bool) *model.BridgeFeeBreakdown {
+	lpFeeBase := pickNumberString(fees, "lpFee", "lpFeeTotal")
+	relayerFeeBase := pickNumberString(fees, "relayerCapitalFee", "capitalFeeTotal")
+	gasFeeBase := pickNumberString(fees, "relayerGasFee", "relayGasFeeTotal")
+
+	breakdown := &model.BridgeFeeBreakdown{
+		LPFee:       feeAmountFromBase(lpFeeBase, req.FromAsset.Decimals),
+		RelayerFee:  feeAmountFromBase(relayerFeeBase, req.FromAsset.Decimals),
+		GasFee:      feeAmountFromBase(gasFeeBase, req.FromAsset.Decimals),
+		TotalFeeUSD: totalFeeUSD,
+	}
+
+	if strings.TrimSpace(totalFeeBase) != "" {
+		breakdown.TotalFeeBaseUnits = trimLeadingZeros(totalFeeBase)
+		breakdown.TotalFeeDecimal = id.FormatDecimalCompat(breakdown.TotalFeeBaseUnits, req.FromAsset.Decimals)
+	}
+	if hasProviderOutputAmount && breakdown.TotalFeeBaseUnits != "" && strings.TrimSpace(estimatedOut) != "" {
+		delta := subtractBaseUnits(req.AmountBaseUnits, estimatedOut)
+		consistent := compareBaseUnits(delta, breakdown.TotalFeeBaseUnits) == 0
+		breakdown.ConsistentWithAmountDelta = &consistent
+	}
+
+	if breakdown.LPFee == nil && breakdown.RelayerFee == nil && breakdown.GasFee == nil && breakdown.TotalFeeUSD == 0 && breakdown.TotalFeeBaseUnits == "" && breakdown.ConsistentWithAmountDelta == nil {
+		return nil
+	}
+	return breakdown
+}
+
+func feeAmountFromBase(amountBase string, decimals int) *model.FeeAmount {
+	amountBase = trimLeadingZeros(amountBase)
+	if amountBase == "" || amountBase == "0" {
+		return nil
+	}
+	return &model.FeeAmount{
+		AmountBaseUnits: amountBase,
+		AmountDecimal:   id.FormatDecimalCompat(amountBase, decimals),
+	}
+}
+
+func approximateStableUSD(symbol, amountBase string, decimals int) float64 {
+	if !isLikelyStableSymbol(symbol) {
+		return 0
+	}
+	amountDecimal := id.FormatDecimalCompat(amountBase, decimals)
+	if strings.TrimSpace(amountDecimal) == "" {
+		return 0
+	}
+	v, err := strconv.ParseFloat(amountDecimal, 64)
+	if err != nil {
+		return 0
+	}
+	return v
+}
+
+func isLikelyStableSymbol(symbol string) bool {
+	switch strings.ToUpper(strings.TrimSpace(symbol)) {
+	case "USDC", "USDT", "USDT0", "DAI", "USDE", "USDS", "USD1", "FRAX", "GHO", "TUSD", "LUSD", "PYUSD":
+		return true
+	default:
+		return false
+	}
 }
 
 func compareBaseUnits(a, b string) int {

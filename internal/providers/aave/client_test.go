@@ -9,6 +9,7 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
@@ -20,10 +21,12 @@ func TestLendMarketsAndYield(t *testing.T) {
 				"markets": [
 					{
 						"name": "AaveV3Ethereum",
+						"address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
 						"chain": {"chainId": 1, "name": "Ethereum"},
 						"reserves": [
 							{
 								"underlyingToken": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC", "decimals": 6},
+								"aToken": {"address": "0x71Aef7b30728b9BB371578f36c5A1f1502a5723e"},
 								"size": {"usd": "1000000"},
 								"supplyInfo": {"apy": {"value": "0.03"}, "total": {"value": "1000000"}},
 								"borrowInfo": {"apy": {"value": "0.05"}, "total": {"usd": "500000"}, "utilizationRate": {"value": "0.4"}}
@@ -51,6 +54,12 @@ func TestLendMarketsAndYield(t *testing.T) {
 	if markets[0].SupplyAPY != 3 {
 		t.Fatalf("expected supply apy 3, got %f", markets[0].SupplyAPY)
 	}
+	if markets[0].ProviderNativeID == "" {
+		t.Fatalf("expected provider native id, got %+v", markets[0])
+	}
+	if markets[0].Provider != "aave" || markets[0].ProviderNativeIDKind != model.NativeIDKindCompositeMarketAsset {
+		t.Fatalf("expected provider/native id kind metadata, got %+v", markets[0])
+	}
 
 	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "high"})
 	if err != nil {
@@ -58,6 +67,9 @@ func TestLendMarketsAndYield(t *testing.T) {
 	}
 	if len(opps) != 1 || opps[0].Provider != "aave" {
 		t.Fatalf("unexpected yield response: %+v", opps)
+	}
+	if opps[0].ProviderNativeID == "" || opps[0].ProviderNativeIDKind != model.NativeIDKindCompositeMarketAsset {
+		t.Fatalf("expected yield provider native id metadata, got %+v", opps[0])
 	}
 }
 

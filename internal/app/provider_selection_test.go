@@ -22,8 +22,8 @@ func TestNormalizeLendingProtocol(t *testing.T) {
 func TestSelectYieldProviders(t *testing.T) {
 	s := &runtimeState{yieldProviders: map[string]providers.YieldProvider{}}
 	// Use nil implementations via map key presence for selection behavior.
-	s.yieldProviders["defillama"] = nil
 	s.yieldProviders["aave"] = nil
+	s.yieldProviders["morpho"] = nil
 	chain, err := id.ParseChain("base")
 	if err != nil {
 		t.Fatalf("parse chain: %v", err)

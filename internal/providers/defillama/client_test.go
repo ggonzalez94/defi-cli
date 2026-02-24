@@ -2,7 +2,6 @@ package defillama
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -146,56 +145,6 @@ func TestYieldScoreAndSortDeterministic(t *testing.T) {
 	}
 }
 
-func TestYieldOpportunitiesFilters(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/pools", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
-			"status":"success",
-			"data":[
-				{"pool":"p1","chain":"Base","project":"aave-v3","symbol":"USDC","apy":5,"apyBase":4,"apyReward":1,"tvlUsd":1000000,"ilRisk":"no","stablecoin":true},
-				{"pool":"p2","chain":"Base","project":"curve","symbol":"USDC","apy":2,"tvlUsd":10000,"ilRisk":"yes","stablecoin":false}
-			]
-		}`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	chain, _ := id.ParseChain("base")
-	asset, _ := id.ParseAsset("USDC", chain)
-	c := New(httpx.New(2*time.Second, 0), "")
-	c.yieldsBase = srv.URL
-	got, err := c.YieldOpportunities(context.Background(), providers.YieldRequest{
-		Chain:     chain,
-		Asset:     asset,
-		Limit:     20,
-		MinTVLUSD: 50_000,
-		MinAPY:    0,
-		MaxRisk:   "high",
-		SortBy:    "score",
-	})
-	if err != nil {
-		t.Fatalf("YieldOpportunities failed: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected one result, got %d (%v)", len(got), fmt.Sprintf("%+v", got))
-	}
-	if got[0].Protocol != "aave-v3" {
-		t.Fatalf("unexpected protocol: %+v", got[0])
-	}
-}
-
-func TestMatchesAssetSymbolRequiresExpectedSymbol(t *testing.T) {
-	if matchesAssetSymbol("USDC", "") {
-		t.Fatal("expected empty symbol filter to be rejected")
-	}
-	if !matchesAssetSymbol("USDC", "USDC") {
-		t.Fatal("expected exact symbol match")
-	}
-	if !matchesAssetSymbol("USDC-WETH", "USDC") {
-		t.Fatal("expected split symbol match")
-	}
-}
-
 func TestProtocolsCategoriesAggregation(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
@@ -281,16 +230,6 @@ func TestProtocolsCategoriesDeterministicTieBreak(t *testing.T) {
 	}
 	if cats[1].Name != "zeta" || cats[1].Protocols != 1 {
 		t.Fatalf("unexpected second category: %+v", cats[1])
-	}
-}
-
-func TestProtocolMatcherSupportsKamino(t *testing.T) {
-	got := protocolMatcher("kamino")
-	if len(got) == 0 {
-		t.Fatal("expected kamino protocol matchers")
-	}
-	if got[0] != "kamino" {
-		t.Fatalf("unexpected first matcher: %#v", got)
 	}
 }
 

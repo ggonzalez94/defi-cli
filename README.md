@@ -10,10 +10,12 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 ## Features
 
-- **Lending** — query markets and rates from Aave, Morpho, Kamino (Solana), and more (with DefiLlama fallback).
+- **Lending** — query markets and rates from Aave, Morpho, and Kamino (Solana).
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee Auto) and bridge analytics (volume, chain breakdown).
 - **Swapping** — get on-chain swap quotes (1inch, Uniswap, Jupiter for Solana, Fibrous, Bungee Auto).
+- **Execution IDs** — lend/yield rows include provider-scoped `provider_native_id` plus `provider_native_id_kind` and `provider` for safer cross-provider parsing.
+- **Fee transparency** — bridge quotes include `fee_breakdown` (`lp_fee`, `relayer_fee`, `gas_fee`, `total_fee_usd`) plus consistency checks against amount deltas.
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
@@ -80,7 +82,7 @@ defi swap quote --chain solana --from-asset USDC --to-asset USDT --amount 100000
 defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 1000000 --results-only
 ```
 
-`yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho,kamino`).
+`yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `aave,morpho,kamino`).
 
 Bridge quote examples:
 
@@ -197,6 +199,7 @@ providers:
 - Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
+- Cache writes use SQLite WAL + busy timeout + lock/retry backoff to reduce lock contention in parallel agent runs.
 - If cache initialization fails (path/permission issues), commands continue with cache disabled instead of failing.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
@@ -207,8 +210,10 @@ providers:
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
 - Kamino direct adapter currently supports Solana mainnet (`solana`) only.
 - Solana devnet/testnet and custom Solana CAIP-2 references are rejected; only Solana mainnet is supported.
+- `provider_native_id` is provider-scoped and should be interpreted with `provider_native_id_kind` (`market_id`, `pool_id`, `composite_market_asset`); do not assume it is an on-chain address.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`, `bungee`) are keyless by default.
+- Across can omit native USD fee fields on some routes; in those cases `estimated_fee_usd` falls back to a stable-asset approximation and exact token-denominated fees remain in `fee_breakdown`.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
 - `--chain` normalization supports additional aliases/IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.
@@ -217,7 +222,6 @@ providers:
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
-- For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 
 ## Exit Codes
 
@@ -244,7 +248,7 @@ internal/
   app/runner.go                   # command wiring, routing, cache flow
   providers/                      # external adapters
     aave/ morpho/ kamino/         # direct lending + yield
-    defillama/                    # normalization + fallback + bridge analytics
+    defillama/                    # chain/protocol market data + bridge analytics
     across/ lifi/ bungee/         # bridge quotes
     oneinch/ uniswap/ jupiter/ fibrous/ bungee/  # swap
     types.go                      # provider interfaces
