@@ -14,71 +14,113 @@
     "dark": "/assets/docs-logo-lobster-dark.png"
   },
   "navigation": {
-    "tabs": [
+    "versions": [
       {
-        "tab": "Learn",
-        "groups": [
+        "version": "latest",
+        "tabs": [
           {
-            "group": "Getting Started",
-            "pages": [
-              "index",
-              "installation",
-              "quickstart"
+            "tab": "Learn",
+            "groups": [
+              {
+                "group": "Getting Started",
+                "pages": [
+                  "index",
+                  "installation",
+                  "quickstart"
+                ]
+              },
+              {
+                "group": "Core Concepts",
+                "pages": [
+                  "concepts/output-contract",
+                  "concepts/ids-and-amounts",
+                  "concepts/config-and-cache",
+                  "concepts/providers-and-auth"
+                ]
+              },
+              {
+                "group": "Workflow Guides",
+                "pages": [
+                  "guides/market-discovery",
+                  "guides/lending",
+                  "guides/yield",
+                  "guides/bridge",
+                  "guides/swap"
+                ]
+              }
             ]
           },
           {
-            "group": "Core Concepts",
-            "pages": [
-              "concepts/output-contract",
-              "concepts/ids-and-amounts",
-              "concepts/config-and-cache",
-              "concepts/providers-and-auth"
+            "tab": "Agents",
+            "groups": [
+              {
+                "group": "Automation",
+                "pages": [
+                  "agents/overview",
+                  "agents/schema-driven",
+                  "agents/reliability-patterns"
+                ]
+              }
             ]
           },
           {
-            "group": "Workflow Guides",
-            "pages": [
-              "guides/market-discovery",
-              "guides/lending",
-              "guides/yield",
-              "guides/bridge",
-              "guides/swap"
+            "tab": "Reference",
+            "groups": [
+              {
+                "group": "CLI Commands",
+                "pages": [
+                  "reference/commands-overview",
+                  "reference/market-commands",
+                  "reference/lending-and-yield-commands",
+                  "reference/bridge-and-swap-commands",
+                  "reference/meta-commands"
+                ]
+              },
+              {
+                "group": "Contracts",
+                "pages": [
+                  "reference/envelope-schema",
+                  "reference/exit-codes",
+                  "reference/chain-aliases"
+                ]
+              }
             ]
           }
         ]
       },
       {
-        "tab": "Agents",
-        "groups": [
+        "version": "v0.2.0",
+        "tabs": [
           {
-            "group": "Automation",
-            "pages": [
-              "agents/overview",
-              "agents/schema-driven",
-              "agents/reliability-patterns"
-            ]
-          }
-        ]
-      },
-      {
-        "tab": "Reference",
-        "groups": [
-          {
-            "group": "CLI Commands",
-            "pages": [
-              "reference/commands-overview",
-              "reference/market-commands",
-              "reference/lending-and-yield-commands",
-              "reference/bridge-and-swap-commands",
-              "reference/meta-commands"
+            "tab": "Learn",
+            "groups": [
+              {
+                "group": "Getting Started",
+                "pages": [
+                  "legacy/v0-2-0/index",
+                  "legacy/v0-2-0/installation",
+                  "legacy/v0-2-0/quickstart"
+                ]
+              },
+              {
+                "group": "Core Concepts",
+                "pages": [
+                  "legacy/v0-2-0/providers-and-auth",
+                  "legacy/v0-2-0/automation-contract",
+                  "legacy/v0-2-0/compatibility-notes"
+                ]
+              }
             ]
           },
           {
-            "group": "Contracts",
-            "pages": [
-              "reference/envelope-schema",
-              "reference/exit-codes",
-              "reference/chain-aliases"
+            "tab": "Reference",
+            "groups": [
+              {
+                "group": "CLI Commands",
+                "pages": [
+                  "legacy/v0-2-0/commands-overview"
+                ]
+              }
             ]
           }
         ]

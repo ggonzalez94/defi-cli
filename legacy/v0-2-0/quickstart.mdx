@@ -1,0 +1,31 @@
+---
+title: Quickstart (v0.2.0)
+description: Common v0.2.0 workflows.
+---
+
+```bash
+defi providers list --results-only
+defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
+defi chains assets --chain 1 --asset USDC --results-only
+defi assets resolve --chain base --symbol USDC --results-only
+
+defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
+defi yield opportunities --chain base --asset USDC --limit 20 --results-only
+defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
+
+defi bridge list --limit 10 --results-only
+defi bridge details --bridge layerzero --results-only
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+`yield opportunities --providers` accepts provider names (`defillama,aave,morpho`).
+
+Bridge quote examples:
+
+```bash
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+```

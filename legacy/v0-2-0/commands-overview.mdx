@@ -1,0 +1,47 @@
+---
+title: Commands Overview (v0.2.0)
+description: Top-level command families and common patterns in v0.2.0.
+---
+
+## Top-level commands
+
+- `assets`
+- `bridge`
+- `chains`
+- `lend`
+- `protocols`
+- `providers`
+- `schema`
+- `swap`
+- `version`
+- `yield`
+- `completion`
+
+## Common global flags
+
+- `--json` / `--plain`
+- `--results-only`
+- `--select`
+- `--strict`
+- `--timeout`
+- `--retries`
+- `--max-stale`
+- `--no-stale`
+- `--no-cache`
+- `--enable-commands`
+- `--config`
+
+## Examples
+
+```bash
+defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+For exact flags in your installed binary:
+
+```bash
+defi schema --results-only
+defi schema "swap quote" --results-only
+```

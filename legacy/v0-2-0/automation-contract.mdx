@@ -1,0 +1,32 @@
+---
+title: Automation Contract (v0.2.0)
+description: Stable envelope, exit codes, and integration notes for v0.2.0.
+---
+
+`defi-cli` v0.2.0 was already automation-first:
+
+- Stable JSON envelope (`version`, `success`, `data`, `error`, `warnings`, `meta`)
+- Stable process exit codes
+- Canonical CAIP-2 / CAIP-19 identifiers
+
+## Core exit codes
+
+- `0`: success
+- `1`: internal error
+- `2`: usage/validation error
+- `10`: auth required/failed
+- `11`: rate limited
+- `12`: provider unavailable
+- `13`: unsupported input/provider pair
+- `14`: stale data beyond SLA
+- `15`: partial results in strict mode
+- `16`: blocked by command allowlist
+
+## Schema support
+
+Use schema output to build wrappers and validations:
+
+```bash
+defi schema --results-only
+defi schema "yield opportunities" --results-only
+```

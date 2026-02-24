@@ -107,6 +107,7 @@ README.md                         # user-facing usage + caveats
   1. if adding a feature/command or changing behavior, update Mintlify docs + README + CHANGELOG
   2. if changing output schema/fields/exit codes, update contract/reference docs before merge
   3. if adding providers/chains/assets/aliases/key requirements, update provider/auth and examples docs
+  4. if cutting a release, add/refresh the Mintlify docs version snapshot (for example `vX.Y.Z`) so docs stay aligned with installed CLI versions
 
 ## Quality bar
 

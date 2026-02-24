@@ -1,0 +1,46 @@
+---
+title: Installation (v0.2.0)
+description: Install and configure CLI v0.2.0.
+---
+
+## Quick install (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.2.0
+```
+
+## Go install
+
+```bash
+go install github.com/ggonzalez94/defi-cli/cmd/defi@v0.2.0
+```
+
+## Build from source
+
+```bash
+git clone https://github.com/ggonzalez94/defi-cli.git
+cd defi-cli
+git checkout v0.2.0
+go build -o defi ./cmd/defi
+```
+
+## API keys
+
+In `v0.2.0`, these routes were key-gated by upstream providers:
+
+- `swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
+- `swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `chains assets` -> `DEFI_DEFILLAMA_API_KEY`
+- `bridge list` / `bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+
+```bash
+export DEFI_1INCH_API_KEY=...
+export DEFI_UNISWAP_API_KEY=...
+export DEFI_DEFILLAMA_API_KEY=...
+```

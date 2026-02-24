@@ -22,6 +22,10 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 ## Documentation Site (Mintlify)
 
 This repo includes a dedicated Mintlify docs site (`docs.json` + `.mdx` pages at repo root).
+The site now uses Mintlify versioned navigation:
+
+- `latest` -> current default docs
+- `v0.2.0` -> archived compatibility snapshot for that CLI release
 
 Preview locally:
 
@@ -35,6 +39,8 @@ Validate before publishing:
 npx --yes mint@4.2.378 validate
 npx --yes mint@4.2.378 broken-links
 ```
+
+When adding a new CLI release, add/update a version snapshot in docs navigation so users can select docs that match their installed binary.
 
 ## Install
 

@@ -1,0 +1,31 @@
+---
+title: Providers and Auth (v0.2.0)
+description: Provider capabilities and API key requirements for v0.2.0.
+---
+
+## Provider matrix
+
+| Provider | Capabilities | Key required |
+| --- | --- | --- |
+| `defillama` | chains, protocols, lend/yield fallback, bridge analytics | Route-specific |
+| `aave` | lend, yield | No |
+| `morpho` | lend, yield | No |
+| `across` | bridge quote | No |
+| `lifi` | bridge quote | No |
+| `1inch` | swap quote | Yes |
+| `uniswap` | swap quote | Yes |
+
+## Key-gated routes
+
+- `swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
+- `swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `chains assets` -> `DEFI_DEFILLAMA_API_KEY`
+- `bridge list` -> `DEFI_DEFILLAMA_API_KEY`
+- `bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+
+These requirements were driven by provider APIs, not CLI licensing.
+
+## Routing notes
+
+- `yield --providers` accepted provider names like `defillama,aave,morpho`.
+- Lending and yield paths could route through DefiLlama fallback behavior when direct-provider paths were unavailable.
