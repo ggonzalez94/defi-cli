@@ -8,10 +8,10 @@
     "light": "#14B8A6",
     "dark": "#0F766E"
   },
-  "favicon": "/assets/logo.png",
+  "favicon": "/assets/docs-lobster.png",
   "logo": {
-    "light": "/assets/docs-wordmark-light.svg",
-    "dark": "/assets/docs-wordmark-dark.svg"
+    "light": "/assets/docs-logo-lobster-light.png",
+    "dark": "/assets/docs-logo-lobster-dark.png"
   },
   "navigation": {
     "tabs": [
@@ -38,7 +38,6 @@
           {
             "group": "Workflow Guides",
             "pages": [
-              "guides/examples-cookbook",
               "guides/market-discovery",
               "guides/lending",
               "guides/yield",

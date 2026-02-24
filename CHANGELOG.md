@@ -34,7 +34,7 @@ Format:
 ### Docs
 - Added a dedicated Mintlify documentation site (`docs.json` + structured MDX pages) with setup, guides, automation patterns, and command reference.
 - Added a docs CI workflow that runs `mint validate` and `mint broken-links` on docs-related changes.
-- Added an examples cookbook page with copy-paste workflows and clarified that API key requirements are provider-driven on specific routes.
+- Refined docs IA by removing overlapping cookbook content, clarifying provider-driven API key requirements, and updating header branding with a lobster wordmark logo.
 
 ### Security
 - None yet.
