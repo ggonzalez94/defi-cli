@@ -47,6 +47,9 @@ type Settings struct {
 	OneInchAPIKey   string
 	TaikoMainnetRPC string
 	TaikoHoodiRPC   string
+	JupiterAPIKey   string
+	BungeeAPIKey    string
+	BungeeAffiliate string
 }
 
 type fileConfig struct {
@@ -81,6 +84,16 @@ type fileConfig struct {
 			MainnetRPC string `yaml:"mainnet_rpc"`
 			HoodiRPC   string `yaml:"hoodi_rpc"`
 		} `yaml:"taikoswap"`
+		Jupiter struct {
+			APIKey    string `yaml:"api_key"`
+			APIKeyEnv string `yaml:"api_key_env"`
+		} `yaml:"jupiter"`
+		Bungee struct {
+			APIKey       string `yaml:"api_key"`
+			APIKeyEnv    string `yaml:"api_key_env"`
+			Affiliate    string `yaml:"affiliate"`
+			AffiliateEnv string `yaml:"affiliate_env"`
+		} `yaml:"bungee"`
 	} `yaml:"providers"`
 }
 
@@ -244,6 +257,24 @@ func applyFileConfig(path string, settings *Settings) error {
 	if cfg.Providers.TaikoSwap.HoodiRPC != "" {
 		settings.TaikoHoodiRPC = cfg.Providers.TaikoSwap.HoodiRPC
 	}
+	if cfg.Providers.Jupiter.APIKey != "" {
+		settings.JupiterAPIKey = cfg.Providers.Jupiter.APIKey
+	}
+	if cfg.Providers.Jupiter.APIKeyEnv != "" {
+		settings.JupiterAPIKey = os.Getenv(cfg.Providers.Jupiter.APIKeyEnv)
+	}
+	if cfg.Providers.Bungee.APIKey != "" {
+		settings.BungeeAPIKey = cfg.Providers.Bungee.APIKey
+	}
+	if cfg.Providers.Bungee.APIKeyEnv != "" {
+		settings.BungeeAPIKey = os.Getenv(cfg.Providers.Bungee.APIKeyEnv)
+	}
+	if cfg.Providers.Bungee.Affiliate != "" {
+		settings.BungeeAffiliate = cfg.Providers.Bungee.Affiliate
+	}
+	if cfg.Providers.Bungee.AffiliateEnv != "" {
+		settings.BungeeAffiliate = os.Getenv(cfg.Providers.Bungee.AffiliateEnv)
+	}
 
 	return nil
 }
@@ -308,6 +339,15 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_TAIKO_HOODI_RPC_URL"); v != "" {
 		settings.TaikoHoodiRPC = v
+	}
+	if v := os.Getenv("DEFI_JUPITER_API_KEY"); v != "" {
+		settings.JupiterAPIKey = v
+	}
+	if v := os.Getenv("DEFI_BUNGEE_API_KEY"); v != "" {
+		settings.BungeeAPIKey = v
+	}
+	if v := os.Getenv("DEFI_BUNGEE_AFFILIATE"); v != "" {
+		settings.BungeeAffiliate = v
 	}
 }
 

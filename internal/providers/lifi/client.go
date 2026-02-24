@@ -91,11 +91,14 @@ type quoteStep struct {
 }
 
 func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteRequest) (model.BridgeQuote, error) {
+	if !req.FromChain.IsEVM() || !req.ToChain.IsEVM() {
+		return model.BridgeQuote{}, clierr.New(clierr.CodeUnsupported, "lifi bridge quotes support only EVM chains")
+	}
+
 	fromAmountForGas, err := normalizeOptionalBaseUnits(req.FromAmountForGas)
 	if err != nil {
 		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeUsage, "parse bridge gas reserve amount", err)
 	}
-
 	vals := url.Values{}
 	vals.Set("fromChain", strconv.FormatInt(req.FromChain.EVMChainID, 10))
 	vals.Set("toChain", strconv.FormatInt(req.ToChain.EVMChainID, 10))
@@ -122,21 +125,35 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		return model.BridgeQuote{}, clierr.New(clierr.CodeUnavailable, "lifi quote missing output amount")
 	}
 
-	feeUSD := 0.0
+	protocolFeeUSD := 0.0
 	for _, item := range resp.Estimate.FeeCosts {
 		v, _ := strconv.ParseFloat(item.AmountUSD, 64)
-		feeUSD += v
+		protocolFeeUSD += v
 	}
+	gasFeeUSD := 0.0
 	for _, item := range resp.Estimate.GasCosts {
 		v, _ := strconv.ParseFloat(item.AmountUSD, 64)
-		feeUSD += v
+		gasFeeUSD += v
 	}
+	feeUSD := protocolFeeUSD + gasFeeUSD
 	route := resp.ToolDetails.Name
 	if route == "" {
 		route = fmt.Sprintf("%s->%s", req.FromChain.Slug, req.ToChain.Slug)
 	}
 
 	nativeEstimate := destinationNativeEstimate(resp.IncludedSteps, req.ToChain.EVMChainID)
+	feeBreakdown := &model.BridgeFeeBreakdown{
+		TotalFeeUSD: feeUSD,
+	}
+	if protocolFeeUSD > 0 {
+		feeBreakdown.RelayerFee = &model.FeeAmount{AmountUSD: protocolFeeUSD}
+	}
+	if gasFeeUSD > 0 {
+		feeBreakdown.GasFee = &model.FeeAmount{AmountUSD: gasFeeUSD}
+	}
+	if feeBreakdown.RelayerFee == nil && feeBreakdown.GasFee == nil {
+		feeBreakdown = nil
+	}
 
 	return model.BridgeQuote{
 		Provider:    "lifi",
@@ -157,6 +174,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			Decimals:        req.ToAsset.Decimals,
 		},
 		EstimatedFeeUSD: feeUSD,
+		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  resp.Estimate.ExecutionDuration,
 		Route:           route,
 		SourceURL:       "https://li.quest",

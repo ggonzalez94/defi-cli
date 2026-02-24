@@ -84,3 +84,53 @@ func TestLoadTaikoRPCFromEnv(t *testing.T) {
 		t.Fatalf("unexpected hoodi rpc: %q", settings.TaikoHoodiRPC)
 	}
 }
+
+func TestLoadJupiterAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("DEFI_JUPITER_API_KEY", "jup-key")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.JupiterAPIKey != "jup-key" {
+		t.Fatalf("expected Jupiter API key from env, got %q", settings.JupiterAPIKey)
+	}
+}
+
+func TestLoadBungeeDedicatedSettingsFromEnv(t *testing.T) {
+	t.Setenv("DEFI_BUNGEE_API_KEY", "bungee-key")
+	t.Setenv("DEFI_BUNGEE_AFFILIATE", "affiliate-id")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.BungeeAPIKey != "bungee-key" {
+		t.Fatalf("expected Bungee API key from env, got %q", settings.BungeeAPIKey)
+	}
+	if settings.BungeeAffiliate != "affiliate-id" {
+		t.Fatalf("expected Bungee affiliate from env, got %q", settings.BungeeAffiliate)
+	}
+}
+
+func TestLoadBungeeDedicatedSettingsFromFile(t *testing.T) {
+	tmp := t.TempDir()
+	configPath := filepath.Join(tmp, "config.yaml")
+	if err := os.WriteFile(configPath, []byte(`
+providers:
+  bungee:
+    api_key: file-key
+    affiliate: file-affiliate
+`), 0o644); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	settings, err := Load(GlobalFlags{ConfigPath: configPath})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.BungeeAPIKey != "file-key" {
+		t.Fatalf("expected Bungee API key from file, got %q", settings.BungeeAPIKey)
+	}
+	if settings.BungeeAffiliate != "file-affiliate" {
+		t.Fatalf("expected Bungee affiliate from file, got %q", settings.BungeeAffiliate)
+	}
+}

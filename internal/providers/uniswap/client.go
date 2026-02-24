@@ -56,6 +56,9 @@ type quoteResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	if !req.Chain.IsEVM() {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "uniswap swap quotes support only EVM chains")
+	}
 	if c.apiKey == "" {
 		return model.SwapQuote{}, clierr.New(clierr.CodeAuth, "missing required API key for uniswap (DEFI_UNISWAP_API_KEY)")
 	}

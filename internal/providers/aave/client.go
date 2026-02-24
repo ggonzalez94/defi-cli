@@ -18,6 +18,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 )
 
 const defaultEndpoint = "https://api.v3.aave.com/graphql"
@@ -52,9 +53,11 @@ func (c *Client) Info() model.ProviderInfo {
 const marketsQuery = `query Markets($request: MarketsRequest!) {
   markets(request: $request) {
     name
+    address
     chain { chainId name }
     reserves {
       underlyingToken { address symbol decimals }
+      aToken { address }
       size { usd }
       supplyInfo { apy { value } total { value } }
       borrowInfo { apy { value } total { usd } utilizationRate { value } }
@@ -72,8 +75,9 @@ type marketsResponse struct {
 }
 
 type aaveMarket struct {
-	Name  string `json:"name"`
-	Chain struct {
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Chain   struct {
 		ChainID int64  `json:"chainId"`
 		Name    string `json:"name"`
 	} `json:"chain"`
@@ -86,6 +90,9 @@ type aaveReserve struct {
 		Symbol   string `json:"symbol"`
 		Decimals int    `json:"decimals"`
 	} `json:"underlyingToken"`
+	AToken struct {
+		Address string `json:"address"`
+	} `json:"aToken"`
 	Size struct {
 		USD string `json:"usd"`
 	} `json:"size"`
@@ -136,15 +143,18 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 			}
 
 			out = append(out, model.LendMarket{
-				Protocol:     "aave",
-				ChainID:      chain.CAIP2,
-				AssetID:      canonicalAssetID(asset, r.UnderlyingToken.Address),
-				SupplyAPY:    supplyAPY,
-				BorrowAPY:    borrowAPY,
-				TVLUSD:       tvlUSD,
-				LiquidityUSD: tvlUSD,
-				SourceURL:    "https://app.aave.com",
-				FetchedAt:    c.now().UTC().Format(time.RFC3339),
+				Protocol:             "aave",
+				Provider:             "aave",
+				ChainID:              chain.CAIP2,
+				AssetID:              canonicalAssetID(asset, r.UnderlyingToken.Address),
+				ProviderNativeID:     providerNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
+				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+				SupplyAPY:            supplyAPY,
+				BorrowAPY:            borrowAPY,
+				TVLUSD:               tvlUSD,
+				LiquidityUSD:         tvlUSD,
+				SourceURL:            "https://app.aave.com",
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -184,14 +194,17 @@ func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain,
 				utilization = parseFloat(r.BorrowInfo.UtilizationRate.Value)
 			}
 			out = append(out, model.LendRate{
-				Protocol:    "aave",
-				ChainID:     chain.CAIP2,
-				AssetID:     canonicalAssetID(asset, r.UnderlyingToken.Address),
-				SupplyAPY:   supplyAPY,
-				BorrowAPY:   borrowAPY,
-				Utilization: utilization,
-				SourceURL:   "https://app.aave.com",
-				FetchedAt:   c.now().UTC().Format(time.RFC3339),
+				Protocol:             "aave",
+				Provider:             "aave",
+				ChainID:              chain.CAIP2,
+				AssetID:              canonicalAssetID(asset, r.UnderlyingToken.Address),
+				ProviderNativeID:     providerNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
+				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+				SupplyAPY:            supplyAPY,
+				BorrowAPY:            borrowAPY,
+				Utilization:          utilization,
+				SourceURL:            "https://app.aave.com",
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -214,9 +227,9 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		return nil, err
 	}
 
-	maxRisk := riskOrder(req.MaxRisk)
+	maxRisk := yieldutil.RiskOrder(req.MaxRisk)
 	if maxRisk == 0 {
-		maxRisk = riskOrder("high")
+		maxRisk = yieldutil.RiskOrder("high")
 	}
 
 	out := make([]model.YieldOpportunity, 0)
@@ -238,31 +251,36 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			}
 
 			riskLevel, reasons := riskFromSymbol(r.UnderlyingToken.Symbol)
-			if riskOrder(riskLevel) > maxRisk {
+			if yieldutil.RiskOrder(riskLevel) > maxRisk {
 				continue
 			}
 
 			assetID := canonicalAssetID(req.Asset, r.UnderlyingToken.Address)
-			opportunityID := hashOpportunity("aave", req.Chain.CAIP2, fmt.Sprintf("%s:%s", m.Name, strings.ToLower(r.UnderlyingToken.Address)), assetID)
+			normalizedMarket := normalizeEVMAddress(m.Address)
+			normalizedUnderlying := normalizeEVMAddress(r.UnderlyingToken.Address)
+			nativeID := providerNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
+			opportunityID := hashOpportunity("aave", req.Chain.CAIP2, nativeID, assetID)
 			out = append(out, model.YieldOpportunity{
-				OpportunityID:   opportunityID,
-				Provider:        "aave",
-				Protocol:        "aave",
-				ChainID:         req.Chain.CAIP2,
-				AssetID:         assetID,
-				Type:            "lend",
-				APYBase:         apy,
-				APYReward:       0,
-				APYTotal:        apy,
-				TVLUSD:          tvl,
-				LiquidityUSD:    tvl,
-				LockupDays:      0,
-				WithdrawalTerms: "variable",
-				RiskLevel:       riskLevel,
-				RiskReasons:     reasons,
-				Score:           scoreOpportunity(apy, tvl, tvl, riskLevel),
-				SourceURL:       "https://app.aave.com",
-				FetchedAt:       c.now().UTC().Format(time.RFC3339),
+				OpportunityID:        opportunityID,
+				Provider:             "aave",
+				Protocol:             "aave",
+				ChainID:              req.Chain.CAIP2,
+				AssetID:              assetID,
+				ProviderNativeID:     nativeID,
+				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+				Type:                 "lend",
+				APYBase:              apy,
+				APYReward:            0,
+				APYTotal:             apy,
+				TVLUSD:               tvl,
+				LiquidityUSD:         tvl,
+				LockupDays:           0,
+				WithdrawalTerms:      "variable",
+				RiskLevel:            riskLevel,
+				RiskReasons:          reasons,
+				Score:                yieldutil.ScoreOpportunity(apy, tvl, tvl, riskLevel),
+				SourceURL:            "https://app.aave.com",
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
 			})
 		}
 	}
@@ -270,7 +288,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnavailable, "no aave yield opportunities for requested chain/asset")
 	}
-	sortYield(out, req.SortBy)
+	yieldutil.Sort(out, req.SortBy)
 	if req.Limit <= 0 || req.Limit > len(out) {
 		req.Limit = len(out)
 	}
@@ -278,6 +296,9 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 }
 
 func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket, error) {
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
+	}
 	body, err := json.Marshal(map[string]any{
 		"query": marketsQuery,
 		"variables": map[string]any{
@@ -304,8 +325,9 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket
 }
 
 func matchesReserveAsset(r aaveReserve, asset id.Asset) bool {
-	if strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Address), strings.TrimSpace(asset.Address)) {
-		return true
+	assetAddress := strings.TrimSpace(asset.Address)
+	if assetAddress != "" {
+		return strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Address), assetAddress)
 	}
 	return strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Symbol), strings.TrimSpace(asset.Symbol))
 }
@@ -316,6 +338,18 @@ func canonicalAssetID(asset id.Asset, address string) string {
 		return asset.AssetID
 	}
 	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
+}
+
+func normalizeEVMAddress(address string) string {
+	addr := strings.ToLower(strings.TrimSpace(address))
+	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
+		return ""
+	}
+	return addr
+}
+
+func providerNativeID(provider, chainID, marketAddress, underlyingAddress string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(marketAddress), normalizeEVMAddress(underlyingAddress))
 }
 
 func parseFloat(v string) float64 {
@@ -339,88 +373,8 @@ func riskFromSymbol(symbol string) (string, []string) {
 	}
 }
 
-func riskOrder(v string) int {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "low":
-		return 1
-	case "medium":
-		return 2
-	case "high":
-		return 3
-	case "unknown":
-		return 4
-	default:
-		return 0
-	}
-}
-
-func scoreOpportunity(apyTotal, tvlUSD, liquidityUSD float64, riskLevel string) float64 {
-	apyNorm := clamp(apyTotal, 0, 100) / 100
-	tvlNorm := clamp(math.Log10(tvlUSD+1)/10, 0, 1)
-	liqNorm := 0.0
-	if tvlUSD > 0 {
-		liqNorm = clamp(liquidityUSD/math.Max(tvlUSD, 1), 0, 1)
-	}
-
-	riskPenalty := map[string]float64{
-		"low":     0.10,
-		"medium":  0.30,
-		"high":    0.60,
-		"unknown": 0.45,
-	}[strings.ToLower(strings.TrimSpace(riskLevel))]
-
-	scoreRaw := 0.45*apyNorm + 0.30*tvlNorm + 0.20*liqNorm - 0.25*riskPenalty
-	return math.Round(clamp(scoreRaw, 0, 1)*100*100) / 100
-}
-
-func clamp(v, min, max float64) float64 {
-	if v < min {
-		return min
-	}
-	if v > max {
-		return max
-	}
-	return v
-}
-
 func hashOpportunity(provider, chainID, marketID, assetID string) string {
 	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
 	h := sha1.Sum([]byte(seed))
 	return hex.EncodeToString(h[:])
-}
-
-func sortYield(items []model.YieldOpportunity, sortBy string) {
-	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
-	if sortBy == "" {
-		sortBy = "score"
-	}
-
-	sort.Slice(items, func(i, j int) bool {
-		a, b := items[i], items[j]
-		switch sortBy {
-		case "apy_total":
-			if a.APYTotal != b.APYTotal {
-				return a.APYTotal > b.APYTotal
-			}
-		case "tvl_usd":
-			if a.TVLUSD != b.TVLUSD {
-				return a.TVLUSD > b.TVLUSD
-			}
-		case "liquidity_usd":
-			if a.LiquidityUSD != b.LiquidityUSD {
-				return a.LiquidityUSD > b.LiquidityUSD
-			}
-		default:
-			if a.Score != b.Score {
-				return a.Score > b.Score
-			}
-		}
-		if a.APYTotal != b.APYTotal {
-			return a.APYTotal > b.APYTotal
-		}
-		if a.TVLUSD != b.TVLUSD {
-			return a.TVLUSD > b.TVLUSD
-		}
-		return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
-	})
 }
