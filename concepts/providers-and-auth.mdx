@@ -1,0 +1,45 @@
+---
+title: Providers and Auth
+description: Provider coverage, key requirements, and routing behavior.
+---
+
+## Provider matrix
+
+| Provider | Capabilities | Key required |
+| --- | --- | --- |
+| `defillama` | chains/protocols/lend/yield + bridge analytics | Route-specific |
+| `aave` | lend, yield | No |
+| `morpho` | lend, yield | No |
+| `across` | bridge quote | No |
+| `lifi` | bridge quote | No |
+| `bungee` | bridge quote, swap quote | No (default mode) |
+| `1inch` | swap quote | Yes |
+| `uniswap` | swap quote | Yes |
+| `fibrous` | swap quote | No |
+
+API keys in `defi-cli` are provider constraints, not CLI monetization/auth. If a provider endpoint requires credentials, the corresponding command requires that provider key.
+
+## Key requirements by route
+
+- `swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
+- `swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `chains assets`, `bridge list`, `bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+
+Optional Bungee dedicated backend mode requires:
+
+- `DEFI_BUNGEE_API_KEY`
+- `DEFI_BUNGEE_AFFILIATE`
+
+If either is missing, bungee quotes use public backend.
+
+## Routing and fallback
+
+- Lending routes by `--protocol` (`aave`, `morpho`, `spark`).
+- Direct provider routes may fallback to DefiLlama on selected failures.
+- Fallback is skipped when asset symbol resolution is unsafe.
+
+## Data caveats
+
+- Morpho can surface very high APY in tiny markets. Use `--min-tvl-usd`.
+- Bungee quote support is chain + token dependent.
+- Fibrous currently supports `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled).

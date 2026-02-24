@@ -1,0 +1,37 @@
+---
+title: Meta Commands
+description: Schema, version, and completion command reference.
+---
+
+## `schema [command path]`
+
+Print machine-readable command schema.
+
+```bash
+defi schema --results-only
+defi schema "swap quote" --results-only
+```
+
+## `version`
+
+Print CLI version.
+
+```bash
+defi version
+defi version --long
+```
+
+## `completion`
+
+Generate shell completion scripts.
+
+```bash
+defi completion zsh
+defi completion bash
+defi completion fish
+defi completion powershell
+```
+
+## Cache bypass behavior
+
+`version`, `schema`, and `providers list` bypass cache initialization.

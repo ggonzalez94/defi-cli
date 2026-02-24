@@ -1,0 +1,41 @@
+---
+title: Bridge
+description: Get bridge quotes and bridge analytics with provider-specific behavior.
+---
+
+## Quote routes
+
+Default provider is `across`:
+
+```bash
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+```
+
+Use a specific provider:
+
+```bash
+defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 5000000 --results-only
+```
+
+Amount inputs:
+
+```bash
+defi bridge quote --from 1 --to 8453 --asset USDC --amount-decimal 1.5 --results-only
+```
+
+## Bridge analytics
+
+These commands require `DEFI_DEFILLAMA_API_KEY`:
+
+```bash
+defi bridge list --limit 20 --results-only
+defi bridge details --bridge layerzero --results-only
+```
+
+## Notes
+
+- `--to-asset` is optional; default is source symbol on destination chain.
+- Bungee quote mode is keyless by default.
+- Optional bungee dedicated backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
+- Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only flows.

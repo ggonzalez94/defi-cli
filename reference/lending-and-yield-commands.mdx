@@ -1,0 +1,55 @@
+---
+title: Lending and Yield Commands
+description: Full reference for lend and yield command flags and examples.
+---
+
+## `lend markets`
+
+```bash
+defi lend markets --protocol aave --chain 1 --asset USDC --limit 20 --results-only
+```
+
+Flags:
+
+- `--protocol string` (`aave`, `morpho`, `spark`) required
+- `--chain string` required
+- `--asset string` required
+- `--limit int` (default `20`)
+
+## `lend rates`
+
+```bash
+defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --results-only
+```
+
+Flags are the same as `lend markets`.
+
+## `yield opportunities`
+
+```bash
+defi yield opportunities \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --min-tvl-usd 1000000 \
+  --max-risk medium \
+  --sort score \
+  --limit 20 \
+  --results-only
+```
+
+Flags:
+
+- `--chain string` required
+- `--asset string` required
+- `--limit int` (default `20`)
+- `--min-tvl-usd float` (default `0`)
+- `--min-apy float` (default `0`)
+- `--max-risk string` (`low|medium|high|unknown`, default `high`)
+- `--providers string` (`defillama,aave,morpho`)
+- `--sort string` (`score|apy_total|tvl_usd|liquidity_usd`, default `score`)
+- `--include-incomplete` bool (default `false`)
+
+## Provider-selection note
+
+`--providers` accepts provider names, not protocol categories.

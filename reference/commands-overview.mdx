@@ -1,0 +1,48 @@
+---
+title: Commands Overview
+description: Top-level command map and shared global flags.
+---
+
+## Top-level commands
+
+- `assets`
+- `bridge`
+- `chains`
+- `lend`
+- `protocols`
+- `providers`
+- `schema`
+- `swap`
+- `version`
+- `yield`
+- `completion`
+
+## Global flags
+
+| Flag | Type | Description |
+| --- | --- | --- |
+| `--json` | bool | Output JSON (default) |
+| `--plain` | bool | Output plain text |
+| `--results-only` | bool | Output only data payload on success |
+| `--select` | string | Select fields from payload |
+| `--strict` | bool | Fail on partial results |
+| `--timeout` | duration string | Provider request timeout |
+| `--retries` | int | Retries per provider request |
+| `--max-stale` | duration string | Max stale fallback window |
+| `--no-stale` | bool | Disable stale fallback |
+| `--no-cache` | bool | Disable cache reads/writes |
+| `--enable-commands` | CSV string | Command allowlist policy |
+| `--config` | string | Config file path |
+
+## Usage pattern
+
+```bash
+defi <command> <subcommand> [flags] [global flags]
+```
+
+Examples:
+
+```bash
+defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --timeout 12s --retries 2 --results-only
+```

@@ -1,0 +1,47 @@
+---
+title: Yield
+description: Rank and filter yield opportunities with provider-aware behavior.
+---
+
+## Basic ranking
+
+```bash
+defi yield opportunities --chain 1 --asset USDC --limit 20 --results-only
+```
+
+## Select providers explicitly
+
+```bash
+defi yield opportunities --chain 1 --asset USDC --providers defillama,aave,morpho --limit 20 --results-only
+```
+
+`--providers` expects provider names from `defi providers list`.
+
+## Control risk and quality
+
+```bash
+defi yield opportunities \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --min-tvl-usd 1000000 \
+  --min-apy 1 \
+  --max-risk medium \
+  --sort score \
+  --limit 20 \
+  --results-only
+```
+
+## Incomplete opportunities
+
+```bash
+defi yield opportunities --chain 1 --asset USDC --include-incomplete --results-only
+```
+
+When enabled, warnings may indicate missing APY/TVL and combined-provider counts.
+
+## Important caveats
+
+- APY values are percentage points (`2.3` = `2.3%`).
+- Morpho may produce extreme APY for very small markets; use `--min-tvl-usd`.
+- If an asset symbol cannot be resolved safely, DefiLlama may be skipped.

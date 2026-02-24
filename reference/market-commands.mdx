@@ -1,0 +1,76 @@
+---
+title: Market Commands
+description: Reference for providers, chains, protocols, and assets commands.
+---
+
+## `providers list`
+
+List supported providers and capability auth metadata.
+
+```bash
+defi providers list --results-only
+```
+
+## `chains top`
+
+Top chains by TVL.
+
+```bash
+defi chains top --limit 20 --results-only
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+
+## `chains assets`
+
+Asset-level TVL for a chain.
+
+```bash
+defi chains assets --chain 1 --asset USDC --limit 20 --results-only
+```
+
+Flags:
+
+- `--chain string` (required)
+- `--asset string` (optional filter)
+- `--limit int` (default `20`)
+
+Auth: requires `DEFI_DEFILLAMA_API_KEY`.
+
+Reason: `chains assets` is backed by a DefiLlama endpoint that is provider-gated.
+
+## `protocols top`
+
+Top protocols by TVL.
+
+```bash
+defi protocols top --category lending --limit 20 --results-only
+```
+
+Flags:
+
+- `--category string` (optional)
+- `--limit int` (default `20`)
+
+## `protocols categories`
+
+List categories with protocol counts and TVL.
+
+```bash
+defi protocols categories --results-only
+```
+
+## `assets resolve`
+
+Resolve symbol/address/CAIP-19 to canonical asset metadata.
+
+```bash
+defi assets resolve --chain base --asset USDC --results-only
+```
+
+Flags:
+
+- `--chain string` (required)
+- `--asset string` or `--symbol string` (at least one required)

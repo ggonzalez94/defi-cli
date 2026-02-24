@@ -1,0 +1,36 @@
+---
+title: Reliability Patterns
+description: Error handling, retries, stale policy, and strict-mode strategies for production agents.
+---
+
+## Error-first flow
+
+When command exit code is non-zero:
+
+1. Parse error envelope from stderr.
+2. Branch on `error.code`.
+3. Decide retry/fallback/abort.
+
+## Core retry and fallback guidance
+
+- Retry on `11` (`rate_limited`) and `12` (`provider_unavailable`) with backoff.
+- Do not retry on `2` (`usage_error`) until input is corrected.
+- Retry on `10` (`auth_error`) only after key provisioning.
+- Treat `14` (`stale_data`) as SLO breach.
+
+## Cache/staleness strategy
+
+- Default cache mode is usually best for interactive and agent loops.
+- Use `--no-stale` for strict freshness.
+- Use `--max-stale` to control tolerated stale window on temporary provider failures.
+
+## Strict-mode strategy
+
+- Use `--strict` when partial provider aggregation is unacceptable.
+- In strict mode, partial results fail with code `15`.
+
+## Suggested wrapper behavior
+
+- Always capture stdout and stderr separately.
+- Treat stdout as success payload only when exit code is `0`.
+- Persist `meta.request_id` for trace correlation.

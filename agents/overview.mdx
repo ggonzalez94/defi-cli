@@ -1,0 +1,41 @@
+---
+title: Agent Overview
+description: Build robust agent workflows on top of deterministic CLI contracts.
+---
+
+## Why agents like defi-cli
+
+- Stable envelope schema (`version`, `success`, `error`, `meta`)
+- Stable exit code mapping
+- Canonical chain and asset IDs
+- Deterministic `--select` projections
+- Machine-readable command schema (`defi schema`)
+
+## Recommended request pattern
+
+1. Resolve all chain/asset inputs (`assets resolve` where useful).
+2. Execute command with `--json --results-only` for success payloads.
+3. Handle non-zero exit codes using `error.code` and `error.type`.
+4. Persist canonical IDs and base-unit amounts.
+
+## Suggested defaults
+
+```bash
+--timeout 12s --retries 2 --max-stale 5m
+```
+
+For strict workflows:
+
+```bash
+--strict --no-stale
+```
+
+## Command allowlist mode
+
+Use `--enable-commands` to constrain executable commands in agent sandboxes.
+
+```bash
+defi --enable-commands "providers list,yield opportunities" providers list --results-only
+```
+
+If a command is blocked, exit code `16` (`command_blocked`) is returned.

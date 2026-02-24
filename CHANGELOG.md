@@ -32,7 +32,9 @@ Format:
 - Disabled Fibrous `monad` routing while Monad route responses are unstable.
 
 ### Docs
-- None yet.
+- Added a dedicated Mintlify documentation site (`docs.json` + structured MDX pages) with setup, guides, automation patterns, and command reference.
+- Added a docs CI workflow that runs `mint validate` and `mint broken-links` on docs-related changes.
+- Added an examples cookbook page with copy-paste workflows and clarified that API key requirements are provider-driven on specific routes.
 
 ### Security
 - None yet.

@@ -1,0 +1,35 @@
+name: docs
+
+on:
+  push:
+    paths:
+      - 'docs.json'
+      - '**/*.mdx'
+      - 'README.md'
+      - 'AGENTS.md'
+      - '.github/workflows/docs.yml'
+  pull_request:
+    paths:
+      - 'docs.json'
+      - '**/*.mdx'
+      - 'README.md'
+      - 'AGENTS.md'
+      - '.github/workflows/docs.yml'
+  workflow_dispatch:
+
+jobs:
+  mintlify-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Validate docs build
+        run: npx --yes mint validate
+
+      - name: Check broken links
+        run: npx --yes mint broken-links

@@ -17,6 +17,23 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
+## Documentation Site (Mintlify)
+
+This repo includes a dedicated Mintlify docs site (`docs.json` + `.mdx` pages at repo root).
+
+Preview locally:
+
+```bash
+npx --yes mint dev --no-open
+```
+
+Validate before publishing:
+
+```bash
+npx --yes mint validate
+npx --yes mint broken-links
+```
+
 ## Install
 
 ### 1) Quick install (macOS/Linux)

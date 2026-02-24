@@ -1,0 +1,66 @@
+---
+title: Output Contract
+description: Understand the stable response envelope and rendering semantics.
+---
+
+`defi-cli` always emits a stable envelope in JSON mode unless `--results-only` is used on successful commands.
+
+## Success envelope
+
+```json
+{
+  "version": "v1",
+  "success": true,
+  "data": [...],
+  "error": null,
+  "warnings": [],
+  "meta": {
+    "request_id": "...",
+    "timestamp": "2026-02-24T03:00:10Z",
+    "command": "lend markets",
+    "providers": [{"name": "aave", "status": "ok", "latency_ms": 372}],
+    "cache": {"status": "miss", "age_ms": 0, "stale": false},
+    "partial": false
+  }
+}
+```
+
+## Error envelope behavior
+
+Errors always return the full envelope, even if you pass `--results-only` or `--select`.
+
+```json
+{
+  "version": "v1",
+  "success": false,
+  "data": [],
+  "error": {
+    "code": 10,
+    "type": "auth_error",
+    "message": "missing required API key for 1inch (DEFI_1INCH_API_KEY)"
+  },
+  "meta": {
+    "command": "swap quote",
+    "cache": {"status": "bypass", "age_ms": 0, "stale": false},
+    "partial": false
+  }
+}
+```
+
+## Rendering flags
+
+| Flag | Behavior |
+| --- | --- |
+| `--json` | JSON output (default) |
+| `--plain` | key=value lines |
+| `--results-only` | output only `data` on success |
+| `--select a,b,c` | project selected fields from `data` |
+
+## Stability guarantees
+
+- `error.code` maps to stable process exit codes
+- `meta.command` uses normalized command paths
+- provider status values are stable (`ok`, `auth_error`, `rate_limited`, `unavailable`, `error`)
+- APY values are percentage points (`2.3` means `2.3%`)
+
+See [Envelope Schema](/reference/envelope-schema) and [Exit Codes](/reference/exit-codes).

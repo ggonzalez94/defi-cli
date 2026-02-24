@@ -1,0 +1,73 @@
+---
+title: Examples Cookbook
+description: High-signal copy-paste examples for common human and agent workflows.
+---
+
+These examples are intentionally concise and automation-friendly.
+
+## Market scan in one minute
+
+```bash
+defi chains top --limit 10 --results-only --select rank,chain,chain_id,tvl_usd
+defi protocols top --category lending --limit 10 --results-only
+```
+
+## Resolve canonical IDs before storing plans
+
+```bash
+defi assets resolve --chain base --asset USDC --results-only
+defi assets resolve --chain hyperevm --asset WHYPE --results-only
+```
+
+## Safe yield ranking for production filters
+
+```bash
+defi yield opportunities \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --min-tvl-usd 1000000 \
+  --max-risk medium \
+  --sort score \
+  --limit 20 \
+  --results-only
+```
+
+## Bridge quote with base units
+
+```bash
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+```
+
+## Swap quote with decimal amount
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount-decimal 2.5 --results-only
+```
+
+## Schema-driven command discovery
+
+```bash
+defi schema --results-only
+defi schema "swap quote" --results-only
+```
+
+## Strict mode for no-partial workflows
+
+```bash
+defi yield opportunities --chain 1 --asset USDC --strict --results-only
+```
+
+## Policy-constrained execution for agents
+
+```bash
+defi --enable-commands "providers list,yield opportunities" providers list --results-only
+```
+
+## API key failure example (provider-gated route)
+
+```bash
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+If `DEFI_1INCH_API_KEY` is missing, the command fails with exit code `10` (`auth_error`) because `1inch` requires provider credentials.

@@ -1,0 +1,44 @@
+---
+title: Envelope Schema
+description: Field-level contract for success and error responses.
+---
+
+## Envelope fields
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `version` | string | Envelope version (`v1`) |
+| `success` | bool | `true` on success, `false` on error |
+| `data` | any | Command payload (array/object depending on command) |
+| `error` | object or `null` | Present on failures |
+| `warnings` | string[] | Optional warnings |
+| `meta` | object | Execution metadata |
+
+## `meta`
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `request_id` | string | Unique per invocation |
+| `timestamp` | RFC3339 timestamp | UTC |
+| `command` | string | Normalized command path |
+| `providers` | array | Provider statuses and latencies |
+| `cache` | object | Cache status metadata |
+| `partial` | bool | Indicates partial aggregation |
+
+## `cache`
+
+| Field | Type | Values |
+| --- | --- | --- |
+| `status` | string | `bypass`, `miss`, `hit`, `write` |
+| `age_ms` | int | Age of cached response in milliseconds |
+| `stale` | bool | Whether served cache entry is stale |
+
+## Key payload models
+
+- Market commands: `ChainTVL`, `ChainAssetTVL`, `ProtocolTVL`, `ProtocolCategory`, `AssetResolution`
+- Lending: `LendMarket`, `LendRate`
+- Yield: `YieldOpportunity`
+- Bridge: `BridgeQuote`, `BridgeSummary`, `BridgeDetails`
+- Swap: `SwapQuote`
+
+For practical examples, see [Quickstart](/quickstart).

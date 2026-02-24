@@ -1,0 +1,36 @@
+---
+title: Swap
+description: Get swap quotes across 1inch, Uniswap, Fibrous, and Bungee.
+---
+
+## 1inch (key required)
+
+```bash
+export DEFI_1INCH_API_KEY=...
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+## Uniswap (key required)
+
+```bash
+export DEFI_UNISWAP_API_KEY=...
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+## Fibrous (keyless)
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+```
+
+## Bungee Auto (keyless default)
+
+```bash
+defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
+```
+
+## Notes
+
+- `--amount` and `--amount-decimal` are mutually exclusive.
+- Output always includes normalized `input_amount` and `estimated_out` with base and decimal forms.
+- Fibrous currently supports `base`, `hyperevm`, and `citrea`.

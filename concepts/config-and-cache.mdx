@@ -1,0 +1,60 @@
+---
+title: Config and Cache
+description: Configure precedence, retries/timeouts, and stale fallback semantics.
+---
+
+## Config precedence
+
+`flags > env > config file > defaults`
+
+Default config path:
+
+```text
+${XDG_CONFIG_HOME:-~/.config}/defi/config.yaml
+```
+
+Minimal config example:
+
+```yaml
+output: json
+strict: false
+timeout: 10s
+retries: 2
+cache:
+  enabled: true
+  max_stale: 5m
+```
+
+## Useful env vars
+
+| Variable | Purpose |
+| --- | --- |
+| `DEFI_OUTPUT` | `json` or `plain` |
+| `DEFI_TIMEOUT` | Provider timeout |
+| `DEFI_RETRIES` | Retries per request |
+| `DEFI_MAX_STALE` | Stale fallback window |
+| `DEFI_NO_STALE` | Disable stale fallback |
+| `DEFI_NO_CACHE` | Disable cache |
+| `DEFI_CACHE_PATH` | Cache DB path |
+| `DEFI_CACHE_LOCK_PATH` | Cache lock path |
+
+## Cache behavior
+
+- Fresh cache hits (`age <= ttl`) return immediately.
+- After TTL expires, CLI refetches providers.
+- Stale data is served only when providers fail temporarily (`unavailable` or `rate_limited`) and within `max_stale`.
+- If cache init fails (path/permissions), commands continue with cache disabled.
+- Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+
+## Command TTLs
+
+| Command | TTL |
+| --- | --- |
+| `chains top`, `chains assets`, `protocols top`, `protocols categories` | `5m` |
+| `lend markets`, `yield opportunities`, `bridge list`, `bridge details` | `60s` |
+| `lend rates` | `30s` |
+| `bridge quote`, `swap quote` | `15s` |
+
+## Strict mode
+
+If any selected provider fails and partial results occur, `--strict` returns exit code `15` (`partial_results`).

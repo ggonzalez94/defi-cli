@@ -1,0 +1,36 @@
+---
+title: Chain Aliases
+description: Supported chain alias normalization for chain-related flags.
+---
+
+`--chain`, `--from`, and `--to` normalize aliases, numeric IDs, and CAIP-2 values.
+
+## Common aliases
+
+| Canonical chain ID | Example aliases |
+| --- | --- |
+| `eip155:1` | `ethereum`, `mainnet`, `1` |
+| `eip155:10` | `optimism`, `op mainnet`, `10` |
+| `eip155:56` | `bsc`, `56` |
+| `eip155:100` | `gnosis`, `xdai`, `100` |
+| `eip155:137` | `polygon`, `137` |
+| `eip155:8453` | `base`, `8453` |
+| `eip155:42161` | `arbitrum`, `42161` |
+| `eip155:43114` | `avalanche`, `43114` |
+| `eip155:5000` | `mantle`, `5000` |
+| `eip155:4326` | `megaeth`, `mega eth`, `mega-eth`, `4326` |
+| `eip155:57073` | `ink`, `57073` |
+| `eip155:534352` | `scroll`, `534352` |
+| `eip155:80094` | `berachain`, `80094` |
+| `eip155:81457` | `blast`, `81457` |
+| `eip155:252` | `fraxtal`, `252` |
+| `eip155:480` | `worldchain`, `world chain`, `world-chain`, `480` |
+| `eip155:42220` | `celo`, `42220` |
+| `eip155:167000` | `taiko`, `taiko alethia`, `taiko-alethia`, `167000` |
+| `eip155:324` | `zksync`, `zksync era`, `zksync-era`, `324` |
+| `eip155:999` | `hyperevm`, `hyper evm`, `hyper-evm`, `999` |
+| `eip155:143` | `monad`, `143` |
+| `eip155:4114` | `citrea`, `4114` |
+| `eip155:146` | `sonic`, `146` |
+
+If a numeric EVM chain ID is unknown, `defi-cli` still normalizes it to `eip155:<id>`.
