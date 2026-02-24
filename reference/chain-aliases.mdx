@@ -9,6 +9,7 @@ description: Supported chain alias normalization for chain-related flags.
 
 | Canonical chain ID | Example aliases |
 | --- | --- |
+| `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp` | `solana`, `solana-mainnet`, `mainnet-beta` |
 | `eip155:1` | `ethereum`, `mainnet`, `1` |
 | `eip155:10` | `optimism`, `op mainnet`, `10` |
 | `eip155:56` | `bsc`, `56` |
@@ -34,3 +35,5 @@ description: Supported chain alias normalization for chain-related flags.
 | `eip155:146` | `sonic`, `146` |
 
 If a numeric EVM chain ID is unknown, `defi-cli` still normalizes it to `eip155:<id>`.
+
+Solana support is mainnet-only. `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are intentionally rejected.

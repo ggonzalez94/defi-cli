@@ -7,11 +7,12 @@ description: Full reference for lend and yield command flags and examples.
 
 ```bash
 defi lend markets --protocol aave --chain 1 --asset USDC --limit 20 --results-only
+defi lend markets --protocol kamino --chain solana --asset USDC --limit 20 --results-only
 ```
 
 Flags:
 
-- `--protocol string` (`aave`, `morpho`, `spark`) required
+- `--protocol string` (`aave`, `morpho`, `kamino`) required
 - `--chain string` required
 - `--asset string` required
 - `--limit int` (default `20`)
@@ -20,6 +21,7 @@ Flags:
 
 ```bash
 defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --results-only
+defi lend rates --protocol kamino --chain solana --asset USDC --limit 20 --results-only
 ```
 
 Flags are the same as `lend markets`.
@@ -46,10 +48,14 @@ Flags:
 - `--min-tvl-usd float` (default `0`)
 - `--min-apy float` (default `0`)
 - `--max-risk string` (`low|medium|high|unknown`, default `high`)
-- `--providers string` (`defillama,aave,morpho`)
+- `--providers string` (`aave,morpho,kamino`)
 - `--sort string` (`score|apy_total|tvl_usd|liquidity_usd`, default `score`)
 - `--include-incomplete` bool (default `false`)
 
 ## Provider-selection note
 
 `--providers` accepts provider names, not protocol categories.
+
+## Routing note
+
+`lend` and `yield` routes are direct-provider only (`aave`, `morpho`, `kamino`).

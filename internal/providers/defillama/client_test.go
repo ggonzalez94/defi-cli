@@ -2,7 +2,6 @@ package defillama
 
 import (
 	"context"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -14,6 +13,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 )
 
 func TestChainsTopSortsDescending(t *testing.T) {
@@ -134,64 +134,14 @@ func TestYieldScoreAndSortDeterministic(t *testing.T) {
 		{OpportunityID: "b", Score: 50, APYTotal: 10, TVLUSD: 100},
 		{OpportunityID: "a", Score: 50, APYTotal: 10, TVLUSD: 100},
 	}
-	sortYield(opps, "score")
+	yieldutil.Sort(opps, "score")
 	if opps[0].OpportunityID != "a" {
 		t.Fatalf("expected lexicographic tie-break, got %+v", opps)
 	}
 
-	score := scoreOpportunity(20, 1_000_000, 700_000, "low")
+	score := yieldutil.ScoreOpportunity(20, 1_000_000, 700_000, "low")
 	if score <= 0 || score > 100 {
 		t.Fatalf("score out of range: %f", score)
-	}
-}
-
-func TestYieldOpportunitiesFilters(t *testing.T) {
-	mux := http.NewServeMux()
-	mux.HandleFunc("/pools", func(w http.ResponseWriter, r *http.Request) {
-		_, _ = w.Write([]byte(`{
-			"status":"success",
-			"data":[
-				{"pool":"p1","chain":"Base","project":"aave-v3","symbol":"USDC","apy":5,"apyBase":4,"apyReward":1,"tvlUsd":1000000,"ilRisk":"no","stablecoin":true},
-				{"pool":"p2","chain":"Base","project":"curve","symbol":"USDC","apy":2,"tvlUsd":10000,"ilRisk":"yes","stablecoin":false}
-			]
-		}`))
-	})
-	srv := httptest.NewServer(mux)
-	defer srv.Close()
-
-	chain, _ := id.ParseChain("base")
-	asset, _ := id.ParseAsset("USDC", chain)
-	c := New(httpx.New(2*time.Second, 0), "")
-	c.yieldsBase = srv.URL
-	got, err := c.YieldOpportunities(context.Background(), providers.YieldRequest{
-		Chain:     chain,
-		Asset:     asset,
-		Limit:     20,
-		MinTVLUSD: 50_000,
-		MinAPY:    0,
-		MaxRisk:   "high",
-		SortBy:    "score",
-	})
-	if err != nil {
-		t.Fatalf("YieldOpportunities failed: %v", err)
-	}
-	if len(got) != 1 {
-		t.Fatalf("expected one result, got %d (%v)", len(got), fmt.Sprintf("%+v", got))
-	}
-	if got[0].Protocol != "aave-v3" {
-		t.Fatalf("unexpected protocol: %+v", got[0])
-	}
-}
-
-func TestMatchesAssetSymbolRequiresExpectedSymbol(t *testing.T) {
-	if matchesAssetSymbol("USDC", "") {
-		t.Fatal("expected empty symbol filter to be rejected")
-	}
-	if !matchesAssetSymbol("USDC", "USDC") {
-		t.Fatal("expected exact symbol match")
-	}
-	if !matchesAssetSymbol("USDC-WETH", "USDC") {
-		t.Fatal("expected split symbol match")
 	}
 }
 

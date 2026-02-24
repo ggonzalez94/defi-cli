@@ -12,6 +12,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/config"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/version"
 	"github.com/spf13/cobra"
 )
@@ -39,6 +40,68 @@ func TestSplitCSV(t *testing.T) {
 	items := splitCSV("Aave, morpho ,")
 	if len(items) != 2 || items[0] != "aave" || items[1] != "morpho" {
 		t.Fatalf("unexpected split: %#v", items)
+	}
+}
+
+func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
+	state := &runtimeState{
+		yieldProviders: map[string]providers.YieldProvider{
+			"aave":   nil,
+			"morpho": nil,
+			"kamino": nil,
+		},
+	}
+
+	tests := []struct {
+		name       string
+		chainInput string
+		want       []string
+	}{
+		{name: "evm", chainInput: "base", want: []string{"aave", "morpho"}},
+		{name: "solana", chainInput: "solana", want: []string{"kamino"}},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			chain, err := id.ParseChain(tc.chainInput)
+			if err != nil {
+				t.Fatalf("parse chain: %v", err)
+			}
+			got, err := state.selectYieldProviders(nil, chain)
+			if err != nil {
+				t.Fatalf("selectYieldProviders failed: %v", err)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("expected %v providers, got %v", tc.want, got)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("expected providers %v, got %v", tc.want, got)
+				}
+			}
+		})
+	}
+}
+
+func TestSelectYieldProvidersExplicitFilterBypassesChainDefaults(t *testing.T) {
+	state := &runtimeState{
+		yieldProviders: map[string]providers.YieldProvider{
+			"aave":   nil,
+			"kamino": nil,
+		},
+	}
+	chain, err := id.ParseChain("base")
+	if err != nil {
+		t.Fatalf("parse chain: %v", err)
+	}
+
+	got, err := state.selectYieldProviders([]string{"kamino"}, chain)
+	if err != nil {
+		t.Fatalf("selectYieldProviders failed: %v", err)
+	}
+	if len(got) != 1 || got[0] != "kamino" {
+		t.Fatalf("expected explicit provider selection to be preserved, got %v", got)
 	}
 }
 
@@ -91,6 +154,16 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
 		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
+	}
+	jupiterCount := 0
+	for _, item := range out {
+		name, _ := item["name"].(string)
+		if strings.EqualFold(name, "jupiter") {
+			jupiterCount++
+		}
+	}
+	if jupiterCount != 1 {
+		t.Fatalf("expected exactly one jupiter provider entry, got %d", jupiterCount)
 	}
 }
 
@@ -451,6 +524,96 @@ func TestRunnerBridgeDetailsRequiresBridgeFlag(t *testing.T) {
 	}
 }
 
+func TestSwapDefaultsToJupiterForSolana(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	jupiter := &fakeSwapProvider{name: "jupiter"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch":   oneinch,
+			"jupiter": jupiter,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "solana",
+		"--from-asset", "USDC",
+		"--to-asset", "USDT",
+		"--amount", "1000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+	if jupiter.calls != 1 {
+		t.Fatalf("expected jupiter provider call, got %d", jupiter.calls)
+	}
+	if oneinch.calls != 0 {
+		t.Fatalf("expected no 1inch calls, got %d", oneinch.calls)
+	}
+}
+
+func TestSwapDefaultsToOneInchForEVM(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	jupiter := &fakeSwapProvider{name: "jupiter"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch":   oneinch,
+			"jupiter": jupiter,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "base",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--amount", "1000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+	if oneinch.calls != 1 {
+		t.Fatalf("expected 1inch provider call, got %d", oneinch.calls)
+	}
+	if jupiter.calls != 0 {
+		t.Fatalf("expected no jupiter calls, got %d", jupiter.calls)
+	}
+}
+
 type fakeMarketProvider struct {
 	categories          []model.ProtocolCategory
 	chainAssets         []model.ChainAssetTVL
@@ -486,6 +649,41 @@ func (f fakeMarketProvider) ProtocolsTop(context.Context, string, int) ([]model.
 
 func (f fakeMarketProvider) ProtocolsCategories(context.Context) ([]model.ProtocolCategory, error) {
 	return f.categories, nil
+}
+
+type fakeSwapProvider struct {
+	name  string
+	calls int
+}
+
+func (f *fakeSwapProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "swap",
+		RequiresKey:  false,
+		Capabilities: []string{"swap.quote"},
+	}
+}
+
+func (f *fakeSwapProvider) QuoteSwap(_ context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	f.calls++
+	return model.SwapQuote{
+		Provider:    f.name,
+		ChainID:     req.Chain.CAIP2,
+		FromAssetID: req.FromAsset.AssetID,
+		ToAssetID:   req.ToAsset.AssetID,
+		InputAmount: model.AmountInfo{
+			AmountBaseUnits: req.AmountBaseUnits,
+			AmountDecimal:   req.AmountDecimal,
+			Decimals:        req.FromAsset.Decimals,
+		},
+		EstimatedOut: model.AmountInfo{
+			AmountBaseUnits: req.AmountBaseUnits,
+			AmountDecimal:   req.AmountDecimal,
+			Decimals:        req.ToAsset.Decimals,
+		},
+		Route: "test",
+	}, nil
 }
 
 func setUnopenableCacheEnv(t *testing.T) {

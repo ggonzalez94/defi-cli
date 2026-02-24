@@ -10,6 +10,7 @@ description: Use canonical chain/asset IDs and normalized amount fields.
 - CAIP-2: `eip155:1`
 - Numeric EVM chain ID: `1`
 - Alias: `ethereum`, `base`, `hyperevm`, `megaeth`, `gnosis`, `taiko`, etc.
+- Solana mainnet alias/CAIP-2: `solana` or `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`
 
 `defi-cli` normalizes these to canonical CAIP-2 IDs in output.
 
@@ -20,6 +21,7 @@ Asset inputs accept:
 - Symbol: `USDC`
 - Token address: `0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48`
 - CAIP-19: `eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48`
+- Solana CAIP-19: `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v`
 
 Output always returns canonical CAIP-19 in fields like `asset_id`, `from_asset_id`, `to_asset_id`.
 
@@ -45,7 +47,8 @@ Output includes both normalized forms:
 
 - Symbol parsing depends on the local bootstrap token registry.
 - On chains without symbol coverage, pass address or CAIP-19 directly.
-- For `lend` and `yield`, unresolved symbols skip DefiLlama symbol matching to avoid unsafe broad matches.
+- Solana support is mainnet-only (`solana` / `solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp`).
+- Solana devnet/testnet aliases and custom Solana CAIP-2 references are rejected.
 - MegaETH bootstrap symbol support currently includes `MEGA`, `WETH`, and `USDT` (`USDT` resolves to the chain `USDT0` contract).
 
 See [Chain Aliases](/reference/chain-aliases).

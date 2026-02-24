@@ -43,6 +43,7 @@ cache:
 - Fresh cache hits (`age <= ttl`) return immediately.
 - After TTL expires, CLI refetches providers.
 - Stale data is served only when providers fail temporarily (`unavailable` or `rate_limited`) and within `max_stale`.
+- Cache writes use SQLite WAL + busy timeout + lock/backoff retries to reduce lock contention in parallel runs.
 - If cache init fails (path/permissions), commands continue with cache disabled.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
 

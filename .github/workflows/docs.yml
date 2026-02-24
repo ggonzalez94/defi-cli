@@ -5,6 +5,7 @@ on:
     paths:
       - 'docs.json'
       - '**/*.mdx'
+      - 'assets/**'
       - 'README.md'
       - 'AGENTS.md'
       - '.github/workflows/docs.yml'
@@ -12,6 +13,7 @@ on:
     paths:
       - 'docs.json'
       - '**/*.mdx'
+      - 'assets/**'
       - 'README.md'
       - 'AGENTS.md'
       - '.github/workflows/docs.yml'
@@ -21,6 +23,8 @@ jobs:
   mintlify-checks:
     runs-on: ubuntu-latest
     timeout-minutes: 15
+    env:
+      MINT_CLI_VERSION: '4.2.378'
     steps:
       - uses: actions/checkout@v4
 
@@ -29,7 +33,7 @@ jobs:
           node-version: '22'
 
       - name: Validate docs build
-        run: npx --yes mint validate
+        run: npx --yes mint@${MINT_CLI_VERSION} validate
 
       - name: Check broken links
-        run: npx --yes mint broken-links
+        run: npx --yes mint@${MINT_CLI_VERSION} broken-links

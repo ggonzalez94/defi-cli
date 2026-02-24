@@ -22,3 +22,16 @@ func TestQuoteSwapRequiresAPIKey(t *testing.T) {
 		t.Fatal("expected missing API key error")
 	}
 }
+
+func TestQuoteSwapRejectsNonEVMChain(t *testing.T) {
+	chain, _ := id.ParseChain("solana")
+	assetIn, _ := id.ParseAsset("USDC", chain)
+	assetOut, _ := id.ParseAsset("USDT", chain)
+	c := New(httpx.New(1*time.Second, 0), "")
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain: chain, FromAsset: assetIn, ToAsset: assetOut, AmountBaseUnits: "1000000", AmountDecimal: "1",
+	})
+	if err == nil {
+		t.Fatal("expected unsupported chain error")
+	}
+}

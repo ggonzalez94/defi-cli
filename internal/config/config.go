@@ -43,6 +43,7 @@ type Settings struct {
 	DefiLlamaAPIKey string
 	UniswapAPIKey   string
 	OneInchAPIKey   string
+	JupiterAPIKey   string
 	BungeeAPIKey    string
 	BungeeAffiliate string
 }
@@ -71,6 +72,10 @@ type fileConfig struct {
 			APIKey    string `yaml:"api_key"`
 			APIKeyEnv string `yaml:"api_key_env"`
 		} `yaml:"oneinch"`
+		Jupiter struct {
+			APIKey    string `yaml:"api_key"`
+			APIKeyEnv string `yaml:"api_key_env"`
+		} `yaml:"jupiter"`
 		Bungee struct {
 			APIKey       string `yaml:"api_key"`
 			APIKeyEnv    string `yaml:"api_key_env"`
@@ -225,6 +230,12 @@ func applyFileConfig(path string, settings *Settings) error {
 	if cfg.Providers.OneInch.APIKeyEnv != "" {
 		settings.OneInchAPIKey = os.Getenv(cfg.Providers.OneInch.APIKeyEnv)
 	}
+	if cfg.Providers.Jupiter.APIKey != "" {
+		settings.JupiterAPIKey = cfg.Providers.Jupiter.APIKey
+	}
+	if cfg.Providers.Jupiter.APIKeyEnv != "" {
+		settings.JupiterAPIKey = os.Getenv(cfg.Providers.Jupiter.APIKeyEnv)
+	}
 	if cfg.Providers.Bungee.APIKey != "" {
 		settings.BungeeAPIKey = cfg.Providers.Bungee.APIKey
 	}
@@ -289,6 +300,9 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_1INCH_API_KEY"); v != "" {
 		settings.OneInchAPIKey = v
+	}
+	if v := os.Getenv("DEFI_JUPITER_API_KEY"); v != "" {
+		settings.JupiterAPIKey = v
 	}
 	if v := os.Getenv("DEFI_BUNGEE_API_KEY"); v != "" {
 		settings.BungeeAPIKey = v

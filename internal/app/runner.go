@@ -27,6 +27,8 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/bungee"
 	"github.com/ggonzalez94/defi-cli/internal/providers/defillama"
 	"github.com/ggonzalez94/defi-cli/internal/providers/fibrous"
+	"github.com/ggonzalez94/defi-cli/internal/providers/jupiter"
+	"github.com/ggonzalez94/defi-cli/internal/providers/kamino"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
 	"github.com/ggonzalez94/defi-cli/internal/providers/oneinch"
@@ -65,15 +67,16 @@ type runtimeState struct {
 	lastProviders []model.ProviderStatus
 	lastPartial   bool
 
-	marketProvider         providers.MarketDataProvider
-	defaultLendingProvider providers.LendingProvider
-	lendingProviders       map[string]providers.LendingProvider
-	yieldProviders         map[string]providers.YieldProvider
-	bridgeProviders        map[string]providers.BridgeProvider
-	bridgeDataProviders    map[string]providers.BridgeDataProvider
-	swapProviders          map[string]providers.SwapProvider
-	providerInfos          []model.ProviderInfo
+	marketProvider      providers.MarketDataProvider
+	lendingProviders    map[string]providers.LendingProvider
+	yieldProviders      map[string]providers.YieldProvider
+	bridgeProviders     map[string]providers.BridgeProvider
+	bridgeDataProviders map[string]providers.BridgeDataProvider
+	swapProviders       map[string]providers.SwapProvider
+	providerInfos       []model.ProviderInfo
 }
+
+const cachePayloadSchemaVersion = "v2"
 
 func (r *Runner) Run(args []string) int {
 	state := &runtimeState{runner: r}
@@ -127,17 +130,18 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				llama := defillama.New(httpClient, settings.DefiLlamaAPIKey)
 				aaveProvider := aave.New(httpClient)
 				morphoProvider := morpho.New(httpClient)
+				kaminoProvider := kamino.New(httpClient)
+				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
 				s.marketProvider = llama
-				s.defaultLendingProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
 					"morpho": morphoProvider,
-					"spark":  llama,
+					"kamino": kaminoProvider,
 				}
 				s.yieldProviders = map[string]providers.YieldProvider{
-					"defillama": llama,
-					"aave":      aaveProvider,
-					"morpho":    morphoProvider,
+					"aave":   aaveProvider,
+					"morpho": morphoProvider,
+					"kamino": kaminoProvider,
 				}
 
 				s.bridgeProviders = map[string]providers.BridgeProvider{
@@ -151,6 +155,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.swapProviders = map[string]providers.SwapProvider{
 					"1inch":   oneinch.New(httpClient, settings.OneInchAPIKey),
 					"uniswap": uniswap.New(httpClient, settings.UniswapAPIKey),
+					"jupiter": jupiterProvider,
 					"bungee":  bungee.NewSwap(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
 					"fibrous": fibrous.New(httpClient),
 				}
@@ -158,11 +163,13 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					llama.Info(),
 					aaveProvider.Info(),
 					morphoProvider.Info(),
+					kaminoProvider.Info(),
 					s.bridgeProviders["across"].Info(),
 					s.bridgeProviders["lifi"].Info(),
 					s.bridgeProviders["bungee"].Info(),
 					s.swapProviders["1inch"].Info(),
 					s.swapProviders["uniswap"].Info(),
+					s.swapProviders["jupiter"].Info(),
 					s.swapProviders["bungee"].Info(),
 					s.swapProviders["fibrous"].Info(),
 				}
@@ -430,41 +437,23 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			req := map[string]any{"protocol": protocol, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				primary, fallback, err := s.selectLendingProviders(protocol)
+				provider, err := s.selectLendingProvider(protocol)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
-				warnings := []string{}
-				statuses := []model.ProviderStatus{}
 
 				start := time.Now()
-				data, err := primary.LendMarkets(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: primary.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()})
-				if err == nil || fallback == nil {
-					data = applyLendMarketLimit(data, marketsLimit)
-					return data, statuses, warnings, false, err
+				data, err := provider.LendMarkets(ctx, protocol, chain, asset)
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				if err != nil {
+					return nil, statuses, nil, false, err
 				}
-				if !shouldFallback(err) {
-					return nil, statuses, warnings, false, err
-				}
-				if !assetHasResolvedSymbol(asset) {
-					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
-					return nil, statuses, warnings, false, err
-				}
-
-				start = time.Now()
-				fallbackData, fallbackErr := fallback.LendMarkets(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: fallback.Info().Name, Status: statusFromErr(fallbackErr), LatencyMS: time.Since(start).Milliseconds()})
-				if fallbackErr == nil {
-					warnings = append(warnings, fmt.Sprintf("primary provider %s failed; using fallback %s", primary.Info().Name, fallback.Info().Name))
-					fallbackData = applyLendMarketLimit(fallbackData, marketsLimit)
-					return fallbackData, statuses, warnings, false, nil
-				}
-				return nil, statuses, warnings, false, err
+				data = applyLendMarketLimit(data, marketsLimit)
+				return data, statuses, nil, false, nil
 			})
 		},
 	}
-	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, spark)")
+	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, kamino)")
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
@@ -486,41 +475,23 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			req := map[string]any{"protocol": protocol, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				primary, fallback, err := s.selectLendingProviders(protocol)
+				provider, err := s.selectLendingProvider(protocol)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
-				warnings := []string{}
-				statuses := []model.ProviderStatus{}
 
 				start := time.Now()
-				data, err := primary.LendRates(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: primary.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()})
-				if err == nil || fallback == nil {
-					data = applyLendRateLimit(data, ratesLimit)
-					return data, statuses, warnings, false, err
+				data, err := provider.LendRates(ctx, protocol, chain, asset)
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				if err != nil {
+					return nil, statuses, nil, false, err
 				}
-				if !shouldFallback(err) {
-					return nil, statuses, warnings, false, err
-				}
-				if !assetHasResolvedSymbol(asset) {
-					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
-					return nil, statuses, warnings, false, err
-				}
-
-				start = time.Now()
-				fallbackData, fallbackErr := fallback.LendRates(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: fallback.Info().Name, Status: statusFromErr(fallbackErr), LatencyMS: time.Since(start).Milliseconds()})
-				if fallbackErr == nil {
-					warnings = append(warnings, fmt.Sprintf("primary provider %s failed; using fallback %s", primary.Info().Name, fallback.Info().Name))
-					fallbackData = applyLendRateLimit(fallbackData, ratesLimit)
-					return fallbackData, statuses, warnings, false, nil
-				}
-				return nil, statuses, warnings, false, err
+				data = applyLendRateLimit(data, ratesLimit)
+				return data, statuses, nil, false, nil
 			})
 		},
 	}
-	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, spark)")
+	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, kamino)")
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
@@ -693,17 +664,21 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		Use:   "quote",
 		Short: "Get swap quote",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, err := id.ParseChain(chainArg)
+			if err != nil {
+				return err
+			}
 			providerName := strings.ToLower(strings.TrimSpace(providerArg))
 			if providerName == "" {
-				providerName = "1inch"
+				if chain.IsSolana() {
+					providerName = "jupiter"
+				} else {
+					providerName = "1inch"
+				}
 			}
 			provider, ok := s.swapProviders[providerName]
 			if !ok {
 				return clierr.New(clierr.CodeUnsupported, "unsupported swap provider")
-			}
-			chain, err := id.ParseChain(chainArg)
-			if err != nil {
-				return err
 			}
 			fromAsset, err := id.ParseAsset(fromAssetArg, chain)
 			if err != nil {
@@ -737,7 +712,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "1inch", "Swap provider (1inch|uniswap|fibrous|bungee; fibrous/bungee require no API key)")
+	cmd.Flags().StringVar(&providerArg, "provider", "", "Swap provider (defaults: 1inch for EVM, jupiter for Solana; options: 1inch|uniswap|jupiter|fibrous|bungee; fibrous/bungee require no API key)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
@@ -787,29 +762,11 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				"include_incomplete": req.IncludeIncomplete,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				selectedProviders, err := s.selectYieldProviders(req.Providers)
+				selectedProviders, err := s.selectYieldProviders(req.Providers, req.Chain)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 				warnings := []string{}
-				if !assetHasResolvedSymbol(req.Asset) {
-					filteredProviders := make([]string, 0, len(selectedProviders))
-					skippedDefiLlama := false
-					for _, providerName := range selectedProviders {
-						if providerName == "defillama" {
-							skippedDefiLlama = true
-							continue
-						}
-						filteredProviders = append(filteredProviders, providerName)
-					}
-					if skippedDefiLlama {
-						warnings = append(warnings, "provider defillama skipped: unresolved asset symbol cannot be matched safely")
-					}
-					selectedProviders = filteredProviders
-					if len(selectedProviders) == 0 {
-						return nil, nil, warnings, false, clierr.New(clierr.CodeUsage, "selected providers require a resolvable asset symbol")
-					}
-				}
 				statuses := make([]model.ProviderStatus, 0, len(selectedProviders))
 				combined := make([]model.YieldOpportunity, 0)
 				partial := false
@@ -862,7 +819,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	cmd.Flags().Float64Var(&minTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
 	cmd.Flags().StringVar(&maxRisk, "max-risk", "high", "Maximum risk level (low|medium|high|unknown)")
 	cmd.Flags().Float64Var(&minAPY, "min-apy", 0, "Minimum total APY percent")
-	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (defillama,aave,morpho)")
+	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
 	cmd.Flags().StringVar(&sortArg, "sort", "score", "Sort key (score|apy_total|tvl_usd|liquidity_usd)")
 	cmd.Flags().BoolVar(&includeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
 	_ = cmd.MarkFlagRequired("chain")
@@ -1038,36 +995,28 @@ func normalizeLendingProtocol(input string) string {
 		return "aave"
 	case "morpho", "morpho-blue":
 		return "morpho"
-	case "spark":
-		return "spark"
+	case "kamino", "kamino-lend", "kamino-finance":
+		return "kamino"
 	default:
 		return strings.ToLower(strings.TrimSpace(input))
 	}
 }
 
-func (s *runtimeState) selectLendingProviders(protocol string) (providers.LendingProvider, providers.LendingProvider, error) {
+func (s *runtimeState) selectLendingProvider(protocol string) (providers.LendingProvider, error) {
 	primary, ok := s.lendingProviders[protocol]
 	if !ok {
-		return nil, nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported lending protocol: %s", protocol))
+		return nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported lending protocol: %s", protocol))
 	}
-	if s.defaultLendingProvider == nil || primary.Info().Name == s.defaultLendingProvider.Info().Name {
-		return primary, nil, nil
-	}
-	return primary, s.defaultLendingProvider, nil
+	return primary, nil
 }
 
-func shouldFallback(err error) bool {
-	cErr, ok := clierr.As(err)
-	if !ok {
-		return false
-	}
-	return cErr.Code == clierr.CodeUnavailable || cErr.Code == clierr.CodeUnsupported || cErr.Code == clierr.CodeRateLimited
-}
-
-func (s *runtimeState) selectYieldProviders(filter []string) ([]string, error) {
+func (s *runtimeState) selectYieldProviders(filter []string, chain id.Chain) ([]string, error) {
 	if len(filter) == 0 {
 		keys := make([]string, 0, len(s.yieldProviders))
 		for name := range s.yieldProviders {
+			if !yieldProviderSupportsChain(name, chain) {
+				continue
+			}
 			keys = append(keys, name)
 		}
 		sort.Strings(keys)
@@ -1089,6 +1038,17 @@ func (s *runtimeState) selectYieldProviders(filter []string) ([]string, error) {
 	}
 	sort.Strings(selected)
 	return selected, nil
+}
+
+func yieldProviderSupportsChain(name string, chain id.Chain) bool {
+	switch name {
+	case "kamino":
+		return chain.IsSolana()
+	case "aave", "morpho":
+		return chain.IsEVM()
+	default:
+		return true
+	}
 }
 
 func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpportunity {
@@ -1231,7 +1191,8 @@ func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
 
 func cacheKey(commandPath string, req any) string {
 	buf, _ := json.Marshal(req)
-	sum := sha256.Sum256(append([]byte(commandPath+"|"), buf...))
+	prefix := []byte(commandPath + "|" + cachePayloadSchemaVersion + "|")
+	sum := sha256.Sum256(append(prefix, buf...))
 	return hex.EncodeToString(sum[:])
 }
 
@@ -1357,10 +1318,6 @@ func shouldOpenCache(commandPath string) bool {
 
 func normalizeCommandPath(commandPath string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(commandPath))), " ")
-}
-
-func assetHasResolvedSymbol(asset id.Asset) bool {
-	return strings.TrimSpace(asset.Symbol) != ""
 }
 
 func (s *runtimeState) resetCommandDiagnostics() {

@@ -20,6 +20,7 @@ defi protocols top --category lending --limit 10 --results-only
 
 ```bash
 defi assets resolve --chain base --asset USDC --results-only
+defi assets resolve --chain solana --asset USDC --results-only
 ```
 
 ## 4. Query lending markets and rates
@@ -27,16 +28,18 @@ defi assets resolve --chain base --asset USDC --results-only
 ```bash
 defi lend markets --protocol aave --chain 1 --asset USDC --limit 5 --results-only
 defi lend rates --protocol morpho --chain 1 --asset USDC --limit 5 --results-only
+defi lend markets --protocol kamino --chain solana --asset USDC --limit 5 --results-only
 ```
 
 ## 5. Rank yield opportunities
 
 ```bash
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
+defi yield opportunities --chain solana --asset USDC --providers kamino --limit 10 --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --min-tvl-usd 1000000 --limit 10 --results-only
 ```
 
-`--providers` expects provider names from `providers list` (`defillama,aave,morpho`), not protocol categories.
+`--providers` expects provider names from `providers list` (`aave,morpho,kamino`), not protocol categories.
 
 ## 6. Get bridge and swap quotes
 
@@ -45,7 +48,10 @@ defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-onl
 defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 1000000 --results-only
 
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
+
+On Solana, `swap quote` defaults to the Jupiter adapter.
 
 ## 7. Use schema for machine integration
 

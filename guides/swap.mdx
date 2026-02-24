@@ -1,6 +1,6 @@
 ---
 title: Swap
-description: Get swap quotes across 1inch, Uniswap, Fibrous, and Bungee.
+description: Get swap quotes across 1inch, Uniswap, Jupiter, Fibrous, and Bungee.
 ---
 
 ## 1inch (key required)
@@ -17,6 +17,19 @@ export DEFI_UNISWAP_API_KEY=...
 defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
 ```
 
+## Jupiter (Solana, key optional)
+
+```bash
+defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+Optional higher-limit setup:
+
+```bash
+export DEFI_JUPITER_API_KEY=...
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
 ## Fibrous (keyless)
 
 ```bash
@@ -31,6 +44,7 @@ defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset 
 
 ## Notes
 
+- `swap quote` defaults by chain family: `1inch` for EVM chains, `jupiter` for Solana.
 - `--amount` and `--amount-decimal` are mutually exclusive.
 - Output always includes normalized `input_amount` and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.

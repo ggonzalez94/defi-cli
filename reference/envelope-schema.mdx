@@ -41,4 +41,9 @@ description: Field-level contract for success and error responses.
 - Bridge: `BridgeQuote`, `BridgeSummary`, `BridgeDetails`
 - Swap: `SwapQuote`
 
+## Payload notes
+
+- `LendMarket`, `LendRate`, and `YieldOpportunity` include `provider`, `provider_native_id`, and `provider_native_id_kind` for provider-scoped identity.
+- `BridgeQuote` may include `fee_breakdown` with `lp_fee`, `relayer_fee`, `gas_fee`, and aggregate totals.
+
 For practical examples, see [Quickstart](/quickstart).

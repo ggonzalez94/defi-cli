@@ -39,3 +39,5 @@ defi bridge details --bridge layerzero --results-only
 - Bungee quote mode is keyless by default.
 - Optional bungee dedicated backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only flows.
+- Quotes include `fee_breakdown` with `lp_fee`, `relayer_fee`, `gas_fee`, totals, and a consistency check against amount deltas.
+- Across can omit native USD fee fields on some routes; in those cases `estimated_fee_usd` may use a stable-asset approximation.

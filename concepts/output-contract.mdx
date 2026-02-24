@@ -62,5 +62,7 @@ Errors always return the full envelope, even if you pass `--results-only` or `--
 - `meta.command` uses normalized command paths
 - provider status values are stable (`ok`, `auth_error`, `rate_limited`, `unavailable`, `error`)
 - APY values are percentage points (`2.3` means `2.3%`)
+- lending/yield rows include retrieval-first IDs: `provider`, `provider_native_id`, `provider_native_id_kind`
+- bridge quotes expose `fee_breakdown` when provider fee components are available
 
 See [Envelope Schema](/reference/envelope-schema) and [Exit Codes](/reference/exit-codes).

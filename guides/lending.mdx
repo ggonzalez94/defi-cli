@@ -1,27 +1,27 @@
 ---
 title: Lending
-description: Query lending markets and rates across Aave, Morpho, and Spark routing.
+description: Query lending markets and rates across direct protocol adapters.
 ---
 
 ## Markets
 
 ```bash
 defi lend markets --protocol aave --chain 1 --asset USDC --limit 10 --results-only
+defi lend markets --protocol kamino --chain solana --asset USDC --limit 10 --results-only
 ```
 
 ## Rates
 
 ```bash
 defi lend rates --protocol morpho --chain 1 --asset USDC --limit 10 --results-only
+defi lend rates --protocol kamino --chain solana --asset USDC --limit 10 --results-only
 ```
 
 ## Protocol routing
 
 - `--protocol aave` -> Aave adapter
 - `--protocol morpho` -> Morpho adapter
-- `--protocol spark` -> DefiLlama route
-
-For direct adapters, fallback to DefiLlama can occur on selected failures (`unavailable`, `unsupported`, `rate_limited`) when symbol resolution is safe.
+- `--protocol kamino` -> Kamino adapter (Solana mainnet only)
 
 ## Suggested filters and reliability defaults
 
@@ -34,6 +34,7 @@ defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --timeout 12
 `lend markets` returns:
 
 - `protocol`, `chain_id`, `asset_id`
+- `provider`, `provider_native_id`, `provider_native_id_kind`
 - `supply_apy`, `borrow_apy`
 - `tvl_usd`, `liquidity_usd`
 - `source_url`, `fetched_at`

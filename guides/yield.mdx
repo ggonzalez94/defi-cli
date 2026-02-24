@@ -12,7 +12,8 @@ defi yield opportunities --chain 1 --asset USDC --limit 20 --results-only
 ## Select providers explicitly
 
 ```bash
-defi yield opportunities --chain 1 --asset USDC --providers defillama,aave,morpho --limit 20 --results-only
+defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 20 --results-only
+defi yield opportunities --chain solana --asset USDC --providers kamino --limit 20 --results-only
 ```
 
 `--providers` expects provider names from `defi providers list`.
@@ -44,4 +45,4 @@ When enabled, warnings may indicate missing APY/TVL and combined-provider counts
 
 - APY values are percentage points (`2.3` = `2.3%`).
 - Morpho may produce extreme APY for very small markets; use `--min-tvl-usd`.
-- If an asset symbol cannot be resolved safely, DefiLlama may be skipped.
+- Kamino yield routes currently support Solana mainnet only.
