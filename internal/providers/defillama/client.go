@@ -51,16 +51,13 @@ func New(httpClient *httpx.Client, apiKey string) *Client {
 func (c *Client) Info() model.ProviderInfo {
 	return model.ProviderInfo{
 		Name:        "defillama",
-		Type:        "market+yields",
+		Type:        "market+bridge-data",
 		RequiresKey: false,
 		Capabilities: []string{
 			"chains.top",
 			"chains.assets",
 			"protocols.top",
 			"protocols.categories",
-			"lend.markets",
-			"lend.rates",
-			"yield.opportunities",
 			"bridge.list",
 			"bridge.details",
 		},
@@ -747,17 +744,18 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 			continue
 		}
 		out = append(out, model.LendMarket{
-			Protocol:         canonicalProtocol(p.Project, protocol),
-			ChainID:          chain.CAIP2,
-			AssetID:          asset.AssetID,
-			ProviderNativeID: strings.TrimSpace(p.Pool),
-			PoolAddress:      maybeEVMAddress(p.Pool),
-			SupplyAPY:        choosePositive(apyBase, apyTotal),
-			BorrowAPY:        0,
-			TVLUSD:           tvl,
-			LiquidityUSD:     tvl,
-			SourceURL:        p.URL,
-			FetchedAt:        c.now().UTC().Format(time.RFC3339),
+			Protocol:             canonicalProtocol(p.Project, protocol),
+			Provider:             "defillama",
+			ChainID:              chain.CAIP2,
+			AssetID:              asset.AssetID,
+			ProviderNativeID:     strings.TrimSpace(p.Pool),
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			SupplyAPY:            choosePositive(apyBase, apyTotal),
+			BorrowAPY:            0,
+			TVLUSD:               tvl,
+			LiquidityUSD:         tvl,
+			SourceURL:            p.URL,
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -795,16 +793,17 @@ func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain,
 		apyTotal := numOrZero(p.APY)
 		apyBase := numOrZero(p.APYBase)
 		out = append(out, model.LendRate{
-			Protocol:         canonicalProtocol(p.Project, protocol),
-			ChainID:          chain.CAIP2,
-			AssetID:          asset.AssetID,
-			ProviderNativeID: strings.TrimSpace(p.Pool),
-			PoolAddress:      maybeEVMAddress(p.Pool),
-			SupplyAPY:        choosePositive(apyBase, apyTotal),
-			BorrowAPY:        0,
-			Utilization:      0,
-			SourceURL:        p.URL,
-			FetchedAt:        c.now().UTC().Format(time.RFC3339),
+			Protocol:             canonicalProtocol(p.Project, protocol),
+			Provider:             "defillama",
+			ChainID:              chain.CAIP2,
+			AssetID:              asset.AssetID,
+			ProviderNativeID:     strings.TrimSpace(p.Pool),
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			SupplyAPY:            choosePositive(apyBase, apyTotal),
+			BorrowAPY:            0,
+			Utilization:          0,
+			SourceURL:            p.URL,
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -875,26 +874,26 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		oppID := opportunityID("defillama", req.Chain.CAIP2, p.Pool, req.Asset.AssetID)
 
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:    oppID,
-			Provider:         "defillama",
-			Protocol:         p.Project,
-			ChainID:          req.Chain.CAIP2,
-			AssetID:          req.Asset.AssetID,
-			ProviderNativeID: strings.TrimSpace(p.Pool),
-			PoolAddress:      maybeEVMAddress(p.Pool),
-			Type:             deriveType(p),
-			APYBase:          numOrZero(p.APYBase),
-			APYReward:        numOrZero(p.APYReward),
-			APYTotal:         apyTotal,
-			TVLUSD:           tvl,
-			LiquidityUSD:     liq,
-			LockupDays:       0,
-			WithdrawalTerms:  "variable",
-			RiskLevel:        riskLevel,
-			RiskReasons:      riskReasons,
-			Score:            score,
-			SourceURL:        p.URL,
-			FetchedAt:        c.now().UTC().Format(time.RFC3339),
+			OpportunityID:        oppID,
+			Provider:             "defillama",
+			Protocol:             p.Project,
+			ChainID:              req.Chain.CAIP2,
+			AssetID:              req.Asset.AssetID,
+			ProviderNativeID:     strings.TrimSpace(p.Pool),
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			Type:                 deriveType(p),
+			APYBase:              numOrZero(p.APYBase),
+			APYReward:            numOrZero(p.APYReward),
+			APYTotal:             apyTotal,
+			TVLUSD:               tvl,
+			LiquidityUSD:         liq,
+			LockupDays:           0,
+			WithdrawalTerms:      "variable",
+			RiskLevel:            riskLevel,
+			RiskReasons:          riskReasons,
+			Score:                score,
+			SourceURL:            p.URL,
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
@@ -921,8 +920,6 @@ func protocolMatcher(protocol string) []string {
 		return []string{"morpho", "morpho-blue"}
 	case "kamino":
 		return []string{"kamino", "kamino-lend"}
-	case "spark":
-		return []string{"spark"}
 	default:
 		return nil
 	}
@@ -947,9 +944,6 @@ func canonicalProtocol(observed, fallback string) string {
 	}
 	if strings.HasPrefix(strings.ToLower(observed), "morpho") {
 		return "morpho"
-	}
-	if strings.HasPrefix(strings.ToLower(observed), "spark") {
-		return "spark"
 	}
 	return strings.ToLower(observed)
 }
@@ -1155,7 +1149,7 @@ func deriveType(p poolEntry) string {
 	meta := strings.ToLower(strings.TrimSpace(p.PoolMeta))
 	symbol := strings.ToLower(strings.TrimSpace(p.Symbol))
 
-	if strings.Contains(project, "aave") || strings.Contains(project, "morpho") || strings.Contains(project, "spark") {
+	if strings.Contains(project, "aave") || strings.Contains(project, "morpho") {
 		return "lend"
 	}
 	if strings.Contains(project, "pendle") {

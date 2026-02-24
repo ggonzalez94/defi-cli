@@ -185,8 +185,49 @@ func TestYieldOpportunitiesFilters(t *testing.T) {
 	if got[0].ProviderNativeID != "0x1111111111111111111111111111111111111111" {
 		t.Fatalf("unexpected provider native id: %+v", got[0])
 	}
-	if got[0].PoolAddress != "0x1111111111111111111111111111111111111111" {
-		t.Fatalf("unexpected pool address: %+v", got[0])
+	if got[0].Provider != "defillama" || got[0].ProviderNativeIDKind != model.NativeIDKindPoolID {
+		t.Fatalf("unexpected provider id metadata: %+v", got[0])
+	}
+}
+
+func TestLendMarketsAndRatesIncludeProviderIDMetadata(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/pools", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"status":"success",
+			"data":[
+				{"pool":"pool-key-1","chain":"Ethereum","project":"aave-v3","symbol":"USDC","apy":3.2,"apyBase":2.5,"tvlUsd":123456}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	chain, _ := id.ParseChain("ethereum")
+	asset, _ := id.ParseAsset("USDC", chain)
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.yieldsBase = srv.URL
+
+	markets, err := c.LendMarkets(context.Background(), "aave", chain, asset)
+	if err != nil {
+		t.Fatalf("LendMarkets failed: %v", err)
+	}
+	if len(markets) != 1 {
+		t.Fatalf("expected one market, got %+v", markets)
+	}
+	if markets[0].Provider != "defillama" || markets[0].ProviderNativeID != "pool-key-1" || markets[0].ProviderNativeIDKind != model.NativeIDKindPoolID {
+		t.Fatalf("unexpected market provider id metadata: %+v", markets[0])
+	}
+
+	rates, err := c.LendRates(context.Background(), "aave", chain, asset)
+	if err != nil {
+		t.Fatalf("LendRates failed: %v", err)
+	}
+	if len(rates) != 1 {
+		t.Fatalf("expected one rate, got %+v", rates)
+	}
+	if rates[0].Provider != "defillama" || rates[0].ProviderNativeID != "pool-key-1" || rates[0].ProviderNativeIDKind != model.NativeIDKindPoolID {
+		t.Fatalf("unexpected rate provider id metadata: %+v", rates[0])
 	}
 }
 

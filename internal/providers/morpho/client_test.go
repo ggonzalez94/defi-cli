@@ -9,6 +9,7 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
@@ -52,6 +53,9 @@ func TestLendRatesAndYield(t *testing.T) {
 	if rates[0].ProviderNativeID != "m1" {
 		t.Fatalf("expected provider native id m1, got %+v", rates[0])
 	}
+	if rates[0].Provider != "morpho" || rates[0].ProviderNativeIDKind != model.NativeIDKindMarketID {
+		t.Fatalf("expected morpho provider id metadata, got %+v", rates[0])
+	}
 
 	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "high"})
 	if err != nil {
@@ -62,5 +66,8 @@ func TestLendRatesAndYield(t *testing.T) {
 	}
 	if opps[0].ProviderNativeID != "m1" {
 		t.Fatalf("expected provider native id on yield opportunity, got %+v", opps[0])
+	}
+	if opps[0].ProviderNativeIDKind != model.NativeIDKindMarketID {
+		t.Fatalf("expected market_id kind on yield opportunity, got %+v", opps[0])
 	}
 }

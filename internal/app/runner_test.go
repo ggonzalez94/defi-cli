@@ -46,10 +46,9 @@ func TestSplitCSV(t *testing.T) {
 func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
 	state := &runtimeState{
 		yieldProviders: map[string]providers.YieldProvider{
-			"defillama": nil,
-			"aave":      nil,
-			"morpho":    nil,
-			"kamino":    nil,
+			"aave":   nil,
+			"morpho": nil,
+			"kamino": nil,
 		},
 	}
 
@@ -58,8 +57,8 @@ func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
 		chainInput string
 		want       []string
 	}{
-		{name: "evm", chainInput: "base", want: []string{"aave", "defillama", "morpho"}},
-		{name: "solana", chainInput: "solana", want: []string{"defillama", "kamino"}},
+		{name: "evm", chainInput: "base", want: []string{"aave", "morpho"}},
+		{name: "solana", chainInput: "solana", want: []string{"kamino"}},
 	}
 
 	for _, tc := range tests {
@@ -88,8 +87,8 @@ func TestSelectYieldProvidersDefaultsFilterByChainFamily(t *testing.T) {
 func TestSelectYieldProvidersExplicitFilterBypassesChainDefaults(t *testing.T) {
 	state := &runtimeState{
 		yieldProviders: map[string]providers.YieldProvider{
-			"defillama": nil,
-			"kamino":    nil,
+			"aave":   nil,
+			"kamino": nil,
 		},
 	}
 	chain, err := id.ParseChain("base")

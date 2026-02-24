@@ -77,6 +77,8 @@ type runtimeState struct {
 	providerInfos          []model.ProviderInfo
 }
 
+const cachePayloadSchemaVersion = "v2"
+
 func (r *Runner) Run(args []string) int {
 	state := &runtimeState{runner: r}
 	root := state.newRootCommand()
@@ -132,18 +134,16 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				kaminoProvider := kamino.New(httpClient)
 				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
 				s.marketProvider = llama
-				s.defaultLendingProvider = llama
+				s.defaultLendingProvider = nil
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
 					"morpho": morphoProvider,
 					"kamino": kaminoProvider,
-					"spark":  llama,
 				}
 				s.yieldProviders = map[string]providers.YieldProvider{
-					"defillama": llama,
-					"aave":      aaveProvider,
-					"morpho":    morphoProvider,
-					"kamino":    kaminoProvider,
+					"aave":   aaveProvider,
+					"morpho": morphoProvider,
+					"kamino": kaminoProvider,
 				}
 
 				s.bridgeProviders = map[string]providers.BridgeProvider{
@@ -473,7 +473,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, kamino, spark)")
+	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, kamino)")
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
@@ -529,7 +529,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, kamino, spark)")
+	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, kamino)")
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
@@ -805,24 +805,6 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 					return nil, nil, nil, false, err
 				}
 				warnings := []string{}
-				if !assetHasResolvedSymbol(req.Asset) {
-					filteredProviders := make([]string, 0, len(selectedProviders))
-					skippedDefiLlama := false
-					for _, providerName := range selectedProviders {
-						if providerName == "defillama" {
-							skippedDefiLlama = true
-							continue
-						}
-						filteredProviders = append(filteredProviders, providerName)
-					}
-					if skippedDefiLlama {
-						warnings = append(warnings, "provider defillama skipped: unresolved asset symbol cannot be matched safely")
-					}
-					selectedProviders = filteredProviders
-					if len(selectedProviders) == 0 {
-						return nil, nil, warnings, false, clierr.New(clierr.CodeUsage, "selected providers require a resolvable asset symbol")
-					}
-				}
 				statuses := make([]model.ProviderStatus, 0, len(selectedProviders))
 				combined := make([]model.YieldOpportunity, 0)
 				partial := false
@@ -875,7 +857,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	cmd.Flags().Float64Var(&minTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
 	cmd.Flags().StringVar(&maxRisk, "max-risk", "high", "Maximum risk level (low|medium|high|unknown)")
 	cmd.Flags().Float64Var(&minAPY, "min-apy", 0, "Minimum total APY percent")
-	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (defillama,aave,morpho,kamino)")
+	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
 	cmd.Flags().StringVar(&sortArg, "sort", "score", "Sort key (score|apy_total|tvl_usd|liquidity_usd)")
 	cmd.Flags().BoolVar(&includeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
 	_ = cmd.MarkFlagRequired("chain")
@@ -1053,8 +1035,6 @@ func normalizeLendingProtocol(input string) string {
 		return "morpho"
 	case "kamino", "kamino-lend", "kamino-finance":
 		return "kamino"
-	case "spark":
-		return "spark"
 	default:
 		return strings.ToLower(strings.TrimSpace(input))
 	}
@@ -1260,7 +1240,8 @@ func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
 
 func cacheKey(commandPath string, req any) string {
 	buf, _ := json.Marshal(req)
-	sum := sha256.Sum256(append([]byte(commandPath+"|"), buf...))
+	prefix := []byte(commandPath + "|" + cachePayloadSchemaVersion + "|")
+	sum := sha256.Sum256(append(prefix, buf...))
 	return hex.EncodeToString(sum[:])
 }
 

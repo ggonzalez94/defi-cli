@@ -9,6 +9,7 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
@@ -56,8 +57,8 @@ func TestLendMarketsAndYield(t *testing.T) {
 	if markets[0].ProviderNativeID == "" {
 		t.Fatalf("expected provider native id, got %+v", markets[0])
 	}
-	if markets[0].MarketAddress == "" || markets[0].VaultAddress == "" || markets[0].PoolAddress == "" {
-		t.Fatalf("expected execution addresses, got %+v", markets[0])
+	if markets[0].Provider != "aave" || markets[0].ProviderNativeIDKind != model.NativeIDKindCompositeMarketAsset {
+		t.Fatalf("expected provider/native id kind metadata, got %+v", markets[0])
 	}
 
 	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "high"})
@@ -67,8 +68,8 @@ func TestLendMarketsAndYield(t *testing.T) {
 	if len(opps) != 1 || opps[0].Provider != "aave" {
 		t.Fatalf("unexpected yield response: %+v", opps)
 	}
-	if opps[0].ProviderNativeID == "" || opps[0].MarketAddress == "" || opps[0].VaultAddress == "" || opps[0].PoolAddress == "" {
-		t.Fatalf("expected yield execution ids, got %+v", opps[0])
+	if opps[0].ProviderNativeID == "" || opps[0].ProviderNativeIDKind != model.NativeIDKindCompositeMarketAsset {
+		t.Fatalf("expected yield provider native id metadata, got %+v", opps[0])
 	}
 }
 

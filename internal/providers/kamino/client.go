@@ -99,15 +99,18 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 		}
 		assetID := reserveAssetID(chain.CAIP2, asset.AssetID, item.Reserve.LiquidityTokenMint)
 		out = append(out, model.LendMarket{
-			Protocol:     "kamino",
-			ChainID:      chain.CAIP2,
-			AssetID:      assetID,
-			SupplyAPY:    ratioToPercent(item.Reserve.SupplyAPY),
-			BorrowAPY:    ratioToPercent(item.Reserve.BorrowAPY),
-			TVLUSD:       tvl,
-			LiquidityUSD: liquidityUSD,
-			SourceURL:    marketURL(item.Market.LendingMarket),
-			FetchedAt:    fetchedAt,
+			Protocol:             "kamino",
+			Provider:             "kamino",
+			ChainID:              chain.CAIP2,
+			AssetID:              assetID,
+			ProviderNativeID:     strings.TrimSpace(item.Reserve.Reserve),
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			SupplyAPY:            ratioToPercent(item.Reserve.SupplyAPY),
+			BorrowAPY:            ratioToPercent(item.Reserve.BorrowAPY),
+			TVLUSD:               tvl,
+			LiquidityUSD:         liquidityUSD,
+			SourceURL:            marketURL(item.Market.LendingMarket),
+			FetchedAt:            fetchedAt,
 		})
 	}
 
@@ -146,14 +149,17 @@ func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain,
 		}
 		assetID := reserveAssetID(chain.CAIP2, asset.AssetID, item.Reserve.LiquidityTokenMint)
 		out = append(out, model.LendRate{
-			Protocol:    "kamino",
-			ChainID:     chain.CAIP2,
-			AssetID:     assetID,
-			SupplyAPY:   ratioToPercent(item.Reserve.SupplyAPY),
-			BorrowAPY:   ratioToPercent(item.Reserve.BorrowAPY),
-			Utilization: math.Min(math.Max(utilization, 0), 1),
-			SourceURL:   marketURL(item.Market.LendingMarket),
-			FetchedAt:   fetchedAt,
+			Protocol:             "kamino",
+			Provider:             "kamino",
+			ChainID:              chain.CAIP2,
+			AssetID:              assetID,
+			ProviderNativeID:     strings.TrimSpace(item.Reserve.Reserve),
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			SupplyAPY:            ratioToPercent(item.Reserve.SupplyAPY),
+			BorrowAPY:            ratioToPercent(item.Reserve.BorrowAPY),
+			Utilization:          math.Min(math.Max(utilization, 0), 1),
+			SourceURL:            marketURL(item.Market.LendingMarket),
+			FetchedAt:            fetchedAt,
 		})
 	}
 
@@ -219,24 +225,26 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			assetID,
 		}, "|")
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:   hashOpportunity(seed),
-			Provider:        "kamino",
-			Protocol:        "kamino",
-			ChainID:         req.Chain.CAIP2,
-			AssetID:         assetID,
-			Type:            "lend",
-			APYBase:         apy,
-			APYReward:       0,
-			APYTotal:        apy,
-			TVLUSD:          tvl,
-			LiquidityUSD:    liquidityUSD,
-			LockupDays:      0,
-			WithdrawalTerms: "variable",
-			RiskLevel:       riskLevel,
-			RiskReasons:     reasons,
-			Score:           yieldutil.ScoreOpportunity(apy, tvl, liquidityUSD, riskLevel),
-			SourceURL:       marketURL(item.Market.LendingMarket),
-			FetchedAt:       fetchedAt,
+			OpportunityID:        hashOpportunity(seed),
+			Provider:             "kamino",
+			Protocol:             "kamino",
+			ChainID:              req.Chain.CAIP2,
+			AssetID:              assetID,
+			ProviderNativeID:     strings.TrimSpace(item.Reserve.Reserve),
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			Type:                 "lend",
+			APYBase:              apy,
+			APYReward:            0,
+			APYTotal:             apy,
+			TVLUSD:               tvl,
+			LiquidityUSD:         liquidityUSD,
+			LockupDays:           0,
+			WithdrawalTerms:      "variable",
+			RiskLevel:            riskLevel,
+			RiskReasons:          reasons,
+			Score:                yieldutil.ScoreOpportunity(apy, tvl, liquidityUSD, riskLevel),
+			SourceURL:            marketURL(item.Market.LendingMarket),
+			FetchedAt:            fetchedAt,
 		})
 	}
 
