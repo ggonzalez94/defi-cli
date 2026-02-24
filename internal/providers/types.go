@@ -3,6 +3,7 @@ package providers
 import (
 	"context"
 
+	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 )
@@ -47,6 +48,11 @@ type BridgeProvider interface {
 	QuoteBridge(ctx context.Context, req BridgeQuoteRequest) (model.BridgeQuote, error)
 }
 
+type BridgeExecutionProvider interface {
+	BridgeProvider
+	BuildBridgeAction(ctx context.Context, req BridgeQuoteRequest, opts BridgeExecutionOptions) (execution.Action, error)
+}
+
 type BridgeDataProvider interface {
 	Provider
 	ListBridges(ctx context.Context, req BridgeListRequest) ([]model.BridgeSummary, error)
@@ -72,9 +78,22 @@ type BridgeDetailsRequest struct {
 	IncludeChainBreakdown bool
 }
 
+type BridgeExecutionOptions struct {
+	Sender      string
+	Recipient   string
+	SlippageBps int64
+	Simulate    bool
+	RPCURL      string
+}
+
 type SwapProvider interface {
 	Provider
 	QuoteSwap(ctx context.Context, req SwapQuoteRequest) (model.SwapQuote, error)
+}
+
+type SwapExecutionProvider interface {
+	SwapProvider
+	BuildSwapAction(ctx context.Context, req SwapQuoteRequest, opts SwapExecutionOptions) (execution.Action, error)
 }
 
 type SwapQuoteRequest struct {
@@ -83,4 +102,11 @@ type SwapQuoteRequest struct {
 	ToAsset         id.Asset
 	AmountBaseUnits string
 	AmountDecimal   string
+}
+
+type SwapExecutionOptions struct {
+	Sender      string
+	Recipient   string
+	SlippageBps int64
+	Simulate    bool
 }

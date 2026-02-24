@@ -54,3 +54,33 @@ func TestLoadDefiLlamaAPIKeyFromEnv(t *testing.T) {
 		t.Fatalf("expected DefiLlama API key from env, got %q", settings.DefiLlamaAPIKey)
 	}
 }
+
+func TestLoadExecutionPathsFromEnv(t *testing.T) {
+	t.Setenv("DEFI_ACTIONS_PATH", "/tmp/defi-actions.db")
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", "/tmp/defi-actions.lock")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.ActionStorePath != "/tmp/defi-actions.db" {
+		t.Fatalf("expected action store path from env, got %q", settings.ActionStorePath)
+	}
+	if settings.ActionLockPath != "/tmp/defi-actions.lock" {
+		t.Fatalf("expected action lock path from env, got %q", settings.ActionLockPath)
+	}
+}
+
+func TestLoadTaikoRPCFromEnv(t *testing.T) {
+	t.Setenv("DEFI_TAIKO_MAINNET_RPC_URL", "https://rpc.example.mainnet")
+	t.Setenv("DEFI_TAIKO_HOODI_RPC_URL", "https://rpc.example.hoodi")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.TaikoMainnetRPC != "https://rpc.example.mainnet" {
+		t.Fatalf("unexpected mainnet rpc: %q", settings.TaikoMainnetRPC)
+	}
+	if settings.TaikoHoodiRPC != "https://rpc.example.hoodi" {
+		t.Fatalf("unexpected hoodi rpc: %q", settings.TaikoHoodiRPC)
+	}
+}

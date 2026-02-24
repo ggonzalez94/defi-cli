@@ -10,10 +10,11 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 ## Features
 
-- **Lending** — query markets and rates from Aave, Morpho, and more (with DefiLlama fallback).
+- **Lending** — query markets and rates from Aave, Morpho, and more (with DefiLlama fallback), plus execute Aave lend actions.
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
-- **Bridging** — get cross-chain quotes (Across, LiFi) and bridge analytics (volume, chain breakdown).
-- **Swapping** — get on-chain swap quotes (1inch, Uniswap).
+- **Bridging** — get cross-chain quotes (Across, LiFi), bridge analytics (volume, chain breakdown), and execute LiFi bridge plans.
+- **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
+- **Approvals & rewards** — create and execute ERC-20 approvals, Aave rewards claims, and compound flows.
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
@@ -72,7 +73,15 @@ defi yield opportunities --chain base --asset USDC --limit 20 --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
 defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
-defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
+defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --protocol aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi rewards claim plan --protocol aave --chain 1 --from-address 0xYourEOA --assets 0x... --reward-token 0x... --results-only
+defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap status --action-id <action_id> --results-only
+defi actions list --results-only
 ```
 
 `yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho`).
@@ -80,16 +89,54 @@ defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-onl
 Bridge quote examples:
 
 ```bash
-defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only # Defaults to Across
+defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 ```
 
-Swap quote example (`1inch` requires API key):
+Swap quote examples:
 
 ```bash
 export DEFI_1INCH_API_KEY=...
 defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
 ```
+
+Swap execution flow (local signer):
+
+```bash
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex  # chmod 600
+
+# 1) Plan only
+defi swap plan \
+  --provider taikoswap \
+  --chain taiko \
+  --from-asset USDC \
+  --to-asset WETH \
+  --amount 1000000 \
+  --from-address 0xYourEOA \
+  --results-only
+
+# 2) Execute in one command
+defi swap run \
+  --provider taikoswap \
+  --chain taiko \
+  --from-asset USDC \
+  --to-asset WETH \
+  --amount 1000000 \
+  --from-address 0xYourEOA \
+  --yes \
+  --results-only
+```
+
+Execution command surface:
+
+- `swap plan|run|submit|status`
+- `bridge plan|run|submit|status` (provider: `lifi`)
+- `approvals plan|run|submit|status`
+- `lend supply|withdraw|borrow|repay plan|run|submit|status` (protocol: `aave`)
+- `rewards claim|compound plan|run|submit|status` (protocol: `aave`)
+- `actions list|status`
 
 ## Command API Key Requirements
 
@@ -102,6 +149,7 @@ When a provider requires authentication, bring your own key:
 - `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+- `defi swap quote --provider taikoswap` -> no API key required
 
 `defi providers list` includes both provider-level key metadata and capability-level key metadata (`capability_auth`).
 
@@ -122,6 +170,18 @@ export DEFI_DEFILLAMA_API_KEY=...
 For persistent shell setup, add exports to your shell profile (for example `~/.zshrc`).
 
 If a keyed provider is used without a key, CLI exits with code `10`.
+
+## Execution Signer Inputs (Run/Submit Commands)
+
+Execution `run`/`submit` commands currently support a local key signer.
+
+Key env inputs (in precedence order when `--key-source auto`):
+
+- `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
+- `DEFI_PRIVATE_KEY_FILE` (preferred; file must be `0600` or stricter)
+- `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
+
+You can force source selection with `--key-source env|file|keystore`.
 
 ## Config (Optional)
 
@@ -150,6 +210,13 @@ retries: 2
 cache:
   enabled: true
   max_stale: 5m
+execution:
+  actions_path: ~/.cache/defi/actions.db
+  actions_lock_path: ~/.cache/defi/actions.lock
+providers:
+  taikoswap:
+    mainnet_rpc: https://rpc.mainnet.taiko.xyz
+    hoodi_rpc: https://rpc.hoodi.taiko.xyz
 ```
 
 ## Cache Policy
@@ -160,6 +227,7 @@ cache:
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|status`) bypass cache reads/writes.
 
 ## Caveats
 
@@ -170,6 +238,12 @@ cache:
 - `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
+- Swap execution currently supports TaikoSwap only.
+- Bridge execution currently supports LiFi only.
+- Lend and rewards execution currently support Aave only.
+- All `run` / `submit` execution commands require `--yes` and will broadcast signed transactions.
+- Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
+- Provider/protocol selection is explicit for multi-provider flows; pass `--provider` or `--protocol` (no implicit defaults).
 
 ## Exit Codes
 
@@ -183,6 +257,11 @@ cache:
 - `14`: stale data beyond SLA
 - `15`: partial results in strict mode
 - `16`: blocked by command allowlist
+- `20`: action plan validation failed
+- `21`: action simulation failed
+- `22`: execution rejected by policy
+- `23`: action timed out while waiting for confirmation
+- `24`: signer unavailable or signing failed
 
 ## Development
 
@@ -197,9 +276,11 @@ internal/
   providers/                      # external adapters
     aave/ morpho/                 # direct lending + yield
     defillama/                    # normalization + fallback + bridge analytics
-    across/ lifi/                 # bridge quotes
-    oneinch/ uniswap/             # swap
+    across/ lifi/                 # bridge quotes + lifi execution planning
+    oneinch/ uniswap/ taikoswap/  # swap (quote + taikoswap execution planning)
     types.go                      # provider interfaces
+  execution/                      # action store + planner helpers + signer + executor
+  registry/                       # canonical execution endpoints/contracts/ABI fragments
   config/                         # file/env/flags precedence
   cache/                          # sqlite cache + file lock
   id/                             # CAIP + amount normalization
@@ -211,10 +292,14 @@ internal/
   httpx/                          # shared HTTP client
 
 .github/workflows/ci.yml          # CI (test/vet/build)
+.github/workflows/nightly-execution-smoke.yml # nightly live execution planning smoke
 AGENTS.md                         # contributor guide for agents
 ```
 ### Testing
 
 ```bash
 go test ./...
+go test -race ./...
+go vet ./...
+bash scripts/nightly_execution_smoke.sh
 ```

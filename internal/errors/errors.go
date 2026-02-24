@@ -19,6 +19,11 @@ const (
 	CodeStale         Code = 14
 	CodePartialStrict Code = 15
 	CodeBlocked       Code = 16
+	CodeActionPlan    Code = 20
+	CodeActionSim     Code = 21
+	CodeActionPolicy  Code = 22
+	CodeActionTimeout Code = 23
+	CodeSigner        Code = 24
 )
 
 // Error is a typed CLI error that carries a stable error code.

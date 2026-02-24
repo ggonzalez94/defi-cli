@@ -10,16 +10,34 @@ Format:
 ## [Unreleased]
 
 ### Added
-- None yet.
+- Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
+- Added swap execution workflow commands: `swap plan`, `swap run`, `swap submit`, and `swap status`.
+- Added bridge execution workflow commands: `bridge plan`, `bridge run`, `bridge submit`, and `bridge status` (LiFi provider).
+- Added approvals workflow commands: `approvals plan`, `approvals run`, `approvals submit`, and `approvals status`.
+- Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|run|submit|status` (Aave).
+- Added rewards execution workflow commands under `rewards claim|compound ... plan|run|submit|status` (Aave).
+- Added action persistence and inspection commands: `actions list` and `actions status`.
+- Added local signer support for execution with env/file/keystore key sources and strict file-permission checks.
+- Added Taiko Hoodi chain alias and token registry entries (`USDC`, `USDT`, `WETH`) for deterministic asset parsing.
+- Added planner unit tests for approvals, Aave lend/rewards flows, and LiFi bridge action building.
+- Added centralized execution registry data in `internal/registry` for endpoint, contract, and ABI references.
+- Added nightly execution-planning smoke workflow (`nightly-execution-smoke.yml`) and script.
 
 ### Changed
-- None yet.
+- `providers list` now includes TaikoSwap execution capabilities (`swap.plan`, `swap.execute`) alongside quote metadata.
+- `providers list` now includes LiFi bridge execution capabilities (`bridge.plan`, `bridge.execute`).
+- Added execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
+- Added execution config/env support for action store paths and Taiko RPC overrides.
+- Execution command cache/action-store policy now covers `swap|bridge|approvals|lend|rewards ... plan|run|submit|status`.
+- Removed implicit defaults for multi-provider command paths; `--provider`/`--protocol` must be set explicitly where applicable.
 
 ### Fixed
 - None yet.
 
 ### Docs
-- None yet.
+- Documented bridge/lend/rewards/approvals execution flows, signer env inputs, command behavior, and exit codes in `README.md`.
+- Updated `AGENTS.md` with expanded execution command coverage and caveats.
+- Updated `docs/act-execution-design.md` implementation status to reflect the shipped Phase 2 surface.
 
 ### Security
 - None yet.
