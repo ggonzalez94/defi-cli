@@ -70,13 +70,17 @@ README.md                         # user-facing usage + caveats
 - TaikoSwap quote/planning does not require an API key; execution uses local signer env inputs (`DEFI_PRIVATE_KEY{,_FILE}` or keystore envs).
 - Execution commands currently available:
   - `swap plan|run|submit|status`
-  - `bridge plan|run|submit|status` (LiFi)
+  - `bridge plan|run|submit|status` (Across, LiFi)
   - `approvals plan|run|submit|status`
-  - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave)
+  - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave, Morpho)
   - `rewards claim|compound plan|run|submit|status` (Aave)
   - `actions list|status`
 - All execution `run` / `submit` commands require `--yes` and can broadcast transactions.
+- LiFi bridge quote/plan/run support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
+- Aave execution has default pool-address-provider coverage for chain IDs `1`, `10`, `137`, `8453`, `42161`, and `43114`; override with `--pool-address` / `--pool-address-provider` otherwise.
+- Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
 - `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, and `zksync`.

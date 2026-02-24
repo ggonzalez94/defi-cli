@@ -24,7 +24,7 @@ Implemented in this repository:
 Not yet implemented from full roadmap:
 
 - Additional signer backends (`safe`, external wallets, hardware)
-- Broader execution provider coverage beyond current defaults (TaikoSwap/LiFi/Aave)
+- Broader execution provider coverage beyond current defaults (TaikoSwap/Across/LiFi/Aave/Morpho)
 
 ## 1. Problem Statement
 

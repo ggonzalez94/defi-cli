@@ -547,7 +547,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 func (s *runtimeState) newBridgeCommand() *cobra.Command {
 	root := &cobra.Command{Use: "bridge", Short: "Bridge quote and analytics commands"}
 
-	var quoteProviderArg, fromArg, toArg, assetArg, toAssetArg string
+	var quoteProviderArg, fromArg, toArg, assetArg, toAssetArg, fromAmountForGas string
 	var amountBase, amountDecimal string
 	quoteCmd := &cobra.Command{
 		Use:   "quote",
@@ -596,20 +596,22 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 			}
 
 			reqStruct := providers.BridgeQuoteRequest{
-				FromChain:       fromChain,
-				ToChain:         toChain,
-				FromAsset:       fromAsset,
-				ToAsset:         toAsset,
-				AmountBaseUnits: base,
-				AmountDecimal:   decimal,
+				FromChain:        fromChain,
+				ToChain:          toChain,
+				FromAsset:        fromAsset,
+				ToAsset:          toAsset,
+				AmountBaseUnits:  base,
+				AmountDecimal:    decimal,
+				FromAmountForGas: strings.TrimSpace(fromAmountForGas),
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
-				"provider":   providerName,
-				"from":       fromChain.CAIP2,
-				"to":         toChain.CAIP2,
-				"from_asset": fromAsset.AssetID,
-				"to_asset":   toAsset.AssetID,
-				"amount":     base,
+				"provider":            providerName,
+				"from":                fromChain.CAIP2,
+				"to":                  toChain.CAIP2,
+				"from_asset":          fromAsset.AssetID,
+				"to_asset":            toAsset.AssetID,
+				"amount":              base,
+				"from_amount_for_gas": reqStruct.FromAmountForGas,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
@@ -626,6 +628,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 	quoteCmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Destination asset override (symbol/address/CAIP-19)")
 	quoteCmd.Flags().StringVar(&amountBase, "amount", "", "Amount in base units")
 	quoteCmd.Flags().StringVar(&amountDecimal, "amount-decimal", "", "Amount in decimal units")
+	quoteCmd.Flags().StringVar(&fromAmountForGas, "from-amount-for-gas", "", "Optional amount in source token base units to reserve for destination native gas (LiFi)")
 	_ = quoteCmd.MarkFlagRequired("from")
 	_ = quoteCmd.MarkFlagRequired("to")
 	_ = quoteCmd.MarkFlagRequired("asset")
@@ -912,7 +915,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return err
 			}
 
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
@@ -987,7 +990,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)

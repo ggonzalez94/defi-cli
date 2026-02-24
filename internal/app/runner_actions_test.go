@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
 )
 
@@ -124,6 +125,26 @@ func TestRunnerSwapPlanRequiresFromAddress(t *testing.T) {
 	})
 	if code != 2 {
 		t.Fatalf("expected usage exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestRunnerMorphoLendPlanRequiresMarketID(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"lend", "supply", "plan",
+		"--protocol", "morpho",
+		"--chain", "1",
+		"--asset", "USDC",
+		"--amount", "1000000",
+		"--from-address", "0x00000000000000000000000000000000000000aa",
+	})
+	if code != 2 {
+		t.Fatalf("expected usage exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "--market-id") {
+		t.Fatalf("expected market-id guidance in error output, got: %s", stderr.String())
 	}
 }
 

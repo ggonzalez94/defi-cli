@@ -154,7 +154,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
@@ -228,7 +228,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
@@ -419,7 +419,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
@@ -496,7 +496,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)

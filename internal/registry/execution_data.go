@@ -30,7 +30,12 @@ func TaikoSwapContracts(chainID int64) (quoterV2 string, router string, ok bool)
 
 // Canonical Aave V3 PoolAddressesProvider contracts used by planners.
 var aavePoolAddressProviderByChainID = map[int64]string{
-	1: "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e",
+	1:     "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e", // Ethereum
+	10:    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Optimism
+	137:   "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Polygon
+	8453:  "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D", // Base
+	42161: "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Arbitrum
+	43114: "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Avalanche
 }
 
 func AavePoolAddressProvider(chainID int64) (string, bool) {
@@ -67,5 +72,12 @@ const (
 
 	AaveRewardsABI = `[
 		{"name":"claimRewards","type":"function","stateMutability":"nonpayable","inputs":[{"name":"assets","type":"address[]"},{"name":"amount","type":"uint256"},{"name":"to","type":"address"},{"name":"reward","type":"address"}],"outputs":[{"name":"","type":"uint256"}]}
+	]`
+
+	MorphoBlueABI = `[
+		{"name":"supply","type":"function","stateMutability":"nonpayable","inputs":[{"name":"marketParams","type":"tuple","components":[{"name":"loanToken","type":"address"},{"name":"collateralToken","type":"address"},{"name":"oracle","type":"address"},{"name":"irm","type":"address"},{"name":"lltv","type":"uint256"}]},{"name":"assets","type":"uint256"},{"name":"shares","type":"uint256"},{"name":"onBehalf","type":"address"},{"name":"data","type":"bytes"}],"outputs":[{"name":"assetsSupplied","type":"uint256"},{"name":"sharesSupplied","type":"uint256"}]},
+		{"name":"withdraw","type":"function","stateMutability":"nonpayable","inputs":[{"name":"marketParams","type":"tuple","components":[{"name":"loanToken","type":"address"},{"name":"collateralToken","type":"address"},{"name":"oracle","type":"address"},{"name":"irm","type":"address"},{"name":"lltv","type":"uint256"}]},{"name":"assets","type":"uint256"},{"name":"shares","type":"uint256"},{"name":"onBehalf","type":"address"},{"name":"receiver","type":"address"}],"outputs":[{"name":"assetsWithdrawn","type":"uint256"},{"name":"sharesWithdrawn","type":"uint256"}]},
+		{"name":"borrow","type":"function","stateMutability":"nonpayable","inputs":[{"name":"marketParams","type":"tuple","components":[{"name":"loanToken","type":"address"},{"name":"collateralToken","type":"address"},{"name":"oracle","type":"address"},{"name":"irm","type":"address"},{"name":"lltv","type":"uint256"}]},{"name":"assets","type":"uint256"},{"name":"shares","type":"uint256"},{"name":"onBehalf","type":"address"},{"name":"receiver","type":"address"}],"outputs":[{"name":"assetsBorrowed","type":"uint256"},{"name":"sharesBorrowed","type":"uint256"}]},
+		{"name":"repay","type":"function","stateMutability":"nonpayable","inputs":[{"name":"marketParams","type":"tuple","components":[{"name":"loanToken","type":"address"},{"name":"collateralToken","type":"address"},{"name":"oracle","type":"address"},{"name":"irm","type":"address"},{"name":"lltv","type":"uint256"}]},{"name":"assets","type":"uint256"},{"name":"shares","type":"uint256"},{"name":"onBehalf","type":"address"},{"name":"data","type":"bytes"}],"outputs":[{"name":"assetsRepaid","type":"uint256"},{"name":"sharesRepaid","type":"uint256"}]}
 	]`
 )

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"context"
 	"strings"
 	"time"
 
@@ -126,7 +125,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				return err
 			}
 			s.captureCommandDiagnostics(nil, status, false)
@@ -192,7 +191,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)

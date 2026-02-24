@@ -74,10 +74,13 @@ defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 
 defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
 defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
 defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
-defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --from-amount-for-gas 100000 --results-only
+defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 defi lend supply plan --protocol aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --protocol morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
 defi rewards claim plan --protocol aave --chain 1 --from-address 0xYourEOA --assets 0x... --reward-token 0x... --results-only
 defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap status --action-id <action_id> --results-only
@@ -91,6 +94,7 @@ Bridge quote examples:
 ```bash
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
 ```
 
 Swap quote examples:
@@ -132,9 +136,9 @@ defi swap run \
 Execution command surface:
 
 - `swap plan|run|submit|status`
-- `bridge plan|run|submit|status` (provider: `lifi`)
+- `bridge plan|run|submit|status` (provider: `across|lifi`)
 - `approvals plan|run|submit|status`
-- `lend supply|withdraw|borrow|repay plan|run|submit|status` (protocol: `aave`)
+- `lend supply|withdraw|borrow|repay plan|run|submit|status` (protocol: `aave|morpho`)
 - `rewards claim|compound plan|run|submit|status` (protocol: `aave`)
 - `actions list|status`
 
@@ -239,8 +243,13 @@ providers:
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 - Swap execution currently supports TaikoSwap only.
-- Bridge execution currently supports LiFi only.
-- Lend and rewards execution currently support Aave only.
+- Bridge execution currently supports Across and LiFi.
+- Lend execution supports Aave and Morpho (`--market-id` required for Morpho).
+- Rewards execution currently supports Aave only.
+- Aave execution resolves pool addresses automatically on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche; use `--pool-address` / `--pool-address-provider` on unsupported chains.
+- LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
+- Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
+- LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - All `run` / `submit` execution commands require `--yes` and will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
 - Provider/protocol selection is explicit for multi-provider flows; pass `--provider` or `--protocol` (no implicit defaults).

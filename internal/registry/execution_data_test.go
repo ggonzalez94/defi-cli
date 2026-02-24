@@ -22,12 +22,15 @@ func TestTaikoSwapContracts(t *testing.T) {
 }
 
 func TestAavePoolAddressProvider(t *testing.T) {
-	addr, ok := AavePoolAddressProvider(1)
-	if !ok || addr == "" {
-		t.Fatal("expected aave pool address provider for chain 1")
+	cases := []int64{1, 8453, 42161, 10, 137, 43114}
+	for _, chainID := range cases {
+		addr, ok := AavePoolAddressProvider(chainID)
+		if !ok || addr == "" {
+			t.Fatalf("expected aave pool address provider for chain %d", chainID)
+		}
 	}
-	if _, ok := AavePoolAddressProvider(8453); ok {
-		t.Fatal("did not expect aave pool address provider default for base")
+	if _, ok := AavePoolAddressProvider(167000); ok {
+		t.Fatal("did not expect aave pool address provider for unsupported chain")
 	}
 }
 
@@ -39,6 +42,7 @@ func TestExecutionABIConstantsParse(t *testing.T) {
 		AavePoolAddressProviderABI,
 		AavePoolABI,
 		AaveRewardsABI,
+		MorphoBlueABI,
 	}
 	for _, raw := range abis {
 		if _, err := abi.JSON(strings.NewReader(raw)); err != nil {

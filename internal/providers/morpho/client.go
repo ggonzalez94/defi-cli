@@ -40,6 +40,8 @@ func (c *Client) Info() model.ProviderInfo {
 			"lend.markets",
 			"lend.rates",
 			"yield.opportunities",
+			"lend.plan",
+			"lend.execute",
 		},
 	}
 }

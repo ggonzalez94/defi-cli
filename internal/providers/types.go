@@ -60,12 +60,13 @@ type BridgeDataProvider interface {
 }
 
 type BridgeQuoteRequest struct {
-	FromChain       id.Chain
-	ToChain         id.Chain
-	FromAsset       id.Asset
-	ToAsset         id.Asset
-	AmountBaseUnits string
-	AmountDecimal   string
+	FromChain        id.Chain
+	ToChain          id.Chain
+	FromAsset        id.Asset
+	ToAsset          id.Asset
+	AmountBaseUnits  string
+	AmountDecimal    string
+	FromAmountForGas string
 }
 
 type BridgeListRequest struct {
@@ -79,11 +80,12 @@ type BridgeDetailsRequest struct {
 }
 
 type BridgeExecutionOptions struct {
-	Sender      string
-	Recipient   string
-	SlippageBps int64
-	Simulate    bool
-	RPCURL      string
+	Sender           string
+	Recipient        string
+	SlippageBps      int64
+	Simulate         bool
+	RPCURL           string
+	FromAmountForGas string
 }
 
 type SwapProvider interface {

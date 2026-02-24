@@ -181,18 +181,20 @@ type BridgeDetails struct {
 }
 
 type BridgeQuote struct {
-	Provider        string     `json:"provider"`
-	FromChainID     string     `json:"from_chain_id"`
-	ToChainID       string     `json:"to_chain_id"`
-	FromAssetID     string     `json:"from_asset_id"`
-	ToAssetID       string     `json:"to_asset_id"`
-	InputAmount     AmountInfo `json:"input_amount"`
-	EstimatedOut    AmountInfo `json:"estimated_out"`
-	EstimatedFeeUSD float64    `json:"estimated_fee_usd"`
-	EstimatedTimeS  int64      `json:"estimated_time_s"`
-	Route           string     `json:"route"`
-	SourceURL       string     `json:"source_url,omitempty"`
-	FetchedAt       string     `json:"fetched_at"`
+	Provider                   string      `json:"provider"`
+	FromChainID                string      `json:"from_chain_id"`
+	ToChainID                  string      `json:"to_chain_id"`
+	FromAssetID                string      `json:"from_asset_id"`
+	ToAssetID                  string      `json:"to_asset_id"`
+	InputAmount                AmountInfo  `json:"input_amount"`
+	FromAmountForGas           string      `json:"from_amount_for_gas,omitempty"`
+	EstimatedDestinationNative *AmountInfo `json:"estimated_destination_native,omitempty"`
+	EstimatedOut               AmountInfo  `json:"estimated_out"`
+	EstimatedFeeUSD            float64     `json:"estimated_fee_usd"`
+	EstimatedTimeS             int64       `json:"estimated_time_s"`
+	Route                      string      `json:"route"`
+	SourceURL                  string      `json:"source_url,omitempty"`
+	FetchedAt                  string      `json:"fetched_at"`
 }
 
 type SwapQuote struct {

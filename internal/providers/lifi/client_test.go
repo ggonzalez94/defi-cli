@@ -55,6 +55,73 @@ func TestQuoteBridge(t *testing.T) {
 	}
 }
 
+func TestQuoteBridgeWithFromAmountForGas(t *testing.T) {
+	var gotFromAmountForGas string
+	quoteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotFromAmountForGas = r.URL.Query().Get("fromAmountForGas")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprint(w, `{
+			"estimate": {
+				"toAmount": "900000",
+				"toAmountMin": "890000",
+				"approvalAddress": "0x0000000000000000000000000000000000000ABC",
+				"feeCosts": [{"amountUSD":"0.40"}],
+				"gasCosts": [{"amountUSD":"0.60"}],
+				"executionDuration": 45
+			},
+			"toolDetails": {"key":"across","name":"across"},
+			"tool": "across",
+			"includedSteps": [{
+				"action": {
+					"toChainId": 8453,
+					"toToken": {"address":"0x0000000000000000000000000000000000000000","decimals":18}
+				},
+				"estimate": {"toAmount":"500000000000000"}
+			}],
+			"transactionRequest": {
+				"to": "0x0000000000000000000000000000000000000DDD",
+				"from": "0x00000000000000000000000000000000000000AA",
+				"data": "0x1234",
+				"value": "0x0",
+				"chainId": 1
+			}
+		}`)
+	}))
+	defer quoteServer.Close()
+
+	c := New(httpx.New(2*time.Second, 0))
+	c.baseURL = quoteServer.URL
+	fromChain, _ := id.ParseChain("ethereum")
+	toChain, _ := id.ParseChain("base")
+	fromAsset, _ := id.ParseAsset("USDC", fromChain)
+	toAsset, _ := id.ParseAsset("USDC", toChain)
+
+	quote, err := c.QuoteBridge(context.Background(), providers.BridgeQuoteRequest{
+		FromChain:        fromChain,
+		ToChain:          toChain,
+		FromAsset:        fromAsset,
+		ToAsset:          toAsset,
+		AmountBaseUnits:  "1000000",
+		AmountDecimal:    "1",
+		FromAmountForGas: "100000",
+	})
+	if err != nil {
+		t.Fatalf("QuoteBridge failed: %v", err)
+	}
+	if gotFromAmountForGas != "100000" {
+		t.Fatalf("expected fromAmountForGas query param, got %q", gotFromAmountForGas)
+	}
+	if quote.FromAmountForGas != "100000" {
+		t.Fatalf("expected quote from_amount_for_gas=100000, got %q", quote.FromAmountForGas)
+	}
+	if quote.EstimatedDestinationNative == nil {
+		t.Fatal("expected destination native estimate to be populated")
+	}
+	if quote.EstimatedDestinationNative.AmountBaseUnits != "500000000000000" {
+		t.Fatalf("unexpected destination native estimate: %s", quote.EstimatedDestinationNative.AmountBaseUnits)
+	}
+}
+
 func TestBuildBridgeActionAddsApprovalStep(t *testing.T) {
 	quoteServer := newLiFiQuoteServer(t, "0x0000000000000000000000000000000000000ABC")
 	defer quoteServer.Close()
@@ -97,6 +164,12 @@ func TestBuildBridgeActionAddsApprovalStep(t *testing.T) {
 	}
 	if action.Steps[1].Type != "bridge_send" {
 		t.Fatalf("expected second step bridge_send, got %s", action.Steps[1].Type)
+	}
+	if action.Steps[1].ExpectedOutputs["settlement_provider"] != "lifi" {
+		t.Fatalf("expected settlement provider lifi, got %q", action.Steps[1].ExpectedOutputs["settlement_provider"])
+	}
+	if action.Steps[1].ExpectedOutputs["settlement_status_endpoint"] == "" {
+		t.Fatal("expected settlement status endpoint metadata")
 	}
 }
 
@@ -141,6 +214,7 @@ func newLiFiQuoteServer(t *testing.T, approvalAddress string) *httptest.Server {
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = fmt.Fprintf(w, `{
+			"id": "quote-id:0",
 			"estimate": {
 				"toAmount": "950000",
 				"toAmountMin": "940000",
@@ -149,8 +223,9 @@ func newLiFiQuoteServer(t *testing.T, approvalAddress string) *httptest.Server {
 				"gasCosts": [{"amountUSD":"0.60"}],
 				"executionDuration": 120
 			},
-			"toolDetails": {"name":"across"},
+			"toolDetails": {"key":"across","name":"across"},
 			"tool": "across",
+			"includedSteps": [],
 			"transactionRequest": {
 				"to": "0x0000000000000000000000000000000000000DDD",
 				"from": "0x00000000000000000000000000000000000000AA",

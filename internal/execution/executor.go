@@ -3,9 +3,12 @@ package execution
 import (
 	"context"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
+	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -196,6 +199,9 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 		receipt, err := client.TransactionReceipt(waitCtx, signed.Hash())
 		if err == nil && receipt != nil {
 			if receipt.Status == types.ReceiptStatusSuccessful {
+				if err := verifyBridgeSettlement(ctx, step, signed.Hash().Hex(), opts); err != nil {
+					return err
+				}
 				step.Status = StepStatusConfirmed
 				return nil
 			}
@@ -213,6 +219,257 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 		case <-ticker.C:
 		}
 	}
+}
+
+func verifyBridgeSettlement(ctx context.Context, step *ActionStep, sourceTxHash string, opts ExecuteOptions) error {
+	if step == nil || step.Type != StepTypeBridge {
+		return nil
+	}
+	if step.ExpectedOutputs == nil {
+		return nil
+	}
+	provider := strings.ToLower(strings.TrimSpace(step.ExpectedOutputs["settlement_provider"]))
+	if provider == "" {
+		return nil
+	}
+	switch provider {
+	case "lifi":
+		statusEndpoint := strings.TrimSpace(step.ExpectedOutputs["settlement_status_endpoint"])
+		if statusEndpoint == "" {
+			statusEndpoint = "https://li.quest/v1/status"
+		}
+		return waitForLiFiSettlement(ctx, step, sourceTxHash, statusEndpoint, opts)
+	case "across":
+		statusEndpoint := strings.TrimSpace(step.ExpectedOutputs["settlement_status_endpoint"])
+		if statusEndpoint == "" {
+			statusEndpoint = "https://app.across.to/api/deposit/status"
+		}
+		return waitForAcrossSettlement(ctx, step, sourceTxHash, statusEndpoint, opts)
+	default:
+		return clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported bridge settlement provider %q", provider))
+	}
+}
+
+type liFiStatusResponse struct {
+	Status           string `json:"status"`
+	Substatus        string `json:"substatus"`
+	SubstatusMessage string `json:"substatusMessage"`
+	Message          string `json:"message"`
+	Code             int    `json:"code"`
+	LiFiExplorerLink string `json:"lifiExplorerLink"`
+	Receiving        struct {
+		TxHash string `json:"txHash"`
+		Amount string `json:"amount"`
+	} `json:"receiving"`
+}
+
+func waitForLiFiSettlement(ctx context.Context, step *ActionStep, sourceTxHash, statusEndpoint string, opts ExecuteOptions) error {
+	waitCtx, cancel := context.WithTimeout(ctx, opts.StepTimeout)
+	defer cancel()
+	ticker := time.NewTicker(opts.PollInterval)
+	defer ticker.Stop()
+
+	for {
+		resp, err := queryLiFiStatus(waitCtx, sourceTxHash, statusEndpoint, step.ExpectedOutputs)
+		if err == nil {
+			status := strings.ToUpper(strings.TrimSpace(resp.Status))
+			if status != "" {
+				setStepOutput(step, "settlement_status", status)
+			}
+			if strings.TrimSpace(resp.Substatus) != "" {
+				setStepOutput(step, "settlement_substatus", strings.TrimSpace(resp.Substatus))
+			}
+			if strings.TrimSpace(resp.SubstatusMessage) != "" {
+				setStepOutput(step, "settlement_message", strings.TrimSpace(resp.SubstatusMessage))
+			}
+			if strings.TrimSpace(resp.LiFiExplorerLink) != "" {
+				setStepOutput(step, "settlement_explorer_url", strings.TrimSpace(resp.LiFiExplorerLink))
+			}
+			if strings.TrimSpace(resp.Receiving.TxHash) != "" {
+				setStepOutput(step, "destination_tx_hash", strings.TrimSpace(resp.Receiving.TxHash))
+			}
+
+			switch status {
+			case "DONE":
+				return nil
+			case "FAILED", "INVALID":
+				msg := firstNonEmpty(strings.TrimSpace(resp.SubstatusMessage), strings.TrimSpace(resp.Message), "LiFi transfer reported failure")
+				return clierr.New(clierr.CodeUnavailable, "bridge settlement failed: "+msg)
+			}
+		}
+		if waitCtx.Err() != nil {
+			return clierr.Wrap(clierr.CodeActionTimeout, "timed out waiting for bridge settlement", waitCtx.Err())
+		}
+		select {
+		case <-waitCtx.Done():
+			return clierr.Wrap(clierr.CodeActionTimeout, "timed out waiting for bridge settlement", waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+type acrossStatusResponse struct {
+	Status           string `json:"status"`
+	Message          string `json:"message"`
+	Error            string `json:"error"`
+	DepositTxHash    string `json:"depositTxHash"`
+	FillTx           string `json:"fillTx"`
+	DepositRefundTx  string `json:"depositRefundTxHash"`
+	OriginChainID    int64  `json:"originChainId"`
+	DestinationChain int64  `json:"destinationChainId"`
+}
+
+func waitForAcrossSettlement(ctx context.Context, step *ActionStep, sourceTxHash, statusEndpoint string, opts ExecuteOptions) error {
+	waitCtx, cancel := context.WithTimeout(ctx, opts.StepTimeout)
+	defer cancel()
+	ticker := time.NewTicker(opts.PollInterval)
+	defer ticker.Stop()
+
+	for {
+		resp, err := queryAcrossStatus(waitCtx, sourceTxHash, statusEndpoint, step.ExpectedOutputs)
+		if err == nil {
+			status := strings.ToLower(strings.TrimSpace(resp.Status))
+			if status != "" {
+				setStepOutput(step, "settlement_status", status)
+			}
+			if strings.TrimSpace(resp.FillTx) != "" {
+				setStepOutput(step, "destination_tx_hash", strings.TrimSpace(resp.FillTx))
+			}
+			if strings.TrimSpace(resp.DepositRefundTx) != "" {
+				setStepOutput(step, "refund_tx_hash", strings.TrimSpace(resp.DepositRefundTx))
+			}
+
+			switch status {
+			case "filled":
+				return nil
+			case "refunded":
+				return clierr.New(clierr.CodeUnavailable, "bridge settlement refunded")
+			case "pending", "unfilled":
+				// keep polling
+			default:
+				if strings.TrimSpace(status) != "" {
+					// Keep polling unknown statuses until timeout.
+				}
+			}
+		}
+		if waitCtx.Err() != nil {
+			return clierr.Wrap(clierr.CodeActionTimeout, "timed out waiting for bridge settlement", waitCtx.Err())
+		}
+		select {
+		case <-waitCtx.Done():
+			return clierr.Wrap(clierr.CodeActionTimeout, "timed out waiting for bridge settlement", waitCtx.Err())
+		case <-ticker.C:
+		}
+	}
+}
+
+func queryLiFiStatus(ctx context.Context, sourceTxHash, statusEndpoint string, expected map[string]string) (liFiStatusResponse, error) {
+	var out liFiStatusResponse
+
+	endpoint := strings.TrimSpace(statusEndpoint)
+	if endpoint == "" {
+		endpoint = "https://li.quest/v1/status"
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return out, err
+	}
+	query := parsed.Query()
+	query.Set("txHash", strings.TrimPrefix(strings.TrimPrefix(strings.TrimSpace(sourceTxHash), "0x"), "0X"))
+	if bridge := strings.TrimSpace(expected["settlement_bridge"]); bridge != "" {
+		query.Set("bridge", bridge)
+	}
+	if fromChain := strings.TrimSpace(expected["settlement_from_chain"]); fromChain != "" {
+		query.Set("fromChain", fromChain)
+	}
+	if toChain := strings.TrimSpace(expected["settlement_to_chain"]); toChain != "" {
+		query.Set("toChain", toChain)
+	}
+	parsed.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return out, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, err
+	}
+	if out.Code != 0 && out.Status == "" {
+		// LiFi can report pending/non-indexed transfers with API-level codes.
+		if out.Code == 1003 || out.Code == 1011 {
+			return out, nil
+		}
+		return out, errors.New(firstNonEmpty(strings.TrimSpace(out.Message), "unexpected status response"))
+	}
+	return out, nil
+}
+
+func queryAcrossStatus(ctx context.Context, sourceTxHash, statusEndpoint string, expected map[string]string) (acrossStatusResponse, error) {
+	var out acrossStatusResponse
+
+	endpoint := strings.TrimSpace(statusEndpoint)
+	if endpoint == "" {
+		endpoint = "https://app.across.to/api/deposit/status"
+	}
+	parsed, err := url.Parse(endpoint)
+	if err != nil {
+		return out, err
+	}
+	query := parsed.Query()
+	query.Set("depositTxHash", strings.TrimSpace(sourceTxHash))
+	if origin := strings.TrimSpace(expected["settlement_origin_chain"]); origin != "" {
+		query.Set("originChainId", origin)
+	}
+	if recipient := strings.TrimSpace(expected["settlement_recipient"]); recipient != "" {
+		query.Set("recipient", recipient)
+	}
+	parsed.RawQuery = query.Encode()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
+	if err != nil {
+		return out, err
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return out, err
+	}
+	defer resp.Body.Close()
+
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return out, err
+	}
+	if strings.TrimSpace(out.Error) != "" {
+		if strings.EqualFold(strings.TrimSpace(out.Error), "DepositNotFoundException") {
+			return out, nil
+		}
+		return out, errors.New(firstNonEmpty(strings.TrimSpace(out.Message), strings.TrimSpace(out.Error), "unexpected across status response"))
+	}
+	return out, nil
+}
+
+func setStepOutput(step *ActionStep, key, value string) {
+	if step == nil || strings.TrimSpace(key) == "" {
+		return
+	}
+	if step.ExpectedOutputs == nil {
+		step.ExpectedOutputs = map[string]string{}
+	}
+	step.ExpectedOutputs[key] = value
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }
 
 func resolveTipCap(ctx context.Context, client *ethclient.Client, overrideGwei string) (*big.Int, error) {

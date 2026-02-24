@@ -3,13 +3,16 @@ package across
 import (
 	"context"
 	"fmt"
+	"math/big"
 	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
+	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
@@ -35,6 +38,8 @@ func (c *Client) Info() model.ProviderInfo {
 		RequiresKey: false,
 		Capabilities: []string{
 			"bridge.quote",
+			"bridge.plan",
+			"bridge.execute",
 		},
 	}
 }
@@ -109,6 +114,149 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		SourceURL:       "https://app.across.to",
 		FetchedAt:       c.now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+type swapApprovalResponse struct {
+	ApprovalTxns []struct {
+		ChainID int64  `json:"chainId"`
+		To      string `json:"to"`
+		Data    string `json:"data"`
+		Value   string `json:"value"`
+	} `json:"approvalTxns"`
+	SwapTx struct {
+		ChainID int64  `json:"chainId"`
+		To      string `json:"to"`
+		Data    string `json:"data"`
+		Value   string `json:"value"`
+	} `json:"swapTx"`
+	MinOutputAmount      string `json:"minOutputAmount"`
+	ExpectedOutputAmount string `json:"expectedOutputAmount"`
+	ExpectedFillTime     int64  `json:"expectedFillTime"`
+	Steps                struct {
+		Bridge struct {
+			OutputAmount string `json:"outputAmount"`
+		} `json:"bridge"`
+	} `json:"steps"`
+	Fees struct {
+		Total struct {
+			AmountUSD string `json:"amountUsd"`
+		} `json:"total"`
+	} `json:"fees"`
+}
+
+func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuoteRequest, opts providers.BridgeExecutionOptions) (execution.Action, error) {
+	sender := strings.TrimSpace(opts.Sender)
+	if sender == "" {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution requires sender address")
+	}
+	if !common.IsHexAddress(sender) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution sender must be a valid EVM address")
+	}
+	recipient := strings.TrimSpace(opts.Recipient)
+	if recipient == "" {
+		recipient = sender
+	}
+	if !common.IsHexAddress(recipient) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution recipient must be a valid EVM address")
+	}
+	if !common.IsHexAddress(req.FromAsset.Address) || !common.IsHexAddress(req.ToAsset.Address) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution requires ERC20 token addresses for from/to assets")
+	}
+	slippageBps := opts.SlippageBps
+	if slippageBps <= 0 {
+		slippageBps = 50
+	}
+	if slippageBps >= 10_000 {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	}
+
+	vals := url.Values{}
+	vals.Set("amount", req.AmountBaseUnits)
+	vals.Set("inputToken", req.FromAsset.Address)
+	vals.Set("outputToken", req.ToAsset.Address)
+	vals.Set("originChainId", strconv.FormatInt(req.FromChain.EVMChainID, 10))
+	vals.Set("destinationChainId", strconv.FormatInt(req.ToChain.EVMChainID, 10))
+	vals.Set("depositor", sender)
+	vals.Set("recipient", recipient)
+	vals.Set("slippage", formatSlippage(slippageBps))
+
+	reqURL := c.baseURL + "/swap/approval?" + vals.Encode()
+	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
+	if err != nil {
+		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "build across execution request", err)
+	}
+	var resp swapApprovalResponse
+	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+		return execution.Action{}, err
+	}
+	if strings.TrimSpace(resp.SwapTx.To) == "" || strings.TrimSpace(resp.SwapTx.Data) == "" {
+		return execution.Action{}, clierr.New(clierr.CodeUnavailable, "across execution response missing swap transaction payload")
+	}
+	if resp.SwapTx.ChainID != 0 && resp.SwapTx.ChainID != req.FromChain.EVMChainID {
+		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "across swap transaction chain does not match source chain")
+	}
+
+	rpcURL, err := execution.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
+	if err != nil {
+		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
+	}
+
+	action := execution.NewAction(execution.NewActionID(), "bridge", req.FromChain.CAIP2, execution.Constraints{
+		SlippageBps: slippageBps,
+		Simulate:    opts.Simulate,
+	})
+	action.Provider = "across"
+	action.FromAddress = common.HexToAddress(sender).Hex()
+	action.ToAddress = common.HexToAddress(recipient).Hex()
+	action.InputAmount = req.AmountBaseUnits
+	action.Metadata = map[string]any{
+		"to_chain_id":   req.ToChain.CAIP2,
+		"from_asset_id": req.FromAsset.AssetID,
+		"to_asset_id":   req.ToAsset.AssetID,
+		"route":         "across",
+	}
+
+	for i, approval := range resp.ApprovalTxns {
+		if strings.TrimSpace(approval.To) == "" || strings.TrimSpace(approval.Data) == "" {
+			continue
+		}
+		if approval.ChainID != 0 && approval.ChainID != req.FromChain.EVMChainID {
+			continue
+		}
+		action.Steps = append(action.Steps, execution.ActionStep{
+			StepID:      fmt.Sprintf("approve-bridge-token-%d", i+1),
+			Type:        execution.StepTypeApproval,
+			Status:      execution.StepStatusPending,
+			ChainID:     req.FromChain.CAIP2,
+			RPCURL:      rpcURL,
+			Description: "Approve across bridge contract for source token",
+			Target:      common.HexToAddress(approval.To).Hex(),
+			Data:        ensureHexPrefix(approval.Data),
+			Value:       normalizeTransactionValue(approval.Value),
+		})
+	}
+
+	swapValue := normalizeTransactionValue(resp.SwapTx.Value)
+	action.Steps = append(action.Steps, execution.ActionStep{
+		StepID:      "bridge-transfer",
+		Type:        execution.StepTypeBridge,
+		Status:      execution.StepStatusPending,
+		ChainID:     req.FromChain.CAIP2,
+		RPCURL:      rpcURL,
+		Description: "Bridge transfer via Across",
+		Target:      common.HexToAddress(resp.SwapTx.To).Hex(),
+		Data:        ensureHexPrefix(resp.SwapTx.Data),
+		Value:       swapValue,
+		ExpectedOutputs: map[string]string{
+			"to_amount_min":                firstNonEmpty(resp.MinOutputAmount, resp.ExpectedOutputAmount, resp.Steps.Bridge.OutputAmount),
+			"settlement_provider":          "across",
+			"settlement_status_endpoint":   c.baseURL + "/deposit/status",
+			"settlement_origin_chain":      strconv.FormatInt(req.FromChain.EVMChainID, 10),
+			"settlement_recipient":         common.HexToAddress(recipient).Hex(),
+			"settlement_destination_chain": strconv.FormatInt(req.ToChain.EVMChainID, 10),
+		},
+	})
+	return action, nil
 }
 
 func checkAmountWithinLimits(amount string, limits map[string]any) bool {
@@ -223,4 +371,43 @@ func toDigits(v string) string {
 		}
 	}
 	return trimLeadingZeros(v)
+}
+
+func formatSlippage(bps int64) string {
+	return strconv.FormatFloat(float64(bps)/10000, 'f', 6, 64)
+}
+
+func ensureHexPrefix(v string) string {
+	clean := strings.TrimSpace(v)
+	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
+		return clean
+	}
+	return "0x" + clean
+}
+
+func normalizeTransactionValue(v string) string {
+	clean := strings.TrimSpace(v)
+	if clean == "" {
+		return "0"
+	}
+	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
+		n := new(big.Int)
+		if _, ok := n.SetString(strings.TrimPrefix(strings.TrimPrefix(clean, "0x"), "0X"), 16); ok {
+			return n.String()
+		}
+		return "0"
+	}
+	if n, ok := new(big.Int).SetString(clean, 10); ok {
+		return n.String()
+	}
+	return "0"
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return strings.TrimSpace(v)
+		}
+	}
+	return ""
 }

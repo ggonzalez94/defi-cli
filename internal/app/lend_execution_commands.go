@@ -32,6 +32,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		protocol            string
 		chainArg            string
 		assetArg            string
+		marketID            string
 		amountBase          string
 		amountDecimal       string
 		fromAddress         string
@@ -48,9 +49,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		if protocol == "" {
 			return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
 		}
-		if protocol != "aave" {
-			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports only protocol=aave")
-		}
 
 		chain, asset, err := parseChainAsset(args.chainArg, args.assetArg)
 		if err != nil {
@@ -65,20 +63,38 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return execution.Action{}, err
 		}
 
-		return planner.BuildAaveLendAction(ctx, planner.AaveLendRequest{
-			Verb:                  verb,
-			Chain:                 chain,
-			Asset:                 asset,
-			AmountBaseUnits:       base,
-			Sender:                args.fromAddress,
-			Recipient:             args.recipient,
-			OnBehalfOf:            args.onBehalfOf,
-			InterestRateMode:      args.interestRateMode,
-			Simulate:              args.simulate,
-			RPCURL:                args.rpcURL,
-			PoolAddress:           args.poolAddress,
-			PoolAddressesProvider: args.poolAddressProvider,
-		})
+		switch protocol {
+		case "aave":
+			return planner.BuildAaveLendAction(ctx, planner.AaveLendRequest{
+				Verb:                  verb,
+				Chain:                 chain,
+				Asset:                 asset,
+				AmountBaseUnits:       base,
+				Sender:                args.fromAddress,
+				Recipient:             args.recipient,
+				OnBehalfOf:            args.onBehalfOf,
+				InterestRateMode:      args.interestRateMode,
+				Simulate:              args.simulate,
+				RPCURL:                args.rpcURL,
+				PoolAddress:           args.poolAddress,
+				PoolAddressesProvider: args.poolAddressProvider,
+			})
+		case "morpho":
+			return planner.BuildMorphoLendAction(ctx, planner.MorphoLendRequest{
+				Verb:            verb,
+				Chain:           chain,
+				Asset:           asset,
+				MarketID:        args.marketID,
+				AmountBaseUnits: base,
+				Sender:          args.fromAddress,
+				Recipient:       args.recipient,
+				OnBehalfOf:      args.onBehalfOf,
+				Simulate:        args.simulate,
+				RPCURL:          args.rpcURL,
+			})
+		default:
+			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports protocol=aave|morpho")
+		}
 	}
 
 	var plan lendArgs
@@ -90,7 +106,11 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			defer cancel()
 			start := time.Now()
 			action, err := buildAction(ctx, plan)
-			statuses := []model.ProviderStatus{{Name: "aave", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+			providerName := normalizeLendingProtocol(plan.protocol)
+			if providerName == "" {
+				providerName = "lend"
+			}
+			statuses := []model.ProviderStatus{{Name: providerName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -105,15 +125,16 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.protocol, "protocol", "", "Lending protocol (aave)")
+	planCmd.Flags().StringVar(&plan.protocol, "protocol", "", "Lending protocol (aave|morpho)")
 	planCmd.Flags().StringVar(&plan.chainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
+	planCmd.Flags().StringVar(&plan.marketID, "market-id", "", "Morpho market unique key (required for --protocol morpho)")
 	planCmd.Flags().StringVar(&plan.amountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.amountDecimal, "amount-decimal", "", "Amount in decimal units")
 	planCmd.Flags().StringVar(&plan.fromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	planCmd.Flags().StringVar(&plan.onBehalfOf, "on-behalf-of", "", "Aave onBehalfOf address (defaults to --from-address)")
-	planCmd.Flags().Int64Var(&plan.interestRateMode, "interest-rate-mode", 2, "Interest rate mode for borrow/repay (1=stable,2=variable)")
+	planCmd.Flags().StringVar(&plan.onBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
+	planCmd.Flags().Int64Var(&plan.interestRateMode, "interest-rate-mode", 2, "Aave borrow/repay mode (1=stable,2=variable)")
 	planCmd.Flags().BoolVar(&plan.simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
 	planCmd.Flags().StringVar(&plan.poolAddress, "pool-address", "", "Aave pool address override")
@@ -139,7 +160,11 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			defer cancel()
 			start := time.Now()
 			action, err := buildAction(ctx, run)
-			statuses := []model.ProviderStatus{{Name: "aave", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+			providerName := normalizeLendingProtocol(run.protocol)
+			if providerName == "" {
+				providerName = "lend"
+			}
+			statuses := []model.ProviderStatus{{Name: providerName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -164,7 +189,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
@@ -172,15 +197,16 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Lending protocol (aave)")
+	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Lending protocol (aave|morpho)")
 	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
 	runCmd.Flags().StringVar(&run.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
+	runCmd.Flags().StringVar(&run.marketID, "market-id", "", "Morpho market unique key (required for --protocol morpho)")
 	runCmd.Flags().StringVar(&run.amountBase, "amount", "", "Amount in base units")
 	runCmd.Flags().StringVar(&run.amountDecimal, "amount-decimal", "", "Amount in decimal units")
 	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address")
 	runCmd.Flags().StringVar(&run.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	runCmd.Flags().StringVar(&run.onBehalfOf, "on-behalf-of", "", "Aave onBehalfOf address (defaults to --from-address)")
-	runCmd.Flags().Int64Var(&run.interestRateMode, "interest-rate-mode", 2, "Interest rate mode for borrow/repay (1=stable,2=variable)")
+	runCmd.Flags().StringVar(&run.onBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
+	runCmd.Flags().Int64Var(&run.interestRateMode, "interest-rate-mode", 2, "Aave borrow/repay mode (1=stable,2=variable)")
 	runCmd.Flags().BoolVar(&run.simulate, "simulate", true, "Run preflight simulation before submission")
 	runCmd.Flags().StringVar(&run.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
 	runCmd.Flags().StringVar(&run.poolAddress, "pool-address", "", "Aave pool address override")
@@ -239,7 +265,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			if err != nil {
 				return err
 			}
-			if err := execution.ExecuteAction(context.Background(), s.actionStore, &action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)

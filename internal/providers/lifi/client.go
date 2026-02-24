@@ -47,6 +47,7 @@ func (c *Client) Info() model.ProviderInfo {
 }
 
 type quoteResponse struct {
+	ID       string `json:"id"`
 	Estimate struct {
 		ToAmount        string `json:"toAmount"`
 		ToAmountMin     string `json:"toAmountMin"`
@@ -60,9 +61,11 @@ type quoteResponse struct {
 		ExecutionDuration int64 `json:"executionDuration"`
 	} `json:"estimate"`
 	ToolDetails struct {
+		Key  string `json:"key"`
 		Name string `json:"name"`
 	} `json:"toolDetails"`
-	Tool               string `json:"tool"`
+	Tool               string      `json:"tool"`
+	IncludedSteps      []quoteStep `json:"includedSteps"`
 	TransactionRequest struct {
 		To       string `json:"to"`
 		From     string `json:"from"`
@@ -74,7 +77,25 @@ type quoteResponse struct {
 	} `json:"transactionRequest"`
 }
 
+type quoteStep struct {
+	Action struct {
+		ToChainID int64 `json:"toChainId"`
+		ToToken   struct {
+			Address  string `json:"address"`
+			Decimals int    `json:"decimals"`
+		} `json:"toToken"`
+	} `json:"action"`
+	Estimate struct {
+		ToAmount string `json:"toAmount"`
+	} `json:"estimate"`
+}
+
 func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteRequest) (model.BridgeQuote, error) {
+	fromAmountForGas, err := normalizeOptionalBaseUnits(req.FromAmountForGas)
+	if err != nil {
+		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeUsage, "parse bridge gas reserve amount", err)
+	}
+
 	vals := url.Values{}
 	vals.Set("fromChain", strconv.FormatInt(req.FromChain.EVMChainID, 10))
 	vals.Set("toChain", strconv.FormatInt(req.ToChain.EVMChainID, 10))
@@ -83,6 +104,9 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 	vals.Set("fromAmount", req.AmountBaseUnits)
 	vals.Set("slippage", "0.005")
 	vals.Set("fromAddress", "0x0000000000000000000000000000000000000001")
+	if fromAmountForGas != "" {
+		vals.Set("fromAmountForGas", fromAmountForGas)
+	}
 
 	url := c.baseURL + "/quote?" + vals.Encode()
 	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -112,6 +136,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		route = fmt.Sprintf("%s->%s", req.FromChain.Slug, req.ToChain.Slug)
 	}
 
+	nativeEstimate := destinationNativeEstimate(resp.IncludedSteps, req.ToChain.EVMChainID)
+
 	return model.BridgeQuote{
 		Provider:    "lifi",
 		FromChainID: req.FromChain.CAIP2,
@@ -123,6 +149,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
+		FromAmountForGas:           fromAmountForGas,
+		EstimatedDestinationNative: nativeEstimate,
 		EstimatedOut: model.AmountInfo{
 			AmountBaseUnits: resp.Estimate.ToAmount,
 			AmountDecimal:   id.FormatDecimalCompat(resp.Estimate.ToAmount, req.ToAsset.Decimals),
@@ -161,6 +189,10 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	if slippageBps >= 10_000 {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
 	}
+	fromAmountForGas, err := normalizeOptionalBaseUnits(firstNonEmpty(opts.FromAmountForGas, req.FromAmountForGas))
+	if err != nil {
+		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "parse bridge gas reserve amount", err)
+	}
 
 	vals := url.Values{}
 	vals.Set("fromChain", strconv.FormatInt(req.FromChain.EVMChainID, 10))
@@ -171,6 +203,9 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	vals.Set("slippage", formatSlippage(slippageBps))
 	vals.Set("fromAddress", sender)
 	vals.Set("toAddress", recipient)
+	if fromAmountForGas != "" {
+		vals.Set("fromAmountForGas", fromAmountForGas)
+	}
 
 	reqURL := c.baseURL + "/quote?" + vals.Encode()
 	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -192,6 +227,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}
+	nativeEstimate := destinationNativeEstimate(resp.IncludedSteps, req.ToChain.EVMChainID)
 
 	action := execution.NewAction(execution.NewActionID(), "bridge", req.FromChain.CAIP2, execution.Constraints{
 		SlippageBps: slippageBps,
@@ -207,6 +243,12 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		"to_asset_id":      req.ToAsset.AssetID,
 		"route":            firstNonEmpty(resp.ToolDetails.Name, resp.Tool),
 		"approval_spender": resp.Estimate.ApprovalAddress,
+	}
+	if fromAmountForGas != "" {
+		action.Metadata["from_amount_for_gas"] = fromAmountForGas
+	}
+	if nativeEstimate != nil {
+		action.Metadata["estimated_destination_native_base_units"] = nativeEstimate.AmountBaseUnits
 	}
 
 	if shouldAddApproval(req.FromAsset.Address, resp.Estimate.ApprovalAddress) {
@@ -265,6 +307,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeActionPlan, "parse bridge transaction value", err)
 	}
+	statusEndpoint := strings.TrimSuffix(c.baseURL, "/") + "/status"
 	action.Steps = append(action.Steps, execution.ActionStep{
 		StepID:      "bridge-transfer",
 		Type:        execution.StepTypeBridge,
@@ -276,9 +319,18 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		Data:        ensureHexPrefix(resp.TransactionRequest.Data),
 		Value:       bridgeValue,
 		ExpectedOutputs: map[string]string{
-			"to_amount_min": firstNonEmpty(resp.Estimate.ToAmountMin, resp.Estimate.ToAmount),
+			"to_amount_min":                firstNonEmpty(resp.Estimate.ToAmountMin, resp.Estimate.ToAmount),
+			"settlement_provider":          "lifi",
+			"settlement_status_endpoint":   statusEndpoint,
+			"settlement_bridge":            firstNonEmpty(resp.ToolDetails.Key, resp.Tool),
+			"settlement_from_chain":        strconv.FormatInt(req.FromChain.EVMChainID, 10),
+			"settlement_to_chain":          strconv.FormatInt(req.ToChain.EVMChainID, 10),
+			"settlement_quote_response_id": resp.ID,
 		},
 	})
+	if nativeEstimate != nil {
+		action.Steps[len(action.Steps)-1].ExpectedOutputs["destination_native_estimated"] = nativeEstimate.AmountBaseUnits
+	}
 	return action, nil
 }
 
@@ -300,6 +352,54 @@ func shouldAddApproval(tokenAddr, spender string) bool {
 		return false
 	}
 	return !strings.EqualFold(strings.TrimSpace(tokenAddr), "0x0000000000000000000000000000000000000000")
+}
+
+func destinationNativeEstimate(steps []quoteStep, destinationChainID int64) *model.AmountInfo {
+	for _, step := range steps {
+		if step.Action.ToChainID != destinationChainID {
+			continue
+		}
+		addr := strings.TrimSpace(step.Action.ToToken.Address)
+		if !isNativeTokenAddress(addr) {
+			continue
+		}
+		amount := strings.TrimSpace(step.Estimate.ToAmount)
+		if amount == "" {
+			continue
+		}
+		decimals := step.Action.ToToken.Decimals
+		if decimals <= 0 {
+			decimals = 18
+		}
+		return &model.AmountInfo{
+			AmountBaseUnits: amount,
+			AmountDecimal:   id.FormatDecimalCompat(amount, decimals),
+			Decimals:        decimals,
+		}
+	}
+	return nil
+}
+
+func isNativeTokenAddress(addr string) bool {
+	if strings.EqualFold(addr, "0x0000000000000000000000000000000000000000") {
+		return true
+	}
+	return strings.EqualFold(addr, "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee")
+}
+
+func normalizeOptionalBaseUnits(v string) (string, error) {
+	clean := strings.TrimSpace(v)
+	if clean == "" {
+		return "", nil
+	}
+	amount, ok := new(big.Int).SetString(clean, 10)
+	if !ok {
+		return "", fmt.Errorf("amount must be an integer base-unit value")
+	}
+	if amount.Sign() <= 0 {
+		return "", fmt.Errorf("amount must be greater than zero")
+	}
+	return amount.String(), nil
 }
 
 func formatSlippage(bps int64) string {

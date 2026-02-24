@@ -12,9 +12,9 @@ Format:
 ### Added
 - Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
 - Added swap execution workflow commands: `swap plan`, `swap run`, `swap submit`, and `swap status`.
-- Added bridge execution workflow commands: `bridge plan`, `bridge run`, `bridge submit`, and `bridge status` (LiFi provider).
+- Added bridge execution workflow commands: `bridge plan`, `bridge run`, `bridge submit`, and `bridge status` (Across and LiFi providers).
 - Added approvals workflow commands: `approvals plan`, `approvals run`, `approvals submit`, and `approvals status`.
-- Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|run|submit|status` (Aave).
+- Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|run|submit|status` (Aave and Morpho).
 - Added rewards execution workflow commands under `rewards claim|compound ... plan|run|submit|status` (Aave).
 - Added action persistence and inspection commands: `actions list` and `actions status`.
 - Added local signer support for execution with env/file/keystore key sources and strict file-permission checks.
@@ -26,13 +26,21 @@ Format:
 ### Changed
 - `providers list` now includes TaikoSwap execution capabilities (`swap.plan`, `swap.execute`) alongside quote metadata.
 - `providers list` now includes LiFi bridge execution capabilities (`bridge.plan`, `bridge.execute`).
+- `providers list` now includes Across bridge execution capabilities (`bridge.plan`, `bridge.execute`).
+- `providers list` now includes Morpho lend execution capabilities (`lend.plan`, `lend.execute`).
 - Added execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
 - Added execution config/env support for action store paths and Taiko RPC overrides.
 - Execution command cache/action-store policy now covers `swap|bridge|approvals|lend|rewards ... plan|run|submit|status`.
 - Removed implicit defaults for multi-provider command paths; `--provider`/`--protocol` must be set explicitly where applicable.
+- Added bridge gas-top-up request support via `--from-amount-for-gas` for LiFi quote/plan/run flows.
+- Bridge execution now tracks LiFi destination settlement status before finalizing bridge steps.
+- Bridge execution now tracks Across destination settlement status before finalizing bridge steps.
+- Aave execution registry defaults now include PoolAddressesProvider mappings for Base, Arbitrum, Optimism, Polygon, and Avalanche in addition to Ethereum.
+- Execution `run`/`submit` commands now propagate command timeout/cancel context through on-chain execution.
+- Morpho lend execution now requires explicit `--market-id` to avoid ambiguous market selection.
 
 ### Fixed
-- None yet.
+- Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
 
 ### Docs
 - Documented bridge/lend/rewards/approvals execution flows, signer env inputs, command behavior, and exit codes in `README.md`.
