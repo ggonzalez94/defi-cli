@@ -67,14 +67,13 @@ type runtimeState struct {
 	lastProviders []model.ProviderStatus
 	lastPartial   bool
 
-	marketProvider         providers.MarketDataProvider
-	defaultLendingProvider providers.LendingProvider
-	lendingProviders       map[string]providers.LendingProvider
-	yieldProviders         map[string]providers.YieldProvider
-	bridgeProviders        map[string]providers.BridgeProvider
-	bridgeDataProviders    map[string]providers.BridgeDataProvider
-	swapProviders          map[string]providers.SwapProvider
-	providerInfos          []model.ProviderInfo
+	marketProvider      providers.MarketDataProvider
+	lendingProviders    map[string]providers.LendingProvider
+	yieldProviders      map[string]providers.YieldProvider
+	bridgeProviders     map[string]providers.BridgeProvider
+	bridgeDataProviders map[string]providers.BridgeDataProvider
+	swapProviders       map[string]providers.SwapProvider
+	providerInfos       []model.ProviderInfo
 }
 
 const cachePayloadSchemaVersion = "v2"
@@ -134,7 +133,6 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				kaminoProvider := kamino.New(httpClient)
 				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
 				s.marketProvider = llama
-				s.defaultLendingProvider = nil
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
 					"morpho": morphoProvider,
@@ -439,37 +437,19 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			req := map[string]any{"protocol": protocol, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				primary, fallback, err := s.selectLendingProviders(protocol)
+				provider, err := s.selectLendingProvider(protocol)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
-				warnings := []string{}
-				statuses := []model.ProviderStatus{}
 
 				start := time.Now()
-				data, err := primary.LendMarkets(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: primary.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()})
-				if err == nil || fallback == nil {
-					data = applyLendMarketLimit(data, marketsLimit)
-					return data, statuses, warnings, false, err
+				data, err := provider.LendMarkets(ctx, protocol, chain, asset)
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				if err != nil {
+					return nil, statuses, nil, false, err
 				}
-				if !shouldFallback(err) {
-					return nil, statuses, warnings, false, err
-				}
-				if !assetHasResolvedSymbol(asset) {
-					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
-					return nil, statuses, warnings, false, err
-				}
-
-				start = time.Now()
-				fallbackData, fallbackErr := fallback.LendMarkets(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: fallback.Info().Name, Status: statusFromErr(fallbackErr), LatencyMS: time.Since(start).Milliseconds()})
-				if fallbackErr == nil {
-					warnings = append(warnings, fmt.Sprintf("primary provider %s failed; using fallback %s", primary.Info().Name, fallback.Info().Name))
-					fallbackData = applyLendMarketLimit(fallbackData, marketsLimit)
-					return fallbackData, statuses, warnings, false, nil
-				}
-				return nil, statuses, warnings, false, err
+				data = applyLendMarketLimit(data, marketsLimit)
+				return data, statuses, nil, false, nil
 			})
 		},
 	}
@@ -495,37 +475,19 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			req := map[string]any{"protocol": protocol, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				primary, fallback, err := s.selectLendingProviders(protocol)
+				provider, err := s.selectLendingProvider(protocol)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
-				warnings := []string{}
-				statuses := []model.ProviderStatus{}
 
 				start := time.Now()
-				data, err := primary.LendRates(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: primary.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()})
-				if err == nil || fallback == nil {
-					data = applyLendRateLimit(data, ratesLimit)
-					return data, statuses, warnings, false, err
+				data, err := provider.LendRates(ctx, protocol, chain, asset)
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				if err != nil {
+					return nil, statuses, nil, false, err
 				}
-				if !shouldFallback(err) {
-					return nil, statuses, warnings, false, err
-				}
-				if !assetHasResolvedSymbol(asset) {
-					warnings = append(warnings, "fallback skipped: asset symbol could not be resolved from input")
-					return nil, statuses, warnings, false, err
-				}
-
-				start = time.Now()
-				fallbackData, fallbackErr := fallback.LendRates(ctx, protocol, chain, asset)
-				statuses = append(statuses, model.ProviderStatus{Name: fallback.Info().Name, Status: statusFromErr(fallbackErr), LatencyMS: time.Since(start).Milliseconds()})
-				if fallbackErr == nil {
-					warnings = append(warnings, fmt.Sprintf("primary provider %s failed; using fallback %s", primary.Info().Name, fallback.Info().Name))
-					fallbackData = applyLendRateLimit(fallbackData, ratesLimit)
-					return fallbackData, statuses, warnings, false, nil
-				}
-				return nil, statuses, warnings, false, err
+				data = applyLendRateLimit(data, ratesLimit)
+				return data, statuses, nil, false, nil
 			})
 		},
 	}
@@ -1040,23 +1002,12 @@ func normalizeLendingProtocol(input string) string {
 	}
 }
 
-func (s *runtimeState) selectLendingProviders(protocol string) (providers.LendingProvider, providers.LendingProvider, error) {
+func (s *runtimeState) selectLendingProvider(protocol string) (providers.LendingProvider, error) {
 	primary, ok := s.lendingProviders[protocol]
 	if !ok {
-		return nil, nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported lending protocol: %s", protocol))
+		return nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported lending protocol: %s", protocol))
 	}
-	if s.defaultLendingProvider == nil || primary.Info().Name == s.defaultLendingProvider.Info().Name {
-		return primary, nil, nil
-	}
-	return primary, s.defaultLendingProvider, nil
-}
-
-func shouldFallback(err error) bool {
-	cErr, ok := clierr.As(err)
-	if !ok {
-		return false
-	}
-	return cErr.Code == clierr.CodeUnavailable || cErr.Code == clierr.CodeUnsupported || cErr.Code == clierr.CodeRateLimited
+	return primary, nil
 }
 
 func (s *runtimeState) selectYieldProviders(filter []string, chain id.Chain) ([]string, error) {
@@ -1367,10 +1318,6 @@ func shouldOpenCache(commandPath string) bool {
 
 func normalizeCommandPath(commandPath string) string {
 	return strings.Join(strings.Fields(strings.ToLower(strings.TrimSpace(commandPath))), " ")
-}
-
-func assetHasResolvedSymbol(asset id.Asset) bool {
-	return strings.TrimSpace(asset.Symbol) != ""
 }
 
 func (s *runtimeState) resetCommandDiagnostics() {

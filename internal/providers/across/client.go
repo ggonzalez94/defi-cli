@@ -78,24 +78,30 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		return model.BridgeQuote{}, err
 	}
 
-	feeBase := pickNumberString(fees, "totalRelayFee", "relayFeeTotal", "relayFeePct")
-	if feeBase == "" {
+	feeBaseAbs := pickNumberString(fees, "totalRelayFee", "relayFeeTotal")
+	feeBase := feeBaseAbs
+	hasAbsoluteFee := strings.TrimSpace(feeBaseAbs) != ""
+	if !hasAbsoluteFee {
 		feeBase = "0"
 	}
 
 	estOut := pickNumberString(fees, "outputAmount")
-	if estOut == "" {
+	hasProviderOutputAmount := strings.TrimSpace(estOut) != ""
+	if !hasProviderOutputAmount && hasAbsoluteFee {
 		estOut = subtractBaseUnits(req.AmountBaseUnits, feeBase)
 	}
+	if strings.TrimSpace(estOut) == "" {
+		estOut = req.AmountBaseUnits
+	}
 	feeUSD := pickFloat(fees, "totalRelayFeeUsd", "feeUsd")
-	if feeUSD == 0 {
+	if feeUSD == 0 && hasAbsoluteFee {
 		feeUSD = approximateStableUSD(req.FromAsset.Symbol, feeBase, req.FromAsset.Decimals)
 	}
 	estTime := int64(pickFloat(fees, "estimatedFillTimeSec", "estimatedFillTime"))
 	if estTime == 0 {
 		estTime = 120
 	}
-	feeBreakdown := buildAcrossFeeBreakdown(req, fees, feeBase, estOut, feeUSD)
+	feeBreakdown := buildAcrossFeeBreakdown(req, fees, feeBaseAbs, estOut, feeUSD, hasProviderOutputAmount)
 
 	return model.BridgeQuote{
 		Provider:    "across",
@@ -202,30 +208,29 @@ func floatValue(v any) (float64, bool) {
 	}
 }
 
-func buildAcrossFeeBreakdown(req providers.BridgeQuoteRequest, fees map[string]any, totalFeeBase, estimatedOut string, totalFeeUSD float64) *model.BridgeFeeBreakdown {
+func buildAcrossFeeBreakdown(req providers.BridgeQuoteRequest, fees map[string]any, totalFeeBase, estimatedOut string, totalFeeUSD float64, hasProviderOutputAmount bool) *model.BridgeFeeBreakdown {
 	lpFeeBase := pickNumberString(fees, "lpFee", "lpFeeTotal")
 	relayerFeeBase := pickNumberString(fees, "relayerCapitalFee", "capitalFeeTotal")
 	gasFeeBase := pickNumberString(fees, "relayerGasFee", "relayGasFeeTotal")
 
 	breakdown := &model.BridgeFeeBreakdown{
-		LPFee:             feeAmountFromBase(lpFeeBase, req.FromAsset.Decimals),
-		RelayerFee:        feeAmountFromBase(relayerFeeBase, req.FromAsset.Decimals),
-		GasFee:            feeAmountFromBase(gasFeeBase, req.FromAsset.Decimals),
-		TotalFeeBaseUnits: trimLeadingZeros(totalFeeBase),
-		TotalFeeUSD:       totalFeeUSD,
+		LPFee:       feeAmountFromBase(lpFeeBase, req.FromAsset.Decimals),
+		RelayerFee:  feeAmountFromBase(relayerFeeBase, req.FromAsset.Decimals),
+		GasFee:      feeAmountFromBase(gasFeeBase, req.FromAsset.Decimals),
+		TotalFeeUSD: totalFeeUSD,
 	}
 
-	if breakdown.TotalFeeBaseUnits == "" {
-		breakdown.TotalFeeBaseUnits = "0"
+	if strings.TrimSpace(totalFeeBase) != "" {
+		breakdown.TotalFeeBaseUnits = trimLeadingZeros(totalFeeBase)
+		breakdown.TotalFeeDecimal = id.FormatDecimalCompat(breakdown.TotalFeeBaseUnits, req.FromAsset.Decimals)
 	}
-	breakdown.TotalFeeDecimal = id.FormatDecimalCompat(breakdown.TotalFeeBaseUnits, req.FromAsset.Decimals)
-	if strings.TrimSpace(estimatedOut) != "" {
+	if hasProviderOutputAmount && breakdown.TotalFeeBaseUnits != "" && strings.TrimSpace(estimatedOut) != "" {
 		delta := subtractBaseUnits(req.AmountBaseUnits, estimatedOut)
 		consistent := compareBaseUnits(delta, breakdown.TotalFeeBaseUnits) == 0
 		breakdown.ConsistentWithAmountDelta = &consistent
 	}
 
-	if breakdown.LPFee == nil && breakdown.RelayerFee == nil && breakdown.GasFee == nil && breakdown.TotalFeeUSD == 0 && breakdown.TotalFeeBaseUnits == "0" && breakdown.ConsistentWithAmountDelta == nil {
+	if breakdown.LPFee == nil && breakdown.RelayerFee == nil && breakdown.GasFee == nil && breakdown.TotalFeeUSD == 0 && breakdown.TotalFeeBaseUnits == "" && breakdown.ConsistentWithAmountDelta == nil {
 		return nil
 	}
 	return breakdown
@@ -259,7 +264,7 @@ func approximateStableUSD(symbol, amountBase string, decimals int) float64 {
 
 func isLikelyStableSymbol(symbol string) bool {
 	switch strings.ToUpper(strings.TrimSpace(symbol)) {
-	case "USDC", "USDT", "USDT0", "DAI", "USDE", "USDS", "USD1", "FRAX", "GHO", "TUSD", "LUSD", "EURS", "PYUSD":
+	case "USDC", "USDT", "USDT0", "DAI", "USDE", "USDS", "USD1", "FRAX", "GHO", "TUSD", "LUSD", "PYUSD":
 		return true
 	default:
 		return false
