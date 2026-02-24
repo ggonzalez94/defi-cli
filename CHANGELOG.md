@@ -33,7 +33,6 @@ Format:
 - Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
 - Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
 - Across quote normalization now reads provider `outputAmount` when available and fills `estimated_fee_usd` from stable-asset token-fee approximation when native USD fee fields are omitted.
-- Simplified lend/yield row shape by removing ambiguous execution-address fields (`market_address`, `vault_address`, `pool_address`) in favor of provider-scoped ID semantics.
 
 ### Fixed
 - Tightened direct lending asset matching to prefer canonical token address/mint over symbol-only matches, reducing false positives on similarly named assets.
