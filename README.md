@@ -52,7 +52,7 @@ curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/i
 Install a specific version (accepted: `latest`, `stable`, `vX.Y.Z`, `X.Y.Z`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.1.1
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.3.0
 ```
 
 ### 2) Go install

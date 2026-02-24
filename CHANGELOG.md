@@ -10,47 +10,60 @@ Format:
 ## [Unreleased]
 
 ### Added
-- Solana chain support in canonical ID parsing (`solana:<reference>`) and Solana CAIP-19 token parsing (`solana:<reference>/token:<mint>`).
-- Direct Kamino adapter for `lend markets`, `lend rates`, and `yield opportunities` on Solana mainnet.
-- Direct Jupiter swap adapter for Solana quotes, with optional `DEFI_JUPITER_API_KEY` support.
-- Added MegaETH chain alias normalization (`megaeth`, `mega eth`, `mega-eth`) to canonical ID `eip155:4326`, plus bootstrap symbol parsing for `MEGA`, `WETH`, and `USDT` (`USDT0` on MegaETH).
-- Expanded bootstrap token-registry symbol parsing across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
-- Added bootstrap token mappings for additional commonly quoted assets on supported EVM chains: `USD1`, `WBTC`, `CBBTC`, `PAXG`, `PEPE`, `SHIB`, `OP`, `USDT0`, `BTCB`, `WBNB`, `ARB`, `PYUSD`, `WAVAX`, `WLFI`, `XAUT`, and `PENGU`.
-- Added Bungee auto-mode quoting support for bridge and swap (`bridge quote --provider bungee`, `swap quote --provider bungee`).
-- Added `fibrous` swap provider integration (`swap quote --provider fibrous`) for `base`, `hyperevm`, and `citrea` without requiring an API key.
-- Added chain normalization and bootstrap symbol coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
-- Added HyperEVM bootstrap token parsing for quote-friendly symbols (`USDC`, `WHYPE`).
-- Added simplified retrieval-first identifier metadata on lending/yield rows: `provider`, `provider_native_id`, and `provider_native_id_kind`.
-- Added bridge quote `fee_breakdown` output with component fees (`lp_fee`, `relayer_fee`, `gas_fee`), aggregate totals, and amount-delta consistency metadata.
+- None yet.
 
 ### Changed
-- `swap quote` now defaults provider by chain family (`1inch` for EVM chains, `jupiter` for Solana).
-- Added explicit chain-family validation across providers so unsupported EVM/Solana combinations fail with clear `unsupported` errors.
-- Removed DefiLlama from `lend markets`, `lend rates`, and `yield opportunities` provider routing; these commands now use direct protocol adapters only.
-- Removed `spark` lending protocol routing from the CLI command surface.
-- Solana chain parsing is now mainnet-only; `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are rejected.
-- Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
-- Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
-- Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
-- Across quote normalization now reads provider `outputAmount` when available and fills `estimated_fee_usd` from stable-asset token-fee approximation when native USD fee fields are omitted.
+- None yet.
 
 ### Fixed
-- Tightened direct lending asset matching to prefer canonical token address/mint over symbol-only matches, reducing false positives on similarly named assets.
-- Improved Kamino reserve collection performance and reliability by fetching per-market metrics concurrently while preserving deterministic output ordering.
-- Fixed missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
-- Corrected HyperEVM canonical mainnet mapping to `eip155:999` across chain normalization and provider routing.
-- Corrected Monad bootstrap token addresses for `WMON` and `USDC` to match the official Monad token list.
-- Commands now continue with cache disabled when cache initialization fails, instead of returning an internal error.
-- Fixed Fibrous route response decoding to handle nested token objects and nullable gas values.
-- Disabled Fibrous `monad` routing while Monad route responses are unstable.
-- Reduced sqlite cache lock contention under parallel runs by adding open-time lock coordination, sqlite busy-timeout, and retry/backoff on busy/locked operations.
+- None yet.
 
 ### Docs
-- Updated README and AGENTS guidance for Solana usage, Kamino/Jupiter providers, and API key semantics.
-- Added a dedicated Mintlify documentation site (`docs/docs.json` + structured MDX pages) with setup, guides, automation patterns, and command reference.
-- Moved Mintlify docs into a dedicated `docs/` directory and simplified navigation to latest-only docs for lower maintenance.
-- Added a docs CI workflow that runs `mint validate` and `mint broken-links` on docs-related changes.
-- Refined docs IA by removing overlapping cookbook content, clarifying provider-driven API key requirements, and updating header branding with a lobster wordmark logo.
+- None yet.
+
+### Security
+- None yet.
+
+## [v0.3.0] - 2026-02-24
+
+### Added
+- Added Solana canonical ID parsing for both chain references (`solana:<reference>`) and token IDs (`solana:<reference>/token:<mint>`).
+- Added direct Kamino support for `lend markets`, `lend rates`, and `yield opportunities` on Solana mainnet.
+- Added direct Jupiter swap quotes on Solana; `DEFI_JUPITER_API_KEY` remains optional for higher limits.
+- Added Bungee Auto quote support for both `bridge quote` and `swap quote` (keyless by default).
+- Added the `fibrous` swap provider for `base`, `hyperevm`, and `citrea` without an API key.
+- Added MegaETH alias normalization (`megaeth`, `mega eth`, `mega-eth`) to canonical chain ID `eip155:4326`.
+- Expanded chain normalization/bootstrap coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
+- Expanded bootstrap token symbol/address coverage across supported EVM chains, including MegaETH/HyperEVM/Fraxtal updates.
+- Added provider-scoped identifier metadata to lending/yield rows: `provider`, `provider_native_id`, and `provider_native_id_kind`.
+- Added `fee_breakdown` on bridge quotes with component fees (`lp_fee`, `relayer_fee`, `gas_fee`), totals, and amount-delta consistency metadata.
+
+### Changed
+- `swap quote` now defaults by chain family: `1inch` on EVM and `jupiter` on Solana.
+- Lending and yield routes now use direct protocol adapters only; DefiLlama fallback routing was removed.
+- Removed `spark` from lending protocol routing.
+- Added explicit chain-family validation so unsupported EVM/Solana provider combinations fail with clear `unsupported` errors.
+- Solana parsing is now mainnet-only; `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are rejected.
+- Bungee quote mode now uses deterministic placeholder sender/receiver addresses for quote-only requests.
+- Bungee dedicated backend mode now activates only when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set.
+- Across quote normalization now uses provider `outputAmount` when available and fills missing USD fees with stable-asset approximations when needed.
+
+### Fixed
+- Tightened direct lending asset matching to prioritize canonical token address/mint over symbol-only matches.
+- Improved Kamino reserve collection reliability and performance by fetching per-market metrics concurrently while keeping deterministic output order.
+- Fixed missing Fraxtal bootstrap mapping for `FRAX` to the official Frax system predeploy contract.
+- Corrected HyperEVM canonical mapping to `eip155:999` across normalization and provider routing.
+- Corrected Monad bootstrap addresses for `WMON` and `USDC` to match the official Monad token list.
+- Fixed Fibrous route decoding for nested token objects and nullable gas values.
+- Disabled Fibrous `monad` routing while Monad upstream route responses remain unstable.
+- Commands now continue with cache disabled when cache initialization fails, instead of returning internal errors.
+- Reduced sqlite cache lock contention in parallel runs using lock coordination, busy-timeout, and retry/backoff handling.
+
+### Docs
+- Launched a Mintlify docs site (`docs/docs.json` + structured MDX guides, concepts, and reference pages).
+- Updated README and AGENTS docs for Solana support, Kamino/Jupiter routing, and provider API key behavior.
+- Added docs CI checks (`mint validate`, `mint broken-links`) for docs-related changes.
+- Simplified docs information architecture and refreshed branding/header assets.
 
 ### Security
 - None yet.
@@ -97,7 +110,8 @@ Format:
 ### Changed
 - Project/module path migrated to `github.com/ggonzalez94/defi-cli`.
 
-[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.0...HEAD
+[v0.3.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/ggonzalez94/defi-cli/releases/tag/v0.1.0
