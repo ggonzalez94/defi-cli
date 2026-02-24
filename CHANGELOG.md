@@ -10,6 +10,9 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Solana chain support in canonical ID parsing (`solana:<reference>`) and Solana CAIP-19 token parsing (`solana:<reference>/token:<mint>`).
+- Direct Kamino adapter for `lend markets`, `lend rates`, and `yield opportunities` on Solana mainnet.
+- Direct Jupiter swap adapter for Solana quotes, with optional `DEFI_JUPITER_API_KEY` support.
 - Added MegaETH chain alias normalization (`megaeth`, `mega eth`, `mega-eth`) to canonical ID `eip155:4326`, plus bootstrap symbol parsing for `MEGA`, `WETH`, and `USDT` (`USDT0` on MegaETH).
 - Expanded bootstrap token-registry symbol parsing across supported chains for: `AAVE`, `CAKE`, `CRV`, `CRVUSD`, `ENA`, `ETHFI`, `EURC`, `FRAX`, `GHO`, `LDO`, `LINK`, `MORPHO`, `PENDLE`, `TAIKO`, `TUSD`, `UNI`, `USDE`, `USDS`, and `ZRO`.
 - Added bootstrap token mappings for additional commonly quoted assets on supported EVM chains: `USD1`, `WBTC`, `CBBTC`, `PAXG`, `PEPE`, `SHIB`, `OP`, `USDT0`, `BTCB`, `WBNB`, `ARB`, `PYUSD`, `WAVAX`, `WLFI`, `XAUT`, and `PENGU`.
@@ -21,12 +24,18 @@ Format:
 - Added bridge quote `fee_breakdown` output with component fees (`lp_fee`, `relayer_fee`, `gas_fee`), aggregate totals, and amount-delta consistency metadata.
 
 ### Changed
+- `swap quote` now defaults provider by chain family (`1inch` for EVM chains, `jupiter` for Solana).
+- Added explicit chain-family validation across providers so unsupported EVM/Solana combinations fail with clear `unsupported` errors.
+- DefiLlama lending fallback protocol matcher now recognizes `kamino`.
+- Solana chain parsing is now mainnet-only; `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are rejected.
 - Expanded CAIP-19 parsing to include HyperEVM quote assets with canonical `erc20` handling.
 - Bungee quote routing now uses deterministic placeholder sender/receiver addresses for quote-only requests.
 - Bungee quote providers now support optional dedicated-backend routing when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are configured.
 - Across quote normalization now reads provider `outputAmount` when available and fills `estimated_fee_usd` from stable-asset token-fee approximation when native USD fee fields are omitted.
 
 ### Fixed
+- Tightened direct lending asset matching to prefer canonical token address/mint over symbol-only matches, reducing false positives on similarly named assets.
+- Improved Kamino reserve collection performance and reliability by fetching per-market metrics concurrently while preserving deterministic output ordering.
 - Fixed missing Fraxtal bootstrap mapping for `FRAX` to the Frax system pre-deploy token contract.
 - Corrected HyperEVM canonical mainnet mapping to `eip155:999` across chain normalization and provider routing.
 - Corrected Monad bootstrap token addresses for `WMON` and `USDC` to match the official Monad token list.
@@ -36,7 +45,7 @@ Format:
 - Reduced sqlite cache lock contention under parallel runs by adding open-time lock coordination, sqlite busy-timeout, and retry/backoff on busy/locked operations.
 
 ### Docs
-- None yet.
+- Updated README and AGENTS guidance for Solana usage, Kamino/Jupiter providers, and API key semantics.
 
 ### Security
 - None yet.
