@@ -1,0 +1,75 @@
+---
+title: Bridge and Swap Commands
+description: Full reference for quote and bridge-analytics command families.
+---
+
+## `bridge quote`
+
+```bash
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+```
+
+Flags:
+
+- `--provider string` (`across|lifi|bungee`, default `across`)
+- `--from string` required
+- `--to string` required
+- `--asset string` required
+- `--to-asset string` optional
+- `--amount string` or `--amount-decimal string`
+
+Output note: bridge quotes include `fee_breakdown` with component fees (`lp_fee`, `relayer_fee`, `gas_fee`) and aggregate totals when available.
+
+## `bridge list`
+
+```bash
+defi bridge list --limit 20 --include-chains --results-only
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+- `--include-chains` bool (default `true`)
+
+Auth: requires `DEFI_DEFILLAMA_API_KEY`.
+
+Reason: this route uses DefiLlama bridge analytics endpoints that are provider-gated.
+
+## `bridge details`
+
+```bash
+defi bridge details --bridge layerzero --include-chain-breakdown --results-only
+```
+
+Flags:
+
+- `--bridge string` required
+- `--include-chain-breakdown` bool (default `true`)
+
+Auth: requires `DEFI_DEFILLAMA_API_KEY`.
+
+Reason: this route uses DefiLlama bridge analytics endpoints that are provider-gated.
+
+## `swap quote`
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+Flags:
+
+- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee`, default: `1inch` on EVM, `jupiter` on Solana)
+- `--chain string` required
+- `--from-asset string` required
+- `--to-asset string` required
+- `--amount string` or `--amount-decimal string`
+
+Auth requirements:
+
+- `1inch` -> `DEFI_1INCH_API_KEY`
+- `uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
+- `fibrous`, `bungee` -> keyless by default
+
+These requirements are driven by provider APIs. `defi-cli` passes through provider auth requirements per route/provider pair.

@@ -1,0 +1,43 @@
+---
+title: Market Discovery
+description: Discover chains, protocols, and assets before running strategy-specific commands.
+---
+
+Use market-discovery commands to scope chains/protocols and normalize assets first.
+
+## Top chains by TVL
+
+```bash
+defi chains top --limit 10 --results-only --select rank,chain,chain_id,tvl_usd
+```
+
+## Asset TVL on a chain
+
+```bash
+export DEFI_DEFILLAMA_API_KEY=...
+defi chains assets --chain 1 --asset USDC --limit 20 --results-only
+```
+
+Notes:
+
+- `chains assets` requires `DEFI_DEFILLAMA_API_KEY`.
+- If filtering by token address/CAIP-19, the token must have a known symbol on that chain.
+
+## Top protocols and categories
+
+```bash
+defi protocols top --limit 20 --results-only
+defi protocols top --category lending --limit 20 --results-only
+defi protocols categories --results-only
+```
+
+Category ranking is deterministic: `tvl_usd`, then protocol count, then name.
+
+## Resolve assets to canonical IDs
+
+```bash
+defi assets resolve --chain base --asset USDC --results-only
+defi assets resolve --chain eip155:1 --asset eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48 --results-only
+```
+
+Use this as a normalization step before storing request plans for agents.

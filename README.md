@@ -19,6 +19,26 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
+## Documentation Site (Mintlify)
+
+This repo includes a dedicated Mintlify docs site under [`docs/`](docs) (`docs/docs.json` + `.mdx` pages).
+
+Preview locally:
+
+```bash
+cd docs
+npx --yes mint@4.2.378 dev --no-open
+```
+
+Validate before publishing:
+
+```bash
+cd docs
+npx --yes mint@4.2.378 validate
+npx --yes mint@4.2.378 broken-links
+npx --yes mint@4.2.378 a11y
+```
+
 ## Install
 
 ### 1) Quick install (macOS/Linux)
@@ -263,6 +283,7 @@ internal/
   httpx/                          # shared HTTP client
 
 .github/workflows/ci.yml          # CI (test/vet/build)
+docs/                             # Mintlify docs site (docs.json + MDX pages)
 AGENTS.md                         # contributor guide for agents
 ```
 ### Testing

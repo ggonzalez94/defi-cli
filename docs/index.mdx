@@ -1,0 +1,77 @@
+---
+title: defi-cli Docs
+description: Query DeFi lending, yield, bridge, and swap data from a single agent-first CLI.
+---
+
+`defi-cli` is an agent-first DeFi retrieval CLI with a stable automation contract:
+
+- Stable JSON envelope + deterministic field naming
+- Stable exit codes
+- Canonical chain and asset IDs (CAIP-2 / CAIP-19)
+- Canonical amount handling (base units + decimal normalization)
+
+## Start here
+
+- New user: [Installation](/installation) -> [Quickstart](/quickstart)
+- Building automation: [Output Contract](/concepts/output-contract) -> [Agent Overview](/agents/overview)
+- Need exact command flags: [Command Reference](/reference/commands-overview)
+- Need provider/key rules: [Providers and Auth](/concepts/providers-and-auth)
+
+## Example
+
+```bash
+defi providers list --results-only
+```
+
+```json
+[
+  {
+    "name": "defillama",
+    "type": "market+bridge-data",
+    "requires_key": false,
+    "capabilities": ["chains.top", "chains.assets", "protocols.top", "protocols.categories", "bridge.list", "bridge.details"],
+    "key_env_var": "DEFI_DEFILLAMA_API_KEY"
+  },
+  {
+    "name": "kamino",
+    "type": "lending+yield",
+    "requires_key": false,
+    "capabilities": ["lend.markets", "lend.rates", "yield.opportunities"]
+  },
+  {
+    "name": "jupiter",
+    "type": "swap",
+    "requires_key": false,
+    "capabilities": ["swap.quote"],
+    "key_env_var": "DEFI_JUPITER_API_KEY"
+  }
+]
+```
+
+## Key-gated routes
+
+Most commands are keyless. Key requirements are driven by upstream providers, not by CLI licensing/auth.
+
+| Route | Env var |
+| --- | --- |
+| `swap quote --provider 1inch` | `DEFI_1INCH_API_KEY` |
+| `swap quote --provider uniswap` | `DEFI_UNISWAP_API_KEY` |
+| `swap quote --provider jupiter` | `DEFI_JUPITER_API_KEY` (optional for higher limits) |
+| `chains assets` | `DEFI_DEFILLAMA_API_KEY` |
+| `bridge list` | `DEFI_DEFILLAMA_API_KEY` |
+| `bridge details` | `DEFI_DEFILLAMA_API_KEY` |
+
+Bungee quotes are keyless by default. Dedicated backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
+
+## Lending and yield routing
+
+`lend markets`, `lend rates`, and `yield opportunities` use direct protocol adapters:
+
+- `aave`
+- `morpho`
+- `kamino` (Solana mainnet)
+
+## Next
+
+- [Quickstart](/quickstart)
+- [Providers and Auth](/concepts/providers-and-auth)
