@@ -31,3 +31,7 @@ jobs:
       - name: Check broken links
         working-directory: docs
         run: npx --yes mint@${MINT_CLI_VERSION} broken-links
+
+      - name: Check accessibility
+        working-directory: docs
+        run: npx --yes mint@${MINT_CLI_VERSION} a11y

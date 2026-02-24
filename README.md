@@ -36,6 +36,7 @@ Validate before publishing:
 cd docs
 npx --yes mint@4.2.378 validate
 npx --yes mint@4.2.378 broken-links
+npx --yes mint@4.2.378 a11y
 ```
 
 ## Install
