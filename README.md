@@ -129,7 +129,6 @@ defi swap run \
   --to-asset WETH \
   --amount 1000000 \
   --from-address 0xYourEOA \
-  --yes \
   --results-only
 ```
 
@@ -250,7 +249,7 @@ providers:
 - LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
-- All `run` / `submit` execution commands require `--yes` and will broadcast signed transactions.
+- All `run` / `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
 - Provider/protocol selection is explicit for multi-provider flows; pass `--provider` or `--protocol` (no implicit defaults).
 

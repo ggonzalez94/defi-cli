@@ -2,8 +2,6 @@ package app
 
 import (
 	"context"
-	"fmt"
-	"sort"
 	"strings"
 	"time"
 
@@ -72,14 +70,6 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			provider, ok := s.bridgeProviders[providerName]
-			if !ok {
-				return clierr.New(clierr.CodeUnsupported, "unsupported bridge provider")
-			}
-			execProvider, ok := provider.(providers.BridgeExecutionProvider)
-			if !ok {
-				return clierr.New(clierr.CodeUnsupported, fmt.Sprintf("bridge provider %q is quote-only; execution providers: %s", providerName, strings.Join(bridgeExecutionProviderNames(s.bridgeProviders), ",")))
-			}
 			reqStruct, err := buildRequest(planFromArg, planToArg, planAssetArg, planToAssetArg, planAmountBase, planAmountDecimal, planFromAmountForGas)
 			if err != nil {
 				return err
@@ -87,7 +77,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := execProvider.BuildBridgeAction(ctx, reqStruct, providers.BridgeExecutionOptions{
+			action, providerInfoName, err := s.actionBuilderRegistry().BuildBridgeAction(ctx, providerName, reqStruct, providers.BridgeExecutionOptions{
 				Sender:           planFromAddress,
 				Recipient:        planRecipient,
 				SlippageBps:      planSlippageBps,
@@ -95,7 +85,10 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 				RPCURL:           planRPCURL,
 				FromAmountForGas: planFromAmountForGas,
 			})
-			statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+			if strings.TrimSpace(providerInfoName) == "" {
+				providerInfoName = providerName
+			}
+			statuses := []model.ProviderStatus{{Name: providerInfoName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -132,7 +125,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	var runProviderArg, runFromArg, runToArg, runAssetArg, runToAssetArg string
 	var runAmountBase, runAmountDecimal, runFromAddress, runRecipient, runFromAmountForGas string
 	var runSlippageBps int64
-	var runSimulate, runYes bool
+	var runSimulate bool
 	var runRPCURL string
 	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
@@ -141,20 +134,9 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		Use:   "run",
 		Short: "Plan and execute a bridge action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !runYes {
-				return clierr.New(clierr.CodeUsage, "bridge run requires --yes")
-			}
 			providerName := strings.ToLower(strings.TrimSpace(runProviderArg))
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
-			}
-			provider, ok := s.bridgeProviders[providerName]
-			if !ok {
-				return clierr.New(clierr.CodeUnsupported, "unsupported bridge provider")
-			}
-			execProvider, ok := provider.(providers.BridgeExecutionProvider)
-			if !ok {
-				return clierr.New(clierr.CodeUnsupported, fmt.Sprintf("bridge provider %q is quote-only; execution providers: %s", providerName, strings.Join(bridgeExecutionProviderNames(s.bridgeProviders), ",")))
 			}
 			reqStruct, err := buildRequest(runFromArg, runToArg, runAssetArg, runToAssetArg, runAmountBase, runAmountDecimal, runFromAmountForGas)
 			if err != nil {
@@ -163,7 +145,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := execProvider.BuildBridgeAction(ctx, reqStruct, providers.BridgeExecutionOptions{
+			action, providerInfoName, err := s.actionBuilderRegistry().BuildBridgeAction(ctx, providerName, reqStruct, providers.BridgeExecutionOptions{
 				Sender:           runFromAddress,
 				Recipient:        runRecipient,
 				SlippageBps:      runSlippageBps,
@@ -171,7 +153,10 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 				RPCURL:           runRPCURL,
 				FromAmountForGas: runFromAmountForGas,
 			})
-			statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+			if strings.TrimSpace(providerInfoName) == "" {
+				providerInfoName = providerName
+			}
+			statuses := []model.ProviderStatus{{Name: providerInfoName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -225,15 +210,14 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runYes, "yes", false, "Confirm execution")
 	_ = runCmd.MarkFlagRequired("from")
 	_ = runCmd.MarkFlagRequired("to")
 	_ = runCmd.MarkFlagRequired("asset")
 	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("provider")
 
-	var submitActionID, submitPlanID string
-	var submitYes, submitSimulate bool
+	var submitActionID string
+	var submitSimulate bool
 	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -241,10 +225,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		Use:   "submit",
 		Short: "Execute an existing bridge action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !submitYes {
-				return clierr.New(clierr.CodeUsage, "bridge submit requires --yes")
-			}
-			actionID, err := resolveActionID(submitActionID, submitPlanID)
+			actionID, err := resolveActionID(submitActionID)
 			if err != nil {
 				return err
 			}
@@ -276,8 +257,6 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		},
 	}
 	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().StringVar(&submitPlanID, "plan-id", "", "Deprecated alias for --action-id")
-	submitCmd.Flags().BoolVar(&submitYes, "yes", false, "Confirm execution")
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
@@ -288,12 +267,12 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 
-	var statusActionID, statusPlanID string
+	var statusActionID string
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Get bridge action status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID, statusPlanID)
+			actionID, err := resolveActionID(statusActionID)
 			if err != nil {
 				return err
 			}
@@ -308,21 +287,9 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
-	statusCmd.Flags().StringVar(&statusPlanID, "plan-id", "", "Deprecated alias for --action-id")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(runCmd)
 	root.AddCommand(submitCmd)
 	root.AddCommand(statusCmd)
-}
-
-func bridgeExecutionProviderNames(all map[string]providers.BridgeProvider) []string {
-	names := make([]string, 0, len(all))
-	for name, provider := range all {
-		if _, ok := provider.(providers.BridgeExecutionProvider); ok {
-			names = append(names, name)
-		}
-	}
-	sort.Strings(names)
-	return names
 }

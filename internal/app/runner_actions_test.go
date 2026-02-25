@@ -9,7 +9,7 @@ import (
 )
 
 func TestResolveActionID(t *testing.T) {
-	id, err := resolveActionID("act_123", "")
+	id, err := resolveActionID("act_123")
 	if err != nil {
 		t.Fatalf("resolveActionID failed: %v", err)
 	}
@@ -17,16 +17,8 @@ func TestResolveActionID(t *testing.T) {
 		t.Fatalf("unexpected action id: %s", id)
 	}
 
-	id, err = resolveActionID("", "act_456")
-	if err != nil {
-		t.Fatalf("resolveActionID with plan id failed: %v", err)
-	}
-	if id != "act_456" {
-		t.Fatalf("unexpected plan-id resolution: %s", id)
-	}
-
-	if _, err := resolveActionID("act_1", "act_2"); err == nil {
-		t.Fatal("expected mismatch error when action and plan id differ")
+	if _, err := resolveActionID(""); err == nil {
+		t.Fatal("expected error when action id is missing")
 	}
 }
 

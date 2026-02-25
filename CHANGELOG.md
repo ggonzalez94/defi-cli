@@ -38,6 +38,8 @@ Format:
 - Aave execution registry defaults now include PoolAddressesProvider mappings for Base, Arbitrum, Optimism, Polygon, and Avalanche in addition to Ethereum.
 - Execution `run`/`submit` commands now propagate command timeout/cancel context through on-chain execution.
 - Morpho lend execution now requires explicit `--market-id` to avoid ambiguous market selection.
+- Execution `run`/`submit` commands no longer require `--yes`; command intent now gates execution.
+- Unified execution action-construction dispatch under a shared ActionBuilder registry while preserving existing command semantics.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
@@ -46,6 +48,7 @@ Format:
 - Documented bridge/lend/rewards/approvals execution flows, signer env inputs, command behavior, and exit codes in `README.md`.
 - Updated `AGENTS.md` with expanded execution command coverage and caveats.
 - Updated `docs/act-execution-design.md` implementation status to reflect the shipped Phase 2 surface.
+- Clarified execution builder architecture split (provider-backed route builders for swap/bridge vs internal planners for lend/rewards/approvals) in `AGENTS.md` and execution design docs.
 
 ### Security
 - None yet.

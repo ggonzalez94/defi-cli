@@ -43,7 +43,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		if err != nil {
 			return execution.Action{}, err
 		}
-		return planner.BuildApprovalAction(planner.ApprovalRequest{
+		return s.actionBuilderRegistry().BuildApprovalAction(planner.ApprovalRequest{
 			Chain:           chain,
 			Asset:           asset,
 			AmountBaseUnits: base,
@@ -90,7 +90,6 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("from-address")
 
 	var run approvalArgs
-	var runYes bool
 	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
@@ -98,9 +97,6 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		Use:   "run",
 		Short: "Plan and execute an approval action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !runYes {
-				return clierr.New(clierr.CodeUsage, "approvals run requires --yes")
-			}
 			start := time.Now()
 			action, err := buildAction(run)
 			status := []model.ProviderStatus{{Name: "native", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
@@ -148,14 +144,13 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runYes, "yes", false, "Confirm execution")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("asset")
 	_ = runCmd.MarkFlagRequired("spender")
 	_ = runCmd.MarkFlagRequired("from-address")
 
-	var submitActionID, submitPlanID string
-	var submitYes, submitSimulate bool
+	var submitActionID string
+	var submitSimulate bool
 	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -163,10 +158,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		Use:   "submit",
 		Short: "Execute an existing approval action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !submitYes {
-				return clierr.New(clierr.CodeUsage, "approvals submit requires --yes")
-			}
-			actionID, err := resolveActionID(submitActionID, submitPlanID)
+			actionID, err := resolveActionID(submitActionID)
 			if err != nil {
 				return err
 			}
@@ -198,8 +190,6 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		},
 	}
 	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().StringVar(&submitPlanID, "plan-id", "", "Deprecated alias for --action-id")
-	submitCmd.Flags().BoolVar(&submitYes, "yes", false, "Confirm execution")
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
@@ -210,12 +200,12 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 
-	var statusActionID, statusPlanID string
+	var statusActionID string
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Get approval action status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID, statusPlanID)
+			actionID, err := resolveActionID(statusActionID)
 			if err != nil {
 				return err
 			}
@@ -230,7 +220,6 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
-	statusCmd.Flags().StringVar(&statusPlanID, "plan-id", "", "Deprecated alias for --action-id")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(runCmd)

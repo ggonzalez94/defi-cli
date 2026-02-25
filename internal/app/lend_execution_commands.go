@@ -7,6 +7,7 @@ import (
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
+	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
@@ -45,11 +46,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		poolAddressProvider string
 	}
 	buildAction := func(ctx context.Context, args lendArgs) (execution.Action, error) {
-		protocol := normalizeLendingProtocol(args.protocol)
-		if protocol == "" {
-			return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
-		}
-
 		chain, asset, err := parseChainAsset(args.chainArg, args.assetArg)
 		if err != nil {
 			return execution.Action{}, err
@@ -62,39 +58,22 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		if err != nil {
 			return execution.Action{}, err
 		}
-
-		switch protocol {
-		case "aave":
-			return planner.BuildAaveLendAction(ctx, planner.AaveLendRequest{
-				Verb:                  verb,
-				Chain:                 chain,
-				Asset:                 asset,
-				AmountBaseUnits:       base,
-				Sender:                args.fromAddress,
-				Recipient:             args.recipient,
-				OnBehalfOf:            args.onBehalfOf,
-				InterestRateMode:      args.interestRateMode,
-				Simulate:              args.simulate,
-				RPCURL:                args.rpcURL,
-				PoolAddress:           args.poolAddress,
-				PoolAddressesProvider: args.poolAddressProvider,
-			})
-		case "morpho":
-			return planner.BuildMorphoLendAction(ctx, planner.MorphoLendRequest{
-				Verb:            verb,
-				Chain:           chain,
-				Asset:           asset,
-				MarketID:        args.marketID,
-				AmountBaseUnits: base,
-				Sender:          args.fromAddress,
-				Recipient:       args.recipient,
-				OnBehalfOf:      args.onBehalfOf,
-				Simulate:        args.simulate,
-				RPCURL:          args.rpcURL,
-			})
-		default:
-			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports protocol=aave|morpho")
-		}
+		return s.actionBuilderRegistry().BuildLendAction(ctx, actionbuilder.LendRequest{
+			Protocol:            args.protocol,
+			Verb:                verb,
+			Chain:               chain,
+			Asset:               asset,
+			MarketID:            args.marketID,
+			AmountBaseUnits:     base,
+			Sender:              args.fromAddress,
+			Recipient:           args.recipient,
+			OnBehalfOf:          args.onBehalfOf,
+			InterestRateMode:    args.interestRateMode,
+			Simulate:            args.simulate,
+			RPCURL:              args.rpcURL,
+			PoolAddress:         args.poolAddress,
+			PoolAddressProvider: args.poolAddressProvider,
+		})
 	}
 
 	var plan lendArgs
@@ -145,7 +124,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	_ = planCmd.MarkFlagRequired("protocol")
 
 	var run lendArgs
-	var runYes bool
 	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
@@ -153,9 +131,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		Use:   "run",
 		Short: "Plan and execute a lend action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !runYes {
-				return clierr.New(clierr.CodeUsage, "lend run requires --yes")
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
@@ -219,14 +194,13 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runYes, "yes", false, "Confirm execution")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("asset")
 	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("protocol")
 
-	var submitActionID, submitPlanID string
-	var submitYes, submitSimulate bool
+	var submitActionID string
+	var submitSimulate bool
 	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -234,10 +208,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		Use:   "submit",
 		Short: "Execute an existing lend action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !submitYes {
-				return clierr.New(clierr.CodeUsage, "lend submit requires --yes")
-			}
-			actionID, err := resolveActionID(submitActionID, submitPlanID)
+			actionID, err := resolveActionID(submitActionID)
 			if err != nil {
 				return err
 			}
@@ -272,8 +243,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		},
 	}
 	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().StringVar(&submitPlanID, "plan-id", "", "Deprecated alias for --action-id")
-	submitCmd.Flags().BoolVar(&submitYes, "yes", false, "Confirm execution")
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
@@ -284,12 +253,12 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 
-	var statusActionID, statusPlanID string
+	var statusActionID string
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Get lend action status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID, statusPlanID)
+			actionID, err := resolveActionID(statusActionID)
 			if err != nil {
 				return err
 			}
@@ -307,7 +276,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
-	statusCmd.Flags().StringVar(&statusPlanID, "plan-id", "", "Deprecated alias for --action-id")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(runCmd)

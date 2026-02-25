@@ -75,7 +75,10 @@ README.md                         # user-facing usage + caveats
   - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave, Morpho)
   - `rewards claim|compound plan|run|submit|status` (Aave)
   - `actions list|status`
-- All execution `run` / `submit` commands require `--yes` and can broadcast transactions.
+- Execution builder architecture is intentionally split:
+  - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
+  - `lend`/`rewards`/`approvals` action construction uses internal planners for deterministic contract-call composition.
+- All execution `run` / `submit` commands can broadcast transactions.
 - LiFi bridge quote/plan/run support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
@@ -126,6 +129,7 @@ README.md                         # user-facing usage + caveats
 - Keep entries concise and action-oriented (what changed for users, not internal refactors unless user impact exists).
 - On release, move `Unreleased` items into `## [vX.Y.Z] - YYYY-MM-DD` and update compare links at the bottom.
 - If a section has no updates while editing, use `- None yet.` to keep structure stable.
+- Keep README/AGENTS focused on current behavior; track version-to-version deltas in CHANGELOG/release notes instead of adding temporary in-progress migration notes.
 
 ## Maintenance note
 

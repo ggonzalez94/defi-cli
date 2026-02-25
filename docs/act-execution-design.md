@@ -1,578 +1,306 @@
-# Execution ("act") Design for `defi-cli`
+# Execution Component Design (`plan|run|submit|status`)
 
-Status: Phase 2 Implemented (swap/bridge/lend/rewards/approvals execution)  
-Author: CLI architecture proposal  
-Last Updated: 2026-02-23
+Status: Implemented (v1)  
+Last Updated: 2026-02-24  
+Scope: Current implementation in this branch (not a forward-looking proposal)
 
-## Implementation Status (Current)
+## 1. Purpose
 
-Implemented in this repository:
+`defi-cli` started as read-only retrieval. The execution component adds safe transaction workflows while preserving the existing CLI contract:
 
-- `swap plan|run|submit|status` command family
-- `bridge plan|run|submit|status` (LiFi execution planner)
-- `approvals plan|run|submit|status`
-- `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave)
-- `rewards claim|compound plan|run|submit|status` (Aave)
-- `actions list|status` action inspection commands
-- Local signer backend (`env|file|keystore`) with signer abstraction
-- Sqlite-backed action persistence with resumable step states
-- TaikoSwap on-chain quote + swap action planning (approval + swap steps)
-- Centralized execution registry (`internal/registry`) for endpoints, contract addresses, and ABI fragments
-- Simulation, gas estimation, signing, submission, and receipt tracking in execution engine
-- Nightly live execution-planning smoke workflow (`.github/workflows/nightly-execution-smoke.yml`)
+- Stable envelope output
+- Deterministic command semantics
+- Clear execution lifecycle and resumability
 
-Not yet implemented from full roadmap:
+Execution is integrated inside existing domain commands (for example `swap`, `bridge`, `lend`) instead of a separate top-level `act` namespace.
 
-- Additional signer backends (`safe`, external wallets, hardware)
-- Broader execution provider coverage beyond current defaults (TaikoSwap/Across/LiFi/Aave/Morpho)
+## 2. Current Execution Surface
 
-## 1. Problem Statement
+| Domain | Commands | Selector Requirement | Execution Coverage |
+|---|---|---|---|
+| Swap | `swap plan|run|submit|status` | `--provider` required | `taikoswap` execution today |
+| Bridge | `bridge plan|run|submit|status` | `--provider` required | `across`, `lifi` execution |
+| Lend | `lend <supply|withdraw|borrow|repay> plan|run|submit|status` | `--protocol` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
+| Rewards | `rewards <claim|compound> plan|run|submit|status` | `--protocol` required | `aave` execution |
+| Approvals | `approvals plan|run|submit|status` | no provider selector | native ERC-20 approval execution |
+| Action inspection | `actions list|status` | optional `--status` filter | persisted action inspection |
 
-`defi-cli` currently focuses on read-only data retrieval (`quote`, `markets`, `yield`, `bridge details`, etc).  
-We want to add execution capability ("act") so the CLI can perform transactions across protocols and chains while preserving:
+Notes:
 
-- Stable machine-consumable JSON envelope
-- Stable exit code behavior
-- Deterministic IDs/amount normalization
-- Safety and auditability
+- Multi-provider commands do not have implicit defaults. Users must pass `--provider` or `--protocol`.
 
-## 2. Goals and Non-Goals
+## 3. Architecture Overview
 
-### Goals
+### 3.1 Command Integration
 
-- Add a safe, deterministic execution workflow for major user actions.
-- Support multi-protocol and multi-chain execution with resumable state.
-- Keep provider integrations modular and testable.
-- Maintain a clear source of truth for API endpoints, contract addresses, and ABIs.
+Execution wiring lives in `internal/app/runner.go` and domain files:
 
-### Non-Goals (v1)
+- `internal/app/bridge_execution_commands.go`
+- `internal/app/lend_execution_commands.go`
+- `internal/app/rewards_command.go`
+- `internal/app/approvals_command.go`
 
-- Fully autonomous rebalancing without explicit user invocation.
-- Strategy DSL / scheduling engine.
-- Support for every protocol from day one.
+Design decision:
 
-## 3. Core Architectural Decision
+- Keep execution verbs under the same domain as read paths (`swap`, `bridge`, `lend`, etc).
 
-Execution should be modeled as a two-phase workflow:
+Tradeoff:
 
-1. `plan`: produce a deterministic action plan (steps, calldata/intents, constraints, expected outputs).
-2. `execute`: execute an existing plan and track state until terminal status.
+- Better command discoverability and API consistency, but more command wiring complexity in each domain.
 
-This separates route selection from transaction submission, improves reproducibility, and enables audit/resume.
+### 3.2 Unified ActionBuilder Registry
 
-## 4. Integration with Existing CLI
+Command handlers route action construction through a shared registry:
 
-### 4.1 Command Surface
+- `internal/execution/actionbuilder/registry.go`
 
-Execution should be integrated into existing domains instead of a separate top-level `act` namespace.
+Registry responsibility:
 
-Examples:
+- Resolve provider-backed action builders for swap/bridge.
+- Resolve planner-backed action builders for lend/rewards/approvals.
+- Keep command-level orchestration (`plan|run|submit|status`) consistent across domains.
 
-- `defi swap quote ...` (existing)
-- `defi swap plan ...` (new, plan only)
-- `defi swap run ...` (new, plan + execute in one invocation)
-- `defi swap submit --plan-id ...` (new, execute an existing saved plan)
-- `defi swap status --action-id ...` (new lifecycle tracking)
+Design decision:
 
-Equivalent command families should exist for:
+- Centralize action-construction dispatch while preserving domain-specific provider/planner implementations.
 
-- `bridge`
-- `lend`
-- `rewards` (new command group for claim/compound)
+Tradeoff:
 
-This keeps the API intuitive by action domain and avoids a catch-all command surface.
+- Better consistency and less duplicated dispatch logic in command files, at the cost of one additional abstraction layer.
 
-### 4.2 Code Integration (proposed package layout)
+### 3.3 Capability Interfaces
 
-```text
-internal/
-  execution/
-    planner.go           # generic planning orchestration
-    executor.go          # execution orchestration
-    tracker.go           # status polling + lifecycle transitions
-    store.go             # action persistence (sqlite)
-    types.go             # ActionPlan, ActionStep, statuses
-    simulate.go          # preflight simulation hooks
-    signer/
-      signer.go          # signer interface
-      local.go           # local key signer (v1)
-      txbuilder.go       # EIP-1559 tx assembly
-  registry/
-    loader.go            # endpoint/address/abi loader + validation
-    types.go
-  providers/
-    types.go             # extend interfaces for execution capabilities
-    taikoswap/           # quote + execution planner for taiko swap
-```
+Execution providers are opt-in capability interfaces in `internal/providers/types.go`:
 
-`internal/app/runner.go` adds domain-specific subcommands (`swap plan/run/submit/status`, etc) while reusing envelope/output/error handling patterns.
+- `SwapExecutionProvider`
+- `BridgeExecutionProvider`
 
-### 4.3 Provider Capability Model
+Lend/rewards/approvals currently use internal planners in `internal/execution/planner` instead of provider interfaces.
 
-Add capability-specific interfaces (without breaking read-only interfaces):
+Design decision:
 
-- `SwapExecutionPlanner`
-- `BridgeExecutionPlanner`
-- `LendExecutionPlanner`
-- `RewardsExecutionPlanner`
+- Capability interfaces avoid forcing all providers to implement execution.
 
-Each provider returns provider-specific plan steps in a shared normalized action format.
+Tradeoff:
 
-## 5. Source of Truth for Endpoints, Addresses, ABIs
+- Mixed architecture today (provider-based for swap/bridge, planner-based for lend/rewards) increases conceptual surface.
 
-### 5.1 Registry Design
+### 3.4 Action Model
 
-Track interaction metadata in a versioned registry under repository control:
+Canonical action model is in `internal/execution/types.go`:
 
-```text
-internal/registry/data/
-  providers/
-    uniswap.yaml
-    taikoswap.yaml
-    across.yaml
-    lifi.yaml
-  contracts/
-    taiko-mainnet.yaml
-    ethereum-mainnet.yaml
-  abis/
-    uniswap/
-      quoter_v2.json
-      swap_router_02.json
-      universal_router.json
-    erc20/
-      erc20_minimal.json
-      permit2.json
-```
+- `Action`: intent metadata + ordered steps
+- `ActionStep`: executable transaction step
+- `Constraints`: execution constraints
 
-### 5.2 What each file tracks
+Lifecycle states:
 
-#### Provider endpoint entry
+- Action: `planned -> running -> completed|failed`
+- Step: `pending -> simulated -> submitted -> confirmed|failed`
 
-- Provider name and version
-- Base URLs and path templates (e.g. quote/swap/status endpoints)
-- Auth method and env var names
-- Supported chains per endpoint
-- Rate-limit hints and timeout defaults
+Step order is the dependency model (no separate DAG). This keeps execution deterministic and straightforward.
 
-#### Contract entry
+### 3.5 Persistence
 
-- `chain_id` (CAIP/EVM ID)
-- protocol name
-- contract role (router, quoter, factory, permit2, etc)
-- address
-- ABI reference path
-- source verification URL (block explorer / repo)
-- metadata (deployed block, notes)
+Persistence is in `internal/execution/store.go` (SQLite + file lock):
 
-#### ABI entry
+- single `actions` table
+- full action JSON blob stored in `payload`
+- indexed by `status` and `updated_at`
 
-- Canonical ABI JSON (minimal ABI fragments where possible)
-- Optional selector map for validation
-- Version/source metadata
+Design decision:
 
-### 5.3 Validation Requirements
+- JSON blob persistence with a light relational index.
 
-Add validation checks in CI/unit tests:
+Tradeoff:
 
-- Address format and non-zero checks
-- ABI JSON parse + required method presence
-- Registry schema validation
-- Provider endpoint presence for declared capabilities
+- Easy compatibility/migrations and exact replay of serialized actions, but weaker SQL-level querying of step internals.
 
-Optional integration validation (nightly):
+## 4. Command Semantics
 
-- `eth_getCode` non-empty for configured addresses
-- dry-run `eth_call` smoke on critical view methods
+### 4.1 `plan`
 
-### 5.4 Override Mechanism
+- Builds an action and persists it to action store.
+- Performs planning-time checks required by each planner/provider (for example allowance reads, route fetches, address resolution).
+- Does not broadcast transactions.
 
-Support local override for rapid hotfixes:
+### 4.2 `run`
 
-- `DEFI_REGISTRY_PATH=/path/to/registry-overrides`
+- Performs plan + execute in one invocation.
+- Persists action first, then executes steps.
 
-Precedence:
+### 4.3 `submit`
 
-1. CLI flags (if exposed)
-2. env override registry
-3. bundled registry in repo
+- Loads a previously persisted action by `--action-id`.
+- Executes remaining steps.
 
-## 6. Forge `cast` Dependency Decision
+### 4.4 `status` and `actions`
 
-### 6.1 Recommendation
+- Domain `status` commands fetch one action.
+- `actions list` gives cross-domain recent actions.
+- `actions status` fetches any action by ID.
 
-Do **not** make `cast` a runtime dependency.
+## 5. Signing and Key Handling
 
-Reasoning:
+Signer abstractions:
 
-- Adds external binary dependency for all users.
-- Makes release artifacts less self-contained.
-- Process spawning is slower and harder to test deterministically.
-- Native Go JSON-RPC and ABI encoding is more portable and CI-friendly.
+- Interface: `internal/execution/signer/signer.go`
+- Local signer implementation: `internal/execution/signer/local.go`
+- Command-level signer setup: `newExecutionSigner(...)` in `internal/app/runner.go`
 
-### 6.2 Where `cast` should be used
+Supported backend today:
 
-Use `cast` as developer tooling only:
+- `--signer local` only (other backends intentionally not implemented yet)
 
-- `scripts/verify/*.sh` for parity checks
-- troubleshooting registry/address issues
-- reproducing on-chain call results in docs/tests
+Key sources:
 
-## 7. Signer Architecture (v1 local key)
+- `--key-source auto|env|file|keystore`
+- Environment variables:
+  - `DEFI_PRIVATE_KEY`
+  - `DEFI_PRIVATE_KEY_FILE`
+  - `DEFI_KEYSTORE_PATH`
+  - `DEFI_KEYSTORE_PASSWORD`
+  - `DEFI_KEYSTORE_PASSWORD_FILE`
 
-### 7.1 Scope
+`auto` precedence in current code:
 
-v1 supports a local key signer only, while keeping the signer layer extensible for:
+1. `DEFI_PRIVATE_KEY`
+2. `DEFI_PRIVATE_KEY_FILE`
+3. `DEFI_KEYSTORE_PATH` (+ password input)
 
-- external wallet providers
-- Safe/multisig
-- hardware signers
-- remote signers
+Security controls:
 
-### 7.2 Signer Interface
+- strict secret file permissions (`0600` or stricter) for key files and keystore/password files
+- optional `--confirm-address` signer guard
+- explicit `--from-address` to signer-address match checks in run flows
 
-Use a signer abstraction in `internal/execution/signer/signer.go`:
+Design decision:
 
-- `Address() string`
-- `SignTx(chainID, tx) -> rawTx`
-- `SignMessage(payload) -> signature` (future-proofing)
+- Local key signing first, with backend abstraction retained for future expansion.
 
-Execution orchestration consumes only this interface.
+Tradeoff:
 
-### 7.3 Local key ingestion (v1)
+- Fast delivery and low integration complexity now, but no hardware wallet, Safe, or remote signer support yet.
 
-Avoid requiring private key values in CLI args. Preferred sources:
+## 6. Endpoint, Contract, and ABI Management
 
-1. `DEFI_PRIVATE_KEY_FILE` (hex key in file, strict file-permission checks)
-2. `DEFI_KEYSTORE_PATH` + `DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`
-3. `DEFI_PRIVATE_KEY` (supported, but discouraged in shell history environments)
+Canonical execution metadata currently lives in `internal/registry/execution_data.go`:
 
-Optional explicit flag:
+- Provider endpoint constants (for example `LiFiBaseURL`)
+- Contract address registries:
+  - TaikoSwap contracts by chain
+  - Aave PoolAddressesProvider by chain
+- ABI fragments:
+  - ERC-20 minimal
+  - TaikoSwap quoter/router
+  - Aave pool/rewards/provider
+  - Morpho Blue
 
-- `--key-source env|file|keystore` (for deterministic automation)
+Important nuance:
 
-### 7.4 Transaction signing flow
+- Not all provider endpoints are centralized there yet (for example Across base URL is in provider code).
 
-For each executable step:
+Design decision:
 
-1. Resolve sender address from signer.
-2. Fetch nonce (`eth_getTransactionCount`, pending).
-3. Build tx params:
-   - EIP-1559 (`maxFeePerGas`, `maxPriorityFeePerGas`) by default
-   - `gasLimit` from simulation/estimation with safety multiplier
-4. Build unsigned tx from step data (`to`, `data`, `value`, `chainId`).
-5. Sign locally.
-6. Broadcast (`eth_sendRawTransaction`).
-7. Persist tx hash and receipt status.
+- Compile-time Go registry values instead of external YAML/JSON loading.
 
-Implementation note: use native Go libraries for EVM tx construction/signing (e.g., go-ethereum transaction types and secp256k1 signing utilities), not shelling out to external binaries.
+Tradeoff:
 
-### 7.5 Security controls
+- Strong type safety and fewer runtime failure modes, but lower operational flexibility for hotfixing metadata without a release.
 
-- Never print private key material in logs or envelopes.
-- Redact signer secrets in errors.
-- Validate key/address match before first execution.
-- Enforce minimum key file permissions for file-based keys.
-- Add `--confirm-address` optional check for CI/ops workflows.
+## 7. Execution Engine, Simulation, and Consistency
 
-### 7.6 Agent and automation key handling
+Core executor: `internal/execution/executor.go`.
 
-Expected automation pattern:
+Per step execution flow:
 
-1. Agent injects key source via environment variables before command execution.
-2. CLI resolves signer source via normal precedence (`flags > env > config > defaults`).
-3. CLI emits signer address metadata only (never key material).
+1. Validate RPC URL, target, and chain match.
+2. Optional simulation (`eth_call`) when `--simulate=true`.
+3. Gas estimation (`eth_estimateGas`) with configurable multiplier.
+4. EIP-1559 fee resolution (suggested or overridden by flags).
+5. Nonce resolution from pending state.
+6. Local signing and broadcast.
+7. Receipt polling until success/failure/timeout.
 
-Recommended usage for agents/CI:
+Bridge-specific consistency:
 
-- Use short-lived per-command environment injection.
-- Prefer file/keystore based key sources over raw-key env values.
-- Set `--confirm-address` for high-safety pipelines.
+- For `bridge_send` steps, executor also waits for destination settlement via provider APIs:
+  - LiFi `/status`
+  - Across `/deposit/status`
+- Settlement metadata is persisted in `step.expected_outputs` (for example destination tx hash, settlement status).
 
-## 8. Command API Design (Draft)
+Context and timeout behavior:
 
-### 8.1 Common Principles
+- Command timeout is propagated to run/submit execution via `executeActionWithTimeout(...)`.
+- Per-step timeout and poll interval are configurable (`--step-timeout`, `--poll-interval`).
 
-- `plan` is safe/read-only by default.
-- `run` performs plan + execute in one command (with explicit confirmation flag).
-- `submit` executes an already-created plan.
-- Every command returns standard envelope with `action_id` and step-level metadata.
-- No hidden side effects in plan phase.
-- Avoid overloaded verbs. Command names should directly describe behavior.
+Design decision:
 
-### 8.2 Command Sketch
+- Simulation defaults to on, and bridge completion requires both source receipt and provider settlement.
 
-#### Plan commands
+Tradeoff:
 
-- `defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000`
-- `defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000`
-- `defi lend supply plan --protocol aave --chain 1 --asset USDC --amount 1000000`
-- `defi approvals plan --chain taiko --asset USDC --spender <addr> --amount 1000000`
-- `defi rewards claim plan --protocol aave --chain 1 --asset AAVE`
+- Better safety and operational visibility, but slower execution paths and dependence on provider status APIs.
 
-#### Run commands (plan + execute)
+Current limitation:
 
-- `defi swap run --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --yes`
-- `defi bridge run --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --yes`
-- `defi lend supply run --protocol aave --chain 1 --asset USDC --amount 1000000 --yes`
-- `defi approvals run --chain taiko --asset USDC --spender <addr> --amount 1000000 --yes`
+- Bridge settlement success is API-confirmed; no universal destination on-chain balance verification is enforced yet.
 
-#### Submit commands (execute existing plan)
+## 8. Dependency Strategy (`cast` / Foundry)
 
-- `defi swap submit --plan-id <id> --yes`
-- `defi bridge submit --plan-id <id> --yes`
-- `defi lend supply submit --plan-id <id> --yes`
+Decision:
 
-#### Lifecycle commands
+- Do not require `forge cast` as a runtime dependency.
 
-- `defi swap status --action-id <id>`
-- `defi bridge status --action-id <id>`
-- `defi lend status --action-id <id>`
-- `defi actions list --status pending` (optional global view)
-- `defi actions resume --action-id <id>` (optional global resume)
+Rationale:
 
-### 8.3 Global Execution Flags (proposed)
+- Runtime binary dependency increases installation complexity.
+- Native Go (`go-ethereum`) gives deterministic behavior in CI and releases.
 
-- `--wallet` (address only mode)
-- `--signer` (`local|external|walletconnect|safe`) (future)
-- `--simulate` (default true for `run` and `submit`)
-- `--slippage-bps`
-- `--deadline`
-- `--max-fee-gwei`, `--max-priority-fee-gwei`
-- `--nonce-policy` (`next|fixed`)
-- `--yes` (required for `run`/`submit`)
+Tradeoff:
 
-## 9. Action Plan and Tracking Model
+- Less convenient ad-hoc debugging for some users who prefer Foundry tooling, but cleaner production runtime.
 
-### 9.1 ActionPlan (normalized)
+## 9. Testing and Nightly Drift Checks
 
-Core fields:
+Standard quality gates:
 
-- `action_id`
-- `intent_type` (`swap`, `bridge`, `lend_supply`, `approve`, `claim`, etc)
-- `created_at`
-- `constraints` (slippage, deadline, policy)
-- `steps[]`
+- `go test ./...`
+- `go test -race ./...`
+- `go vet ./...`
 
-Each step includes:
+Execution-related tests include planner, executor, settlement polling, and command wiring coverage.
 
-- `step_id`
-- `chain_id`
-- `type` (`approval`, `swap`, `bridge_send`, `bridge_finalize`, `lend_call`, `claim`)
-- `target` (contract / endpoint)
-- `call_data` or provider instruction payload
-- `value`
-- `expected_outputs`
-- `depends_on[]`
-- `status`
+Nightly workflow:
 
-### 9.2 Persistence (sqlite)
+- Workflow: `.github/workflows/nightly-execution-smoke.yml`
+- Script: `scripts/nightly_execution_smoke.sh`
+- Current scope: live smoke for quote/plan paths across key execution surfaces.
 
-Add action tables:
+Design decision:
 
-- `actions`
-- `action_steps`
-- `action_events`
+- Nightly job validates external dependency drift without requiring broadcast transactions.
 
-Track:
+Tradeoff:
 
-- tx hashes
-- bridge transfer IDs/message IDs
-- retries
-- error details (mapped to CLI error codes)
+- Detects endpoint/RPC/contract drift early, but does not prove end-to-end transaction broadcasting on every run.
 
-### 9.3 Status Lifecycle
+## 10. Major Decisions and Tradeoffs Summary
 
-`planned -> validated -> awaiting_signature -> submitted -> confirmed -> completed`
+| Decision | Why | Tradeoff |
+|---|---|---|
+| Keep execution under domain commands | Consistent CLI API and easier discoverability | More domain-specific wiring |
+| Remove defaults for multi-provider commands | Avoid ambiguous behavior and future provider-addition regressions | More required flags for users |
+| Local signer only for v1 | Fast, reliable implementation | No external signer ecosystems yet |
+| Store action payload as JSON blob | Easy persistence and replay semantics | Limited SQL-native analytics on steps |
+| Compile-time registry | Type-safe and deterministic | Slower metadata hotfix cadence |
+| Runtime simulation + settlement polling | Better safety and finality confidence | Longer run time and external API dependency |
+| No `cast` runtime dependency | Portable binary releases | Less shell-tool parity for debugging |
 
-Failure paths:
+## 11. Known Gaps and Next Increments
 
-`failed`, `timed_out`, `partial` (multi-step actions)
-
-## 10. Main Use Cases (Phase 1 Scope)
-
-### 10.1 Swap Execute
-
-User flow:
-
-1. Build swap plan (route + approvals + minOut constraint).
-2. Simulate each transaction step.
-3. Execute approval (if required).
-4. Execute swap.
-5. Confirm and return final out amount and tx hash.
-
-Initial support:
-
-- single-chain swap
-- exact input
-- taikoswap + existing aggregator providers where feasible
-
-### 10.2 Bridge Execute
-
-User flow:
-
-1. Plan source transaction and destination settlement expectations.
-2. Execute source chain tx.
-3. Track async transfer status.
-4. Mark complete when destination settlement confirms.
-
-Initial support:
-
-- bridge-only transfers first
-- bridge+destination swap as phase 2 extension
-
-### 10.3 Approve / Revoke
-
-User flow:
-
-1. Plan approval delta (exact amount by default).
-2. Execute and confirm.
-3. Optional revoke command sets allowance to zero.
-
-### 10.4 Lend Actions
-
-Initial verbs:
-
-- `supply`
-- `withdraw`
-- `borrow`
-- `repay`
-
-Each action follows plan + execute with health-factor and liquidity checks in planning.
-
-### 10.5 Rewards Claim / Compound
-
-Initial verbs:
-
-- `claim`
-- `compound` (where protocol supports single-tx or known workflow)
-
-## 11. Safety, Policy, and UX Guardrails
-
-- Policy allowlist checks (protocol, spender, chain, asset).
-- Simulation-before-execution default (opt-out should be explicit and discouraged).
-- Slippage and deadline required for swap-like actions.
-- Exact approval default, unlimited approval only with explicit flag.
-- Step-by-step decoded previews before execution.
-- Stable and explicit partial-failure semantics.
-
-## 12. Simulation, Consistency, and Nightly Validation
-
-### 12.1 Simulation layers
-
-Use layered checks to reduce execution surprises:
-
-1. Static plan validation
-   - chain/provider support
-   - token/asset normalization
-   - spender and target allowlist checks
-2. Preflight state checks
-   - balances
-   - allowances
-   - protocol preconditions (where available)
-3. Transaction simulation
-   - `eth_call` with exact tx payload (`to`, `data`, `value`, `from`)
-   - gas estimation (`eth_estimateGas`) with margin policy
-4. Optional deep trace simulation
-   - `debug_traceCall` when RPC supports it
-   - classify likely failure reasons for better errors
-
-### 12.2 Consistency between plan and execution
-
-Each plan should record:
-
-- simulation block number
-- simulation timestamp
-- RPC endpoint fingerprint
-- route/quote hash
-- slippage/deadline constraints
-
-Execution should enforce revalidation triggers:
-
-- plan age exceeds configured max age
-- chain head drift exceeds configured block delta
-- quote hash changes (provider route changed)
-- simulation indicates constraints are now unsafe
-
-When any trigger fails, command exits with a deterministic replan-required error.
-
-### 12.3 Cross-chain consistency model
-
-For bridge flows:
-
-- source-chain tx is simulated and executed deterministically.
-- destination outcome is tracked asynchronously via provider status APIs and/or chain events.
-- action remains `pending` until destination settlement reaches terminal status.
-
-Bridge plans must include explicit timeout/SLA metadata per provider route.
-
-### 12.4 Nightly validation jobs
-
-Add a nightly workflow (separate from PR CI) for live-environment checks:
-
-1. Registry integrity
-   - schema validation
-   - ABI parsing
-   - non-zero address checks
-2. On-chain contract liveness
-   - `eth_getCode` must be non-empty for configured contracts
-3. Critical method smoke calls
-   - e.g., quoter/factory read calls on representative pairs
-4. Provider endpoint liveness
-   - health checks and minimal quote/simulation calls
-5. Drift report artifact
-   - list failing chains/providers/contracts
-   - include first-seen timestamp for regressions
-
-Failures should open/annotate issues but not block all contributor PRs by default.
-
-### 12.5 Test strategy split
-
-- PR CI: deterministic unit tests + mocked RPC/provider tests.
-- Nightly CI: live RPC/provider validation.
-- Optional weekly: broader matrix with additional chains/providers.
-
-## 13. Exit Code Extensions (proposed)
-
-Existing exit code contract remains. Add action-specific codes:
-
-- `20`: action plan validation failed
-- `21`: simulation failed
-- `22`: execution rejected by policy
-- `23`: action timed out / pending too long
-- `24`: signer unavailable / signing failed
-
-## 14. Rollout Plan
-
-### Phase 0: Foundations
-
-- Add domain command scaffolding (`swap|bridge|lend|rewards` with `plan|run|submit|status`).
-- Add action storage and status plumbing.
-- Add registry framework and validators.
-
-### Phase 1: Core Execution
-
-- swap run/submit (single-chain)
-- approve/revoke
-- status/resume/list
-
-### Phase 2: Cross-Chain
-
-- bridge run/submit with async tracking
-
-### Phase 3: Lending + Rewards
-
-- supply/withdraw/borrow/repay
-- claim/compound
-
-### Phase 4: UX and Automation Hardening
-
-- richer signer integrations
-- policy presets
-- batched operations and optional smart account flows
-
-## 15. Open Questions
-
-- Which signer backend should be next after local key (`external wallet`, `Safe`, or remote signer)?
-- How much protocol-specific simulation is required beyond `eth_call`?
-- What SLA should define `timed_out` for bridges by provider/route type?
-- What should default plan-expiry and block-drift thresholds be per command type?
+- Additional signer backends (`safe`, hardware wallets, remote signers).
+- Swap execution for additional providers beyond `taikoswap`.
+- Registry centralization for all execution endpoints (not just selected constants).
+- Stronger destination-chain verification for bridge completion beyond provider API status.
+- Plan freshness/revalidation policy (block drift / quote drift thresholds) before submit.

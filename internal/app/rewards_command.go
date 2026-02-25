@@ -7,7 +7,7 @@ import (
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
-	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
+	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
@@ -39,13 +39,6 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		poolAddressProvider string
 	}
 	buildAction := func(ctx context.Context, args claimArgs) (execution.Action, error) {
-		protocol := normalizeLendingProtocol(args.protocol)
-		if protocol == "" {
-			return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
-		}
-		if protocol != "aave" {
-			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "rewards execution currently supports only protocol=aave")
-		}
 		chain, err := id.ParseChain(args.chainArg)
 		if err != nil {
 			return execution.Action{}, err
@@ -58,17 +51,18 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		if amount == "" {
 			amount = "max"
 		}
-		return planner.BuildAaveRewardsClaimAction(ctx, planner.AaveRewardsClaimRequest{
-			Chain:                 chain,
-			Sender:                args.fromAddress,
-			Recipient:             args.recipient,
-			Assets:                assets,
-			RewardToken:           args.rewardToken,
-			AmountBaseUnits:       amount,
-			Simulate:              args.simulate,
-			RPCURL:                args.rpcURL,
-			ControllerAddress:     args.controllerAddress,
-			PoolAddressesProvider: args.poolAddressProvider,
+		return s.actionBuilderRegistry().BuildRewardsClaimAction(ctx, actionbuilder.RewardsClaimRequest{
+			Protocol:            args.protocol,
+			Chain:               chain,
+			Sender:              args.fromAddress,
+			Recipient:           args.recipient,
+			Assets:              assets,
+			RewardToken:         args.rewardToken,
+			AmountBaseUnits:     amount,
+			Simulate:            args.simulate,
+			RPCURL:              args.rpcURL,
+			ControllerAddress:   args.controllerAddress,
+			PoolAddressProvider: args.poolAddressProvider,
 		})
 	}
 
@@ -114,7 +108,6 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("protocol")
 
 	var run claimArgs
-	var runYes bool
 	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
@@ -122,9 +115,6 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		Use:   "run",
 		Short: "Plan and execute a rewards-claim action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !runYes {
-				return clierr.New(clierr.CodeUsage, "rewards claim run requires --yes")
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
@@ -181,15 +171,14 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runYes, "yes", false, "Confirm execution")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("assets")
 	_ = runCmd.MarkFlagRequired("reward-token")
 	_ = runCmd.MarkFlagRequired("protocol")
 
-	var submitActionID, submitPlanID string
-	var submitYes, submitSimulate bool
+	var submitActionID string
+	var submitSimulate bool
 	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -197,10 +186,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		Use:   "submit",
 		Short: "Execute an existing rewards-claim action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !submitYes {
-				return clierr.New(clierr.CodeUsage, "rewards claim submit requires --yes")
-			}
-			actionID, err := resolveActionID(submitActionID, submitPlanID)
+			actionID, err := resolveActionID(submitActionID)
 			if err != nil {
 				return err
 			}
@@ -235,8 +221,6 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		},
 	}
 	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().StringVar(&submitPlanID, "plan-id", "", "Deprecated alias for --action-id")
-	submitCmd.Flags().BoolVar(&submitYes, "yes", false, "Confirm execution")
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
@@ -247,12 +231,12 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 
-	var statusActionID, statusPlanID string
+	var statusActionID string
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Get rewards-claim action status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID, statusPlanID)
+			actionID, err := resolveActionID(statusActionID)
 			if err != nil {
 				return err
 			}
@@ -270,7 +254,6 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
-	statusCmd.Flags().StringVar(&statusPlanID, "plan-id", "", "Deprecated alias for --action-id")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(runCmd)
@@ -299,13 +282,6 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		poolAddressProvider string
 	}
 	buildAction := func(ctx context.Context, args compoundArgs) (execution.Action, error) {
-		protocol := normalizeLendingProtocol(args.protocol)
-		if protocol == "" {
-			return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
-		}
-		if protocol != "aave" {
-			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "rewards execution currently supports only protocol=aave")
-		}
 		chain, err := id.ParseChain(args.chainArg)
 		if err != nil {
 			return execution.Action{}, err
@@ -318,19 +294,20 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		if amount == "" {
 			return execution.Action{}, clierr.New(clierr.CodeUsage, "--amount is required")
 		}
-		return planner.BuildAaveRewardsCompoundAction(ctx, planner.AaveRewardsCompoundRequest{
-			Chain:                 chain,
-			Sender:                args.fromAddress,
-			Recipient:             args.recipient,
-			Assets:                assets,
-			RewardToken:           args.rewardToken,
-			AmountBaseUnits:       amount,
-			Simulate:              args.simulate,
-			RPCURL:                args.rpcURL,
-			ControllerAddress:     args.controllerAddress,
-			PoolAddress:           args.poolAddress,
-			PoolAddressesProvider: args.poolAddressProvider,
-			OnBehalfOf:            args.onBehalfOf,
+		return s.actionBuilderRegistry().BuildRewardsCompoundAction(ctx, actionbuilder.RewardsCompoundRequest{
+			Protocol:            args.protocol,
+			Chain:               chain,
+			Sender:              args.fromAddress,
+			Recipient:           args.recipient,
+			OnBehalfOf:          args.onBehalfOf,
+			Assets:              assets,
+			RewardToken:         args.rewardToken,
+			AmountBaseUnits:     amount,
+			Simulate:            args.simulate,
+			RPCURL:              args.rpcURL,
+			ControllerAddress:   args.controllerAddress,
+			PoolAddress:         args.poolAddress,
+			PoolAddressProvider: args.poolAddressProvider,
 		})
 	}
 
@@ -379,7 +356,6 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("protocol")
 
 	var run compoundArgs
-	var runYes bool
 	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
@@ -387,9 +363,6 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		Use:   "run",
 		Short: "Plan and execute a rewards-compound action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !runYes {
-				return clierr.New(clierr.CodeUsage, "rewards compound run requires --yes")
-			}
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
@@ -448,7 +421,6 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runYes, "yes", false, "Confirm execution")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("assets")
@@ -456,8 +428,8 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	_ = runCmd.MarkFlagRequired("amount")
 	_ = runCmd.MarkFlagRequired("protocol")
 
-	var submitActionID, submitPlanID string
-	var submitYes, submitSimulate bool
+	var submitActionID string
+	var submitSimulate bool
 	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -465,10 +437,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		Use:   "submit",
 		Short: "Execute an existing rewards-compound action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			if !submitYes {
-				return clierr.New(clierr.CodeUsage, "rewards compound submit requires --yes")
-			}
-			actionID, err := resolveActionID(submitActionID, submitPlanID)
+			actionID, err := resolveActionID(submitActionID)
 			if err != nil {
 				return err
 			}
@@ -503,8 +472,6 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		},
 	}
 	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().StringVar(&submitPlanID, "plan-id", "", "Deprecated alias for --action-id")
-	submitCmd.Flags().BoolVar(&submitYes, "yes", false, "Confirm execution")
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
@@ -515,12 +482,12 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 
-	var statusActionID, statusPlanID string
+	var statusActionID string
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Get rewards-compound action status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID, statusPlanID)
+			actionID, err := resolveActionID(statusActionID)
 			if err != nil {
 				return err
 			}
@@ -538,7 +505,6 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
-	statusCmd.Flags().StringVar(&statusPlanID, "plan-id", "", "Deprecated alias for --action-id")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(runCmd)
