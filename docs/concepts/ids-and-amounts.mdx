@@ -31,11 +31,14 @@ For swap and bridge quotes:
 
 - `--amount` is base units (recommended for automation)
 - `--amount-decimal` is human decimal form
-- passing both returns a usage error
+- for swaps, these map to `--type exact-input` (default)
+- for swaps with `--type exact-output`, use `--amount-out` or `--amount-out-decimal`
+- passing both base+decimal variants for the same side returns a usage error
 
 Output includes both normalized forms:
 
 ```json
+"trade_type": "exact-input",
 "input_amount": {
   "amount_base_units": "1000000",
   "amount_decimal": "1",

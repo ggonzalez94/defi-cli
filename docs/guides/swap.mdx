@@ -15,6 +15,10 @@ defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --am
 ```bash
 export DEFI_UNISWAP_API_KEY=...
 defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+# Exact-output on Uniswap
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --results-only
+# Optional manual slippage override (percent). Default uses provider auto slippage.
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --slippage-pct 1.0 --results-only
 ```
 
 ## Jupiter (Solana, key optional)
@@ -45,6 +49,10 @@ defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset 
 ## Notes
 
 - `swap quote` defaults by chain family: `1inch` for EVM chains, `jupiter` for Solana.
-- `--amount` and `--amount-decimal` are mutually exclusive.
-- Output always includes normalized `input_amount` and `estimated_out` with base and decimal forms.
+- `--type` defaults to `exact-input`.
+- `--amount` and `--amount-decimal` are for `--type exact-input`.
+- `--amount-out` and `--amount-out-decimal` are for `--type exact-output`.
+- Providers currently supporting `exact-output`: `uniswap`.
+- `--slippage-pct` is optional and currently applies to Uniswap quotes only.
+- Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.

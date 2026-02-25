@@ -72,6 +72,8 @@ README.md                         # user-facing usage + caveats
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
 - `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
+- Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap only (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
+- Uniswap quote calls use a deterministic placeholder `swapper` for quote-only mode (`0x000...001`) and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.

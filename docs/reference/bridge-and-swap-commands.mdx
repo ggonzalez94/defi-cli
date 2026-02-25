@@ -63,7 +63,15 @@ Flags:
 - `--chain string` required
 - `--from-asset string` required
 - `--to-asset string` required
-- `--amount string` or `--amount-decimal string`
+- `--type string` (`exact-input|exact-output`, default `exact-input`)
+- `--amount string` or `--amount-decimal string` (for `--type exact-input`)
+- `--amount-out string` or `--amount-out-decimal string` (for `--type exact-output`)
+- `--slippage-pct float` optional (Uniswap only; default uses provider auto slippage)
+
+Type support:
+
+- `uniswap`: `exact-input`, `exact-output`
+- `1inch`, `jupiter`, `fibrous`, `bungee`: `exact-input` only
 
 Auth requirements:
 

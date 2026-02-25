@@ -658,8 +658,10 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 
 func (s *runtimeState) newSwapCommand() *cobra.Command {
 	root := &cobra.Command{Use: "swap", Short: "Swap quote commands"}
-	var providerArg, chainArg, fromAssetArg, toAssetArg string
+	var providerArg, chainArg, fromAssetArg, toAssetArg, tradeTypeArg string
 	var amountBase, amountDecimal string
+	var amountOutBase, amountOutDecimal string
+	var slippagePct float64
 	cmd := &cobra.Command{
 		Use:   "quote",
 		Short: "Get swap quote",
@@ -688,21 +690,78 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			decimals := fromAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
+
+			tradeType := providers.SwapTradeType(strings.ToLower(strings.TrimSpace(tradeTypeArg)))
+			switch tradeType {
+			case "", providers.SwapTradeTypeExactInput:
+				tradeType = providers.SwapTradeTypeExactInput
+			case providers.SwapTradeTypeExactOutput:
+			default:
+				return clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
 			}
-			base, decimal, err := id.NormalizeAmount(amountBase, amountDecimal, decimals)
-			if err != nil {
-				return err
+
+			var base, decimal string
+			switch tradeType {
+			case providers.SwapTradeTypeExactInput:
+				if amountOutBase != "" || amountOutDecimal != "" {
+					return clierr.New(clierr.CodeUsage, "--amount-out/--amount-out-decimal are only valid with --type exact-output")
+				}
+				decimals := fromAsset.Decimals
+				if decimals <= 0 {
+					decimals = 18
+				}
+				base, decimal, err = id.NormalizeAmount(amountBase, amountDecimal, decimals)
+				if err != nil {
+					return err
+				}
+			case providers.SwapTradeTypeExactOutput:
+				if amountBase != "" || amountDecimal != "" {
+					return clierr.New(clierr.CodeUsage, "--amount/--amount-decimal are only valid with --type exact-input")
+				}
+				if amountOutBase == "" && amountOutDecimal == "" {
+					return clierr.New(clierr.CodeUsage, "exact-output requires --amount-out or --amount-out-decimal")
+				}
+				decimals := toAsset.Decimals
+				if decimals <= 0 {
+					decimals = 18
+				}
+				base, decimal, err = id.NormalizeAmount(amountOutBase, amountOutDecimal, decimals)
+				if err != nil {
+					return err
+				}
 			}
-			reqStruct := providers.SwapQuoteRequest{Chain: chain, FromAsset: fromAsset, ToAsset: toAsset, AmountBaseUnits: base, AmountDecimal: decimal}
+
+			var slippagePtr *float64
+			slippageMode := "auto"
+			if cmd.Flags().Changed("slippage-pct") {
+				if providerName != "uniswap" {
+					return clierr.New(clierr.CodeUsage, "--slippage-pct is supported only with --provider uniswap")
+				}
+				if slippagePct <= 0 || slippagePct > 100 {
+					return clierr.New(clierr.CodeUsage, "--slippage-pct must be > 0 and <= 100")
+				}
+				slippageMode = "manual"
+				slippagePtr = &slippagePct
+			}
+
+			reqStruct := providers.SwapQuoteRequest{
+				Chain:           chain,
+				FromAsset:       fromAsset,
+				ToAsset:         toAsset,
+				AmountBaseUnits: base,
+				AmountDecimal:   decimal,
+				TradeType:       tradeType,
+				SlippagePct:     slippagePtr,
+			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
-				"provider": providerName,
-				"chain":    chain.CAIP2,
-				"from":     fromAsset.AssetID,
-				"to":       toAsset.AssetID,
-				"amount":   base,
+				"provider":      providerName,
+				"chain":         chain.CAIP2,
+				"from":          fromAsset.AssetID,
+				"to":            toAsset.AssetID,
+				"trade_type":    tradeType,
+				"amount":        base,
+				"slippage_mode": slippageMode,
+				"slippage_pct":  slippagePtr,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
@@ -716,8 +775,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")
-	cmd.Flags().StringVar(&amountBase, "amount", "", "Amount in base units")
-	cmd.Flags().StringVar(&amountDecimal, "amount-decimal", "", "Amount in decimal units")
+	cmd.Flags().StringVar(&tradeTypeArg, "type", string(providers.SwapTradeTypeExactInput), "Swap type (exact-input|exact-output)")
+	cmd.Flags().StringVar(&amountBase, "amount", "", "Exact-input amount in base units")
+	cmd.Flags().StringVar(&amountDecimal, "amount-decimal", "", "Exact-input amount in decimal units")
+	cmd.Flags().StringVar(&amountOutBase, "amount-out", "", "Exact-output amount in base units")
+	cmd.Flags().StringVar(&amountOutDecimal, "amount-out-decimal", "", "Exact-output amount in decimal units")
+	cmd.Flags().Float64Var(&slippagePct, "slippage-pct", 0, "Manual max slippage percent override (Uniswap only; default uses provider auto slippage)")
 	_ = cmd.MarkFlagRequired("chain")
 	_ = cmd.MarkFlagRequired("from-asset")
 	_ = cmd.MarkFlagRequired("to-asset")
