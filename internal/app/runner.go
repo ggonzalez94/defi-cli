@@ -144,7 +144,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				morphoProvider := morpho.New(httpClient)
 				kaminoProvider := kamino.New(httpClient)
 				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
-				taikoSwapProvider := taikoswap.New(httpClient, settings.TaikoMainnetRPC, settings.TaikoHoodiRPC)
+				taikoSwapProvider := taikoswap.New()
 				s.marketProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
@@ -695,7 +695,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 func (s *runtimeState) newSwapCommand() *cobra.Command {
 	root := &cobra.Command{Use: "swap", Short: "Swap quote and execution commands"}
 
-	parseSwapRequest := func(chainArg, fromAssetArg, toAssetArg, amountBase, amountDecimal string) (providers.SwapQuoteRequest, error) {
+	parseSwapRequest := func(chainArg, fromAssetArg, toAssetArg, amountBase, amountDecimal, rpcURL string) (providers.SwapQuoteRequest, error) {
 		chain, err := id.ParseChain(chainArg)
 		if err != nil {
 			return providers.SwapQuoteRequest{}, err
@@ -722,11 +722,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			ToAsset:         toAsset,
 			AmountBaseUnits: base,
 			AmountDecimal:   decimal,
+			RPCURL:          strings.TrimSpace(rpcURL),
 		}, nil
 	}
 
 	var quoteProviderArg, quoteChainArg, quoteFromAssetArg, quoteToAssetArg string
-	var quoteAmountBase, quoteAmountDecimal string
+	var quoteAmountBase, quoteAmountDecimal, quoteRPCURL string
 	quoteCmd := &cobra.Command{
 		Use:   "quote",
 		Short: "Get swap quote",
@@ -739,7 +740,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if !ok {
 				return clierr.New(clierr.CodeUnsupported, "unsupported swap provider")
 			}
-			reqStruct, err := parseSwapRequest(quoteChainArg, quoteFromAssetArg, quoteToAssetArg, quoteAmountBase, quoteAmountDecimal)
+			reqStruct, err := parseSwapRequest(quoteChainArg, quoteFromAssetArg, quoteToAssetArg, quoteAmountBase, quoteAmountDecimal, quoteRPCURL)
 			if err != nil {
 				return err
 			}
@@ -750,6 +751,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				"from":     reqStruct.FromAsset.AssetID,
 				"to":       reqStruct.ToAsset.AssetID,
 				"amount":   reqStruct.AmountBaseUnits,
+				"rpc_url":  reqStruct.RPCURL,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
@@ -765,6 +767,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	quoteCmd.Flags().StringVar(&quoteToAssetArg, "to-asset", "", "Output asset")
 	quoteCmd.Flags().StringVar(&quoteAmountBase, "amount", "", "Amount in base units")
 	quoteCmd.Flags().StringVar(&quoteAmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	quoteCmd.Flags().StringVar(&quoteRPCURL, "rpc-url", "", "RPC URL override for on-chain quote providers")
 	_ = quoteCmd.MarkFlagRequired("chain")
 	_ = quoteCmd.MarkFlagRequired("from-asset")
 	_ = quoteCmd.MarkFlagRequired("to-asset")
@@ -774,6 +777,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var planAmountBase, planAmountDecimal, planFromAddress, planRecipient string
 	var planSlippageBps int64
 	var planSimulate bool
+	var planRPCURL string
 	planCmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Create and persist a swap action plan",
@@ -782,7 +786,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			reqStruct, err := parseSwapRequest(planChainArg, planFromAssetArg, planToAssetArg, planAmountBase, planAmountDecimal)
+			reqStruct, err := parseSwapRequest(planChainArg, planFromAssetArg, planToAssetArg, planAmountBase, planAmountDecimal, "")
 			if err != nil {
 				return err
 			}
@@ -795,6 +799,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				Recipient:   planRecipient,
 				SlippageBps: planSlippageBps,
 				Simulate:    planSimulate,
+				RPCURL:      planRPCURL,
 			})
 			if strings.TrimSpace(providerInfoName) == "" {
 				providerInfoName = providerName
@@ -824,6 +829,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	planCmd.Flags().StringVar(&planRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	planCmd.Flags().Int64Var(&planSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	planCmd.Flags().BoolVar(&planSimulate, "simulate", true, "Include simulation checks during execution")
+	planCmd.Flags().StringVar(&planRPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("from-asset")
 	_ = planCmd.MarkFlagRequired("to-asset")
@@ -834,6 +840,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var runAmountBase, runAmountDecimal, runFromAddress, runRecipient string
 	var runSlippageBps int64
 	var runSimulate bool
+	var runRPCURL string
 	var runSigner, runKeySource, runPrivateKey string
 	var runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
@@ -847,7 +854,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			reqStruct, err := parseSwapRequest(runChainArg, runFromAssetArg, runToAssetArg, runAmountBase, runAmountDecimal)
+			reqStruct, err := parseSwapRequest(runChainArg, runFromAssetArg, runToAssetArg, runAmountBase, runAmountDecimal, "")
 			if err != nil {
 				return err
 			}
@@ -864,6 +871,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				Recipient:   runRecipient,
 				SlippageBps: runSlippageBps,
 				Simulate:    runSimulate,
+				RPCURL:      runRPCURL,
 			})
 			if strings.TrimSpace(providerInfoName) == "" {
 				providerInfoName = providerName
@@ -912,6 +920,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	runCmd.Flags().StringVar(&runRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	runCmd.Flags().Int64Var(&runSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	runCmd.Flags().BoolVar(&runSimulate, "simulate", true, "Run preflight simulation before submission")
+	runCmd.Flags().StringVar(&runRPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
 	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")

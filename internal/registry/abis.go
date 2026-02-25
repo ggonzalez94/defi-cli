@@ -1,145 +1,5 @@
 package registry
 
-import (
-	"net"
-	"net/url"
-	"strings"
-)
-
-const (
-	// Execution provider endpoints.
-	LiFiBaseURL           = "https://li.quest/v1"
-	LiFiSettlementURL     = "https://li.quest/v1/status"
-	AcrossBaseURL         = "https://app.across.to/api"
-	AcrossSettlementURL   = "https://app.across.to/api/deposit/status"
-	MorphoGraphQLEndpoint = "https://api.morpho.org/graphql"
-)
-
-func BridgeSettlementURL(provider string) (string, bool) {
-	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "lifi":
-		return LiFiSettlementURL, true
-	case "across":
-		return AcrossSettlementURL, true
-	default:
-		return "", false
-	}
-}
-
-func IsAllowedBridgeSettlementURL(provider, endpoint string) bool {
-	if strings.TrimSpace(endpoint) == "" {
-		return true
-	}
-	parsed, err := url.Parse(strings.TrimSpace(endpoint))
-	if err != nil {
-		return false
-	}
-	if strings.TrimSpace(parsed.Hostname()) == "" {
-		return false
-	}
-	if isLoopbackHost(parsed.Hostname()) {
-		scheme := strings.ToLower(strings.TrimSpace(parsed.Scheme))
-		return scheme == "" || scheme == "http" || scheme == "https"
-	}
-	if !strings.EqualFold(strings.TrimSpace(parsed.Scheme), "https") {
-		return false
-	}
-	allowedRaw, ok := BridgeSettlementURL(provider)
-	if !ok {
-		return false
-	}
-	allowed, err := url.Parse(allowedRaw)
-	if err != nil {
-		return false
-	}
-	if !strings.EqualFold(parsed.Scheme, allowed.Scheme) {
-		return false
-	}
-	if !strings.EqualFold(parsed.Hostname(), allowed.Hostname()) {
-		return false
-	}
-	if normalizedURLPort(parsed) != normalizedURLPort(allowed) {
-		return false
-	}
-	return normalizedURLPath(parsed.Path) == normalizedURLPath(allowed.Path)
-}
-
-func isLoopbackHost(host string) bool {
-	h := strings.TrimSpace(strings.ToLower(host))
-	if h == "localhost" {
-		return true
-	}
-	ip := net.ParseIP(h)
-	return ip != nil && ip.IsLoopback()
-}
-
-func normalizedURLPort(parsed *url.URL) string {
-	if parsed == nil {
-		return ""
-	}
-	if port := strings.TrimSpace(parsed.Port()); port != "" {
-		return port
-	}
-	switch strings.ToLower(strings.TrimSpace(parsed.Scheme)) {
-	case "http":
-		return "80"
-	case "https":
-		return "443"
-	default:
-		return ""
-	}
-}
-
-func normalizedURLPath(path string) string {
-	p := strings.TrimSpace(path)
-	if p == "" {
-		return "/"
-	}
-	p = strings.TrimSuffix(p, "/")
-	if p == "" {
-		return "/"
-	}
-	return p
-}
-
-// Canonical contracts used by TaikoSwap execution/quoting.
-var taikoSwapContractsByChainID = map[int64]struct {
-	QuoterV2 string
-	Router   string
-}{
-	167000: {
-		QuoterV2: "0xcBa70D57be34aA26557B8E80135a9B7754680aDb",
-		Router:   "0x1A0c3a0Cfd1791FAC7798FA2b05208B66aaadfeD",
-	},
-	167013: {
-		QuoterV2: "0xAC8D93657DCc5C0dE9d9AF2772aF9eA3A032a1C6",
-		Router:   "0x482233e4DBD56853530fA1918157CE59B60dF230",
-	},
-}
-
-func TaikoSwapContracts(chainID int64) (quoterV2 string, router string, ok bool) {
-	contracts, ok := taikoSwapContractsByChainID[chainID]
-	if !ok {
-		return "", "", false
-	}
-	return contracts.QuoterV2, contracts.Router, true
-}
-
-// Canonical Aave V3 PoolAddressesProvider contracts used by planners.
-var aavePoolAddressProviderByChainID = map[int64]string{
-	1:     "0x2f39d218133AFaB8F2B819B1066c7E434Ad94E9e", // Ethereum
-	10:    "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Optimism
-	137:   "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Polygon
-	8453:  "0xe20fCBdBfFC4Dd138cE8b2E6FBb6CB49777ad64D", // Base
-	42161: "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Arbitrum
-	43114: "0xa97684ead0e402dC232d5A977953DF7ECBaB3CDb", // Avalanche
-}
-
-func AavePoolAddressProvider(chainID int64) (string, bool) {
-	value, ok := aavePoolAddressProviderByChainID[chainID]
-	return value, ok
-}
-
 // ABI fragments used across execution planners/providers.
 const (
 	ERC20MinimalABI = `[
@@ -147,11 +7,11 @@ const (
 		{"name":"approve","type":"function","stateMutability":"nonpayable","inputs":[{"name":"spender","type":"address"},{"name":"amount","type":"uint256"}],"outputs":[{"name":"","type":"bool"}]}
 	]`
 
-	TaikoSwapQuoterV2ABI = `[
+	UniswapV3QuoterV2ABI = `[
 		{"name":"quoteExactInputSingle","type":"function","stateMutability":"nonpayable","inputs":[{"name":"params","type":"tuple","components":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountIn","type":"uint256"},{"name":"fee","type":"uint24"},{"name":"sqrtPriceLimitX96","type":"uint160"}]}],"outputs":[{"name":"amountOut","type":"uint256"},{"name":"sqrtPriceX96After","type":"uint160"},{"name":"initializedTicksCrossed","type":"uint32"},{"name":"gasEstimate","type":"uint256"}]}
 	]`
 
-	TaikoSwapRouterABI = `[
+	UniswapV3RouterABI = `[
 		{"name":"exactInputSingle","type":"function","stateMutability":"payable","inputs":[{"name":"params","type":"tuple","components":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"fee","type":"uint24"},{"name":"recipient","type":"address"},{"name":"amountIn","type":"uint256"},{"name":"amountOutMinimum","type":"uint256"},{"name":"sqrtPriceLimitX96","type":"uint160"}]}],"outputs":[{"name":"amountOut","type":"uint256"}]}
 	]`
 

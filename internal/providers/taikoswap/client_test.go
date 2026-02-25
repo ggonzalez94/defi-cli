@@ -11,9 +11,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
-	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
@@ -29,12 +27,12 @@ func TestQuoteSwapChoosesBestFeeRoute(t *testing.T) {
 	server := newMockRPCServer(t, false)
 	defer server.Close()
 
-	c := New(httpx.New(2*time.Second, 0), server.URL, "")
+	c := New()
 	chain, _ := id.ParseChain("taiko")
 	fromAsset, _ := id.ParseAsset("USDC", chain)
 	toAsset, _ := id.ParseAsset("WETH", chain)
 	quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
-		Chain: chain, FromAsset: fromAsset, ToAsset: toAsset, AmountBaseUnits: "1000000", AmountDecimal: "1",
+		Chain: chain, FromAsset: fromAsset, ToAsset: toAsset, AmountBaseUnits: "1000000", AmountDecimal: "1", RPCURL: server.URL,
 	})
 	if err != nil {
 		t.Fatalf("QuoteSwap failed: %v", err)
@@ -54,7 +52,7 @@ func TestBuildSwapActionAddsApprovalWhenNeeded(t *testing.T) {
 	server := newMockRPCServer(t, true)
 	defer server.Close()
 
-	c := New(httpx.New(2*time.Second, 0), server.URL, "")
+	c := New()
 	chain, _ := id.ParseChain("taiko")
 	fromAsset, _ := id.ParseAsset("USDC", chain)
 	toAsset, _ := id.ParseAsset("WETH", chain)
@@ -65,6 +63,7 @@ func TestBuildSwapActionAddsApprovalWhenNeeded(t *testing.T) {
 		Recipient:   "0x00000000000000000000000000000000000000BB",
 		SlippageBps: 100,
 		Simulate:    true,
+		RPCURL:      server.URL,
 	})
 	if err != nil {
 		t.Fatalf("BuildSwapAction failed: %v", err)
@@ -84,7 +83,7 @@ func TestBuildSwapActionAddsApprovalWhenNeeded(t *testing.T) {
 }
 
 func TestBuildSwapActionRequiresSender(t *testing.T) {
-	c := New(httpx.New(2*time.Second, 0), defaultMainnetRPC, "")
+	c := New()
 	chain, _ := id.ParseChain("taiko")
 	fromAsset, _ := id.ParseAsset("USDC", chain)
 	toAsset, _ := id.ParseAsset("WETH", chain)
@@ -93,6 +92,64 @@ func TestBuildSwapActionRequiresSender(t *testing.T) {
 	}, providers.SwapExecutionOptions{})
 	if err == nil {
 		t.Fatal("expected missing sender error")
+	}
+}
+
+func TestBuildSwapActionRejectsInvalidSender(t *testing.T) {
+	c := New()
+	chain, _ := id.ParseChain("taiko")
+	fromAsset, _ := id.ParseAsset("USDC", chain)
+	toAsset, _ := id.ParseAsset("WETH", chain)
+	_, err := c.BuildSwapAction(context.Background(), providers.SwapQuoteRequest{
+		Chain: chain, FromAsset: fromAsset, ToAsset: toAsset, AmountBaseUnits: "1000000", AmountDecimal: "1",
+	}, providers.SwapExecutionOptions{Sender: "not-an-address"})
+	if err == nil {
+		t.Fatal("expected invalid sender error")
+	}
+}
+
+func TestBuildSwapActionRejectsInvalidRecipient(t *testing.T) {
+	c := New()
+	chain, _ := id.ParseChain("taiko")
+	fromAsset, _ := id.ParseAsset("USDC", chain)
+	toAsset, _ := id.ParseAsset("WETH", chain)
+	_, err := c.BuildSwapAction(context.Background(), providers.SwapQuoteRequest{
+		Chain: chain, FromAsset: fromAsset, ToAsset: toAsset, AmountBaseUnits: "1000000", AmountDecimal: "1",
+	}, providers.SwapExecutionOptions{
+		Sender:    "0x00000000000000000000000000000000000000AA",
+		Recipient: "not-an-address",
+	})
+	if err == nil {
+		t.Fatal("expected invalid recipient error")
+	}
+}
+
+func TestBuildSwapActionUsesRPCOverride(t *testing.T) {
+	server := newMockRPCServer(t, true)
+	defer server.Close()
+
+	c := New()
+	chain, _ := id.ParseChain("taiko")
+	fromAsset, _ := id.ParseAsset("USDC", chain)
+	toAsset, _ := id.ParseAsset("WETH", chain)
+	action, err := c.BuildSwapAction(context.Background(), providers.SwapQuoteRequest{
+		Chain: chain, FromAsset: fromAsset, ToAsset: toAsset, AmountBaseUnits: "1000000", AmountDecimal: "1",
+	}, providers.SwapExecutionOptions{
+		Sender:      "0x00000000000000000000000000000000000000AA",
+		SlippageBps: 100,
+		Simulate:    true,
+		RPCURL:      server.URL,
+	})
+	if err != nil {
+		t.Fatalf("BuildSwapAction failed with rpc override: %v", err)
+	}
+	if len(action.Steps) == 0 {
+		t.Fatal("expected non-empty steps")
+	}
+	for i := range action.Steps {
+		if action.Steps[i].RPCURL != server.URL {
+			t.Fatalf("expected step %d rpc override %q, got %q", i, server.URL, action.Steps[i].RPCURL)
+		}
 	}
 }
 

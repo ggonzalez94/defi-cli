@@ -214,7 +214,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "across swap transaction chain does not match source chain")
 	}
 
-	rpcURL, err := execution.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
+	rpcURL, err := registry.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}

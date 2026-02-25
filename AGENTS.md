@@ -35,10 +35,10 @@ internal/
     aave/ morpho/                 # direct GraphQL lending + yield
     defillama/                    # market/yield normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes + lifi execution planning
-    oneinch/ uniswap/ taikoswap/  # swap quotes + taikoswap execution planning
+    oneinch/ uniswap/ taikoswap/  # swap quotes + uniswap-v3-compatible execution planning (taikoswap today)
     types.go                      # provider interfaces
   execution/                      # action persistence + planner helpers + signer abstraction + tx execution
-  registry/                       # canonical execution endpoints/contracts/ABI fragments
+  registry/                       # canonical execution endpoints/contracts/ABI fragments + default chain RPC map
   config/                         # defaults + file/env/flags precedence
   cache/                          # sqlite cache + file lock
   id/                             # CAIP parsing + amount normalization
@@ -68,6 +68,12 @@ README.md                         # user-facing usage + caveats
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit provider/protocol selection (`--provider` or `--protocol`); no implicit defaults.
 - TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
+- `swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `lend`, `rewards`); `submit`/`status` use stored action step RPC URLs.
+- Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.
+- Metadata ownership is split by intent:
+  - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
+  - `internal/providers/*/client.go`: provider quote/read API base URLs.
+  - `internal/id/id.go`: bootstrap token symbol/address registry for deterministic asset parsing.
 - Execution commands currently available:
   - `swap plan|run|submit|status`
   - `bridge plan|run|submit|status` (Across, LiFi)

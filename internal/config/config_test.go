@@ -70,21 +70,6 @@ func TestLoadExecutionPathsFromEnv(t *testing.T) {
 	}
 }
 
-func TestLoadTaikoRPCFromEnv(t *testing.T) {
-	t.Setenv("DEFI_TAIKO_MAINNET_RPC_URL", "https://rpc.example.mainnet")
-	t.Setenv("DEFI_TAIKO_HOODI_RPC_URL", "https://rpc.example.hoodi")
-	settings, err := Load(GlobalFlags{})
-	if err != nil {
-		t.Fatalf("Load failed: %v", err)
-	}
-	if settings.TaikoMainnetRPC != "https://rpc.example.mainnet" {
-		t.Fatalf("unexpected mainnet rpc: %q", settings.TaikoMainnetRPC)
-	}
-	if settings.TaikoHoodiRPC != "https://rpc.example.hoodi" {
-		t.Fatalf("unexpected hoodi rpc: %q", settings.TaikoHoodiRPC)
-	}
-}
-
 func TestLoadJupiterAPIKeyFromEnv(t *testing.T) {
 	t.Setenv("DEFI_JUPITER_API_KEY", "jup-key")
 	settings, err := Load(GlobalFlags{})

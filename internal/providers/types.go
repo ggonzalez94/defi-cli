@@ -104,6 +104,7 @@ type SwapQuoteRequest struct {
 	ToAsset         id.Asset
 	AmountBaseUnits string
 	AmountDecimal   string
+	RPCURL          string
 }
 
 type SwapExecutionOptions struct {
@@ -111,4 +112,5 @@ type SwapExecutionOptions struct {
 	Recipient   string
 	SlippageBps int64
 	Simulate    bool
+	RPCURL      string
 }

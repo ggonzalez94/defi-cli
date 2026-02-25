@@ -13,41 +13,26 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
-	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
-const (
-	defaultMainnetRPC = "https://rpc.mainnet.taiko.xyz"
-	defaultHoodiRPC   = "https://rpc.hoodi.taiko.xyz"
-)
-
 var (
 	feeTiers = []uint32{100, 500, 3000, 10000}
 
-	quoterABI = mustABI(registry.TaikoSwapQuoterV2ABI)
+	quoterABI = mustABI(registry.UniswapV3QuoterV2ABI)
 	erc20ABI  = mustABI(registry.ERC20MinimalABI)
-	routerABI = mustABI(registry.TaikoSwapRouterABI)
+	routerABI = mustABI(registry.UniswapV3RouterABI)
 )
 
 type Client struct {
-	http       *httpx.Client
-	mainnetRPC string
-	hoodiRPC   string
-	now        func() time.Time
+	now func() time.Time
 }
 
-func New(httpClient *httpx.Client, mainnetRPC, hoodiRPC string) *Client {
-	if strings.TrimSpace(mainnetRPC) == "" {
-		mainnetRPC = defaultMainnetRPC
-	}
-	if strings.TrimSpace(hoodiRPC) == "" {
-		hoodiRPC = defaultHoodiRPC
-	}
-	return &Client{http: httpClient, mainnetRPC: mainnetRPC, hoodiRPC: hoodiRPC, now: time.Now}
+func New() *Client {
+	return &Client{now: time.Now}
 }
 
 func (c *Client) Info() model.ProviderInfo {
@@ -82,7 +67,7 @@ type exactInputSingleParams struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
-	rpcURL, quoter, _, err := c.chainConfig(req.Chain)
+	rpcURL, quoter, _, err := c.chainConfig(req.Chain, req.RPCURL)
 	if err != nil {
 		return model.SwapQuote{}, err
 	}
@@ -121,10 +106,14 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 }
 
 func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, error) {
-	if strings.TrimSpace(opts.Sender) == "" {
+	sender := strings.TrimSpace(opts.Sender)
+	if sender == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution requires sender address")
 	}
-	rpcURL, quoter, router, err := c.chainConfig(req.Chain)
+	if !common.IsHexAddress(sender) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution sender must be a valid EVM address")
+	}
+	rpcURL, quoter, router, err := c.chainConfig(req.Chain, opts.RPCURL)
 	if err != nil {
 		return execution.Action{}, err
 	}
@@ -142,10 +131,13 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	toToken := common.HexToAddress(req.ToAsset.Address)
 	recipient := strings.TrimSpace(opts.Recipient)
 	if recipient == "" {
-		recipient = opts.Sender
+		recipient = sender
+	}
+	if !common.IsHexAddress(recipient) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution recipient must be a valid EVM address")
 	}
 	recipientAddr := common.HexToAddress(recipient)
-	senderAddr := common.HexToAddress(opts.Sender)
+	senderAddr := common.HexToAddress(sender)
 
 	quotedOut, bestFee, _, err := quoteBestFee(ctx, client, quoter, fromToken, toToken, amountIn)
 	if err != nil {
@@ -238,19 +230,16 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	return action, nil
 }
 
-func (c *Client) chainConfig(chain id.Chain) (rpc string, quoter common.Address, router common.Address, err error) {
-	quoterRaw, routerRaw, ok := registry.TaikoSwapContracts(chain.EVMChainID)
+func (c *Client) chainConfig(chain id.Chain, rpcOverride string) (rpc string, quoter common.Address, router common.Address, err error) {
+	quoterRaw, routerRaw, ok := registry.UniswapV3Contracts(chain.EVMChainID)
 	if !ok {
 		return "", common.Address{}, common.Address{}, clierr.New(clierr.CodeUnsupported, "taikoswap only supports taiko mainnet/hoodi chains")
 	}
-	switch chain.EVMChainID {
-	case 167000:
-		return c.mainnetRPC, common.HexToAddress(quoterRaw), common.HexToAddress(routerRaw), nil
-	case 167013:
-		return c.hoodiRPC, common.HexToAddress(quoterRaw), common.HexToAddress(routerRaw), nil
-	default:
-		return "", common.Address{}, common.Address{}, clierr.New(clierr.CodeUnsupported, "taikoswap only supports taiko mainnet/hoodi chains")
+	rpc, err = registry.ResolveRPCURL(rpcOverride, chain.EVMChainID)
+	if err != nil {
+		return "", common.Address{}, common.Address{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}
+	return rpc, common.HexToAddress(quoterRaw), common.HexToAddress(routerRaw), nil
 }
 
 func quoteBestFee(ctx context.Context, client *ethclient.Client, quoter, tokenIn, tokenOut common.Address, amountIn *big.Int) (*big.Int, uint32, *big.Int, error) {

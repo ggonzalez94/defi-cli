@@ -76,7 +76,7 @@ defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
 defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
-defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --rpc-url https://rpc.mainnet.taiko.xyz --results-only
 defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --from-amount-for-gas 100000 --results-only
 defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 defi lend supply plan --protocol aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
@@ -132,6 +132,9 @@ defi swap run \
   --from-address 0xYourEOA \
   --results-only
 ```
+
+`swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `lend`, `rewards`).
+For bridge flows, `--rpc-url` applies to the source-chain execution RPC.
 
 Execution command surface:
 
@@ -227,10 +230,18 @@ execution:
   actions_path: ~/.cache/defi/actions.db
   actions_lock_path: ~/.cache/defi/actions.lock
 providers:
-  taikoswap:
-    mainnet_rpc: https://rpc.mainnet.taiko.xyz
-    hoodi_rpc: https://rpc.hoodi.taiko.xyz
+  uniswap:
+    api_key_env: DEFI_UNISWAP_API_KEY
 ```
+
+Execution `plan`/`run` `--rpc-url` flags override chain default RPCs for that invocation.
+`submit`/`status` commands use stored per-step RPC URLs from the persisted action.
+
+## Execution Metadata Locations (Implementers)
+
+- `internal/registry`: canonical execution endpoints/contracts/ABI fragments and default chain RPC map used when no `--rpc-url` is provided.
+- `internal/providers/*/client.go`: provider quote/read API base URLs and external source URLs.
+- `internal/id/id.go`: bootstrap token symbol/address registry used for deterministic symbol parsing.
 
 ## Cache Policy
 
@@ -260,6 +271,7 @@ providers:
 - Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
+- Swap execution validates `--from-address` and `--recipient` as EVM hex addresses before planning transactions.
 - Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `run` / `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.

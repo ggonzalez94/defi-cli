@@ -29,7 +29,7 @@ Format:
 - `providers list` now includes Across bridge execution capabilities (`bridge.plan`, `bridge.execute`).
 - `providers list` now includes Morpho lend execution capabilities (`lend.plan`, `lend.execute`).
 - Added execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
-- Added execution config/env support for action store paths and Taiko RPC overrides.
+- Added execution config/env support for action store paths.
 - Execution command cache/action-store policy now covers `swap|bridge|approvals|lend|rewards ... plan|run|submit|status`.
 - Removed implicit defaults for multi-provider command paths; `--provider`/`--protocol` must be set explicitly where applicable.
 - Added bridge gas-top-up request support via `--from-amount-for-gas` for LiFi quote/plan/run flows.
@@ -47,8 +47,11 @@ Format:
 - Missing local-signer key errors now include a simple default key-file hint (`~/.config/defi/key.hex`, with `XDG_CONFIG_HOME` override note).
 - Local signer key/keystore file loading no longer hard-fails on non-`0600` file permissions.
 - Execution endpoint defaults for Across/LiFi settlement polling and Morpho GraphQL planning are now centralized in `internal/registry`.
+- Default chain RPC metadata is now centralized in `internal/registry/rpc.go`; execution/quote flows use shared chain defaults when `--rpc-url` is not provided.
 - Execution pre-sign validation now enforces bounded ERC-20 approvals by default and validates TaikoSwap router/selector invariants before signing.
 - Execution `run`/`submit` commands now expose `--allow-max-approval` and `--unsafe-provider-tx` overrides for advanced/provider-specific flows.
+- `swap quote` (on-chain providers) and `swap plan`/`swap run` now support `--rpc-url` to override chain default RPCs per invocation.
+- Swap execution planning now validates sender/recipient fields as EVM addresses before route planning.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.

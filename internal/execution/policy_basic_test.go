@@ -57,7 +57,7 @@ func TestValidateSwapPolicyTaikoRouter(t *testing.T) {
 		Type:   StepTypeSwap,
 		Target: "0x00000000000000000000000000000000000000cd",
 	}
-	err := validateStepPolicy(action, step, 167000, policyTaikoSwapMethod, ExecuteOptions{})
+	err := validateStepPolicy(action, step, 167000, policyUniswapV3SwapMethod, ExecuteOptions{})
 	if err == nil {
 		t.Fatal("expected taikoswap router mismatch to fail")
 	}

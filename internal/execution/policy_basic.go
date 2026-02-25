@@ -13,11 +13,11 @@ import (
 )
 
 var (
-	policyERC20ABI       = mustPolicyABI(registry.ERC20MinimalABI)
-	policyTaikoRouterABI = mustPolicyABI(registry.TaikoSwapRouterABI)
+	policyERC20ABI           = mustPolicyABI(registry.ERC20MinimalABI)
+	policyUniswapV3RouterABI = mustPolicyABI(registry.UniswapV3RouterABI)
 
-	policyApproveSelector = policyERC20ABI.Methods["approve"].ID
-	policyTaikoSwapMethod = policyTaikoRouterABI.Methods["exactInputSingle"].ID
+	policyApproveSelector     = policyERC20ABI.Methods["approve"].ID
+	policyUniswapV3SwapMethod = policyUniswapV3RouterABI.Methods["exactInputSingle"].ID
 )
 
 func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []byte, opts ExecuteOptions) error {
@@ -79,10 +79,10 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 	if action == nil || !strings.EqualFold(strings.TrimSpace(action.Provider), "taikoswap") {
 		return nil
 	}
-	if len(data) < 4 || !bytes.Equal(data[:4], policyTaikoSwapMethod) {
+	if len(data) < 4 || !bytes.Equal(data[:4], policyUniswapV3SwapMethod) {
 		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step must call exactInputSingle")
 	}
-	_, router, ok := registry.TaikoSwapContracts(chainID)
+	_, router, ok := registry.UniswapV3Contracts(chainID)
 	if !ok {
 		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step has unsupported chain")
 	}

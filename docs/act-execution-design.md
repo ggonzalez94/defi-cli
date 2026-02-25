@@ -186,18 +186,20 @@ Tradeoff:
 
 ## 6. Endpoint, Contract, and ABI Management
 
-Canonical execution metadata currently lives in `internal/registry/execution_data.go`:
+Canonical execution metadata is split under `internal/registry/`:
 
-- Execution endpoint constants:
+- `endpoints.go`:
   - LiFi quote/status endpoints
   - Across quote/status endpoints
   - Morpho GraphQL endpoint used by execution planners
-- Contract address registries:
-  - TaikoSwap contracts by chain
+- `rpc.go`:
+  - Default chain RPC map used by execution planners/providers when `--rpc-url` is not set
+- `contracts.go`:
+  - Uniswap V3-compatible contracts by chain (used by TaikoSwap today)
   - Aave PoolAddressesProvider by chain
-- ABI fragments:
+- `abis.go`:
   - ERC-20 minimal
-  - TaikoSwap quoter/router
+  - Uniswap V3 quoter/router
   - Aave pool/rewards/provider
   - Morpho Blue
 

@@ -45,8 +45,6 @@ type Settings struct {
 	DefiLlamaAPIKey string
 	UniswapAPIKey   string
 	OneInchAPIKey   string
-	TaikoMainnetRPC string
-	TaikoHoodiRPC   string
 	JupiterAPIKey   string
 	BungeeAPIKey    string
 	BungeeAffiliate string
@@ -80,10 +78,6 @@ type fileConfig struct {
 			APIKey    string `yaml:"api_key"`
 			APIKeyEnv string `yaml:"api_key_env"`
 		} `yaml:"oneinch"`
-		TaikoSwap struct {
-			MainnetRPC string `yaml:"mainnet_rpc"`
-			HoodiRPC   string `yaml:"hoodi_rpc"`
-		} `yaml:"taikoswap"`
 		Jupiter struct {
 			APIKey    string `yaml:"api_key"`
 			APIKeyEnv string `yaml:"api_key_env"`
@@ -251,12 +245,6 @@ func applyFileConfig(path string, settings *Settings) error {
 	if cfg.Providers.OneInch.APIKeyEnv != "" {
 		settings.OneInchAPIKey = os.Getenv(cfg.Providers.OneInch.APIKeyEnv)
 	}
-	if cfg.Providers.TaikoSwap.MainnetRPC != "" {
-		settings.TaikoMainnetRPC = cfg.Providers.TaikoSwap.MainnetRPC
-	}
-	if cfg.Providers.TaikoSwap.HoodiRPC != "" {
-		settings.TaikoHoodiRPC = cfg.Providers.TaikoSwap.HoodiRPC
-	}
 	if cfg.Providers.Jupiter.APIKey != "" {
 		settings.JupiterAPIKey = cfg.Providers.Jupiter.APIKey
 	}
@@ -333,12 +321,6 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_1INCH_API_KEY"); v != "" {
 		settings.OneInchAPIKey = v
-	}
-	if v := os.Getenv("DEFI_TAIKO_MAINNET_RPC_URL"); v != "" {
-		settings.TaikoMainnetRPC = v
-	}
-	if v := os.Getenv("DEFI_TAIKO_HOODI_RPC_URL"); v != "" {
-		settings.TaikoHoodiRPC = v
 	}
 	if v := os.Getenv("DEFI_JUPITER_API_KEY"); v != "" {
 		settings.JupiterAPIKey = v

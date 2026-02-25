@@ -1,19 +1,21 @@
-package execution
+package registry
 
 import (
 	"fmt"
 	"strings"
 )
 
+// Canonical default EVM RPC endpoints by chain ID.
+// These values are used whenever a command does not pass --rpc-url.
 var defaultRPCByChainID = map[int64]string{
 	1:      "https://eth.llamarpc.com",
 	10:     "https://mainnet.optimism.io",
 	56:     "https://bsc-dataseed.binance.org",
 	100:    "https://rpc.gnosischain.com",
 	137:    "https://polygon-rpc.com",
-	324:    "https://mainnet.era.zksync.io",
 	146:    "https://rpc.soniclabs.com",
 	252:    "https://rpc.frax.com",
+	324:    "https://mainnet.era.zksync.io",
 	480:    "https://worldchain-mainnet.g.alchemy.com/public",
 	5000:   "https://rpc.mantle.xyz",
 	8453:   "https://mainnet.base.org",
@@ -30,16 +32,16 @@ var defaultRPCByChainID = map[int64]string{
 }
 
 func DefaultRPCURL(chainID int64) (string, bool) {
-	v, ok := defaultRPCByChainID[chainID]
-	return v, ok
+	value, ok := defaultRPCByChainID[chainID]
+	return value, ok
 }
 
 func ResolveRPCURL(override string, chainID int64) (string, error) {
 	if strings.TrimSpace(override) != "" {
 		return strings.TrimSpace(override), nil
 	}
-	if v, ok := DefaultRPCURL(chainID); ok {
-		return v, nil
+	if value, ok := DefaultRPCURL(chainID); ok {
+		return value, nil
 	}
 	return "", fmt.Errorf("no default rpc configured for chain id %d; provide --rpc-url", chainID)
 }

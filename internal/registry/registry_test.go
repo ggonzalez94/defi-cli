@@ -7,17 +7,17 @@ import (
 	"github.com/ethereum/go-ethereum/accounts/abi"
 )
 
-func TestTaikoSwapContracts(t *testing.T) {
-	quoter, router, ok := TaikoSwapContracts(167000)
+func TestUniswapV3Contracts(t *testing.T) {
+	quoter, router, ok := UniswapV3Contracts(167000)
 	if !ok {
 		t.Fatal("expected taiko mainnet contracts to exist")
 	}
 	if quoter == "" || router == "" {
-		t.Fatalf("unexpected empty taikoswap contract values: quoter=%q router=%q", quoter, router)
+		t.Fatalf("unexpected empty uniswap-v3 contract values: quoter=%q router=%q", quoter, router)
 	}
 
-	if _, _, ok := TaikoSwapContracts(1); ok {
-		t.Fatal("did not expect taikoswap contracts for unsupported chain")
+	if _, _, ok := UniswapV3Contracts(1); ok {
+		t.Fatal("did not expect uniswap-v3 contracts for unsupported chain")
 	}
 }
 
@@ -37,8 +37,8 @@ func TestAavePoolAddressProvider(t *testing.T) {
 func TestExecutionABIConstantsParse(t *testing.T) {
 	abis := []string{
 		ERC20MinimalABI,
-		TaikoSwapQuoterV2ABI,
-		TaikoSwapRouterABI,
+		UniswapV3QuoterV2ABI,
+		UniswapV3RouterABI,
 		AavePoolAddressProviderABI,
 		AavePoolABI,
 		AaveRewardsABI,
@@ -48,6 +48,40 @@ func TestExecutionABIConstantsParse(t *testing.T) {
 		if _, err := abi.JSON(strings.NewReader(raw)); err != nil {
 			t.Fatalf("failed to parse abi json: %v", err)
 		}
+	}
+}
+
+func TestDefaultRPCURL(t *testing.T) {
+	if rpc, ok := DefaultRPCURL(167000); !ok || rpc == "" {
+		t.Fatalf("expected taiko mainnet rpc default, got ok=%v rpc=%q", ok, rpc)
+	}
+	if rpc, ok := DefaultRPCURL(8453); !ok || rpc == "" {
+		t.Fatalf("expected base rpc default, got ok=%v rpc=%q", ok, rpc)
+	}
+	if _, ok := DefaultRPCURL(999999); ok {
+		t.Fatal("did not expect rpc default for unsupported chain")
+	}
+}
+
+func TestResolveRPCURL(t *testing.T) {
+	override, err := ResolveRPCURL(" https://rpc.example.test ", 1)
+	if err != nil {
+		t.Fatalf("resolve with override: %v", err)
+	}
+	if override != "https://rpc.example.test" {
+		t.Fatalf("unexpected override value: %q", override)
+	}
+
+	defaultRPC, err := ResolveRPCURL("", 1)
+	if err != nil {
+		t.Fatalf("resolve with default: %v", err)
+	}
+	if defaultRPC == "" {
+		t.Fatal("expected non-empty default rpc")
+	}
+
+	if _, err := ResolveRPCURL("", 999999); err == nil {
+		t.Fatal("expected missing chain default rpc error")
 	}
 }
 
