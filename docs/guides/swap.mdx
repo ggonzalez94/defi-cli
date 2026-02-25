@@ -48,11 +48,12 @@ defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset 
 
 ## Notes
 
-- `swap quote` defaults by chain family: `1inch` for EVM chains, `jupiter` for Solana.
+- `swap quote` defaults by chain family for exact-input: `1inch` on EVM and `jupiter` on Solana.
 - `--type` defaults to `exact-input`.
 - `--amount` and `--amount-decimal` are for `--type exact-input`.
 - `--amount-out` and `--amount-out-decimal` are for `--type exact-output`.
 - Providers currently supporting `exact-output`: `uniswap`.
+- On EVM, `--type exact-output` without `--provider` defaults to `uniswap`.
 - `--slippage-pct` is optional and currently applies to Uniswap quotes only.
 - Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.

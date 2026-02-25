@@ -228,6 +228,52 @@ func TestQuoteSwapSupportsExactOutput(t *testing.T) {
 	}
 }
 
+func TestQuoteSwapExactOutputFallsBackInputDecimalsWhenMissing(t *testing.T) {
+	chain, _ := id.ParseChain("ethereum")
+	assetIn := id.Asset{
+		ChainID:  chain.CAIP2,
+		AssetID:  "eip155:1/erc20:0x1111111111111111111111111111111111111111",
+		Address:  "0x1111111111111111111111111111111111111111",
+		Symbol:   "UNK",
+		Decimals: 0,
+	}
+	assetOut, _ := id.ParseAsset("DAI", chain)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{
+			"quote": {
+				"input": {"amount": "1000900000000000000"},
+				"output": {"amount": "1000000000000000000"},
+				"gasFeeUSD": "0.12"
+			}
+		}`)
+	}))
+	defer srv.Close()
+
+	c := New(httpx.New(1*time.Second, 0), "test-key")
+	c.baseURL = srv.URL
+
+	quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       assetIn,
+		ToAsset:         assetOut,
+		AmountBaseUnits: "1000000000000000000",
+		AmountDecimal:   "1",
+		TradeType:       providers.SwapTradeTypeExactOutput,
+	})
+	if err != nil {
+		t.Fatalf("QuoteSwap failed: %v", err)
+	}
+
+	if quote.InputAmount.AmountDecimal != "1.0009" {
+		t.Fatalf("unexpected input decimal amount: %s", quote.InputAmount.AmountDecimal)
+	}
+	if quote.InputAmount.Decimals != 18 {
+		t.Fatalf("expected fallback decimals=18, got %d", quote.InputAmount.Decimals)
+	}
+}
+
 func TestQuoteSwapRequiresAPIKey(t *testing.T) {
 	chain, _ := id.ParseChain("ethereum")
 	assetIn, _ := id.ParseAsset("USDC", chain)

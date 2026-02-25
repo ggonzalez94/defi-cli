@@ -16,6 +16,7 @@ Format:
 - Added `swap quote --slippage-pct` to optionally override Uniswap max slippage percent; default behavior remains provider auto slippage.
 - Added `swap quote --type` with `exact-input|exact-output` modes plus explicit `--amount-out`/`--amount-out-decimal` for exact-output requests.
 - Swap quote rows now include `trade_type`; `uniswap` supports `exact-output` while other swap providers currently return `unsupported` for non-default types.
+- EVM exact-output swaps without `--provider` now default to `uniswap` (instead of defaulting to `1inch` and failing unsupported).
 
 ### Fixed
 - Fixed `swap quote --provider uniswap` live quote compatibility by adding required request fields (`swapper`, `autoSlippage`) and accepting string-encoded `gasFeeUSD` values from Trade API responses.

@@ -670,12 +670,28 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			tradeType := providers.SwapTradeType(strings.ToLower(strings.TrimSpace(tradeTypeArg)))
+			switch tradeType {
+			case "", providers.SwapTradeTypeExactInput:
+				tradeType = providers.SwapTradeTypeExactInput
+			case providers.SwapTradeTypeExactOutput:
+			default:
+				return clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
+			}
+
 			providerName := strings.ToLower(strings.TrimSpace(providerArg))
 			if providerName == "" {
-				if chain.IsSolana() {
-					providerName = "jupiter"
+				if tradeType == providers.SwapTradeTypeExactOutput {
+					if chain.IsSolana() {
+						return clierr.New(clierr.CodeUnsupported, "exact-output swap quotes are currently supported only on EVM with --provider uniswap")
+					}
+					providerName = "uniswap"
 				} else {
-					providerName = "1inch"
+					if chain.IsSolana() {
+						providerName = "jupiter"
+					} else {
+						providerName = "1inch"
+					}
 				}
 			}
 			provider, ok := s.swapProviders[providerName]
@@ -689,15 +705,6 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			toAsset, err := id.ParseAsset(toAssetArg, chain)
 			if err != nil {
 				return err
-			}
-
-			tradeType := providers.SwapTradeType(strings.ToLower(strings.TrimSpace(tradeTypeArg)))
-			switch tradeType {
-			case "", providers.SwapTradeTypeExactInput:
-				tradeType = providers.SwapTradeTypeExactInput
-			case providers.SwapTradeTypeExactOutput:
-			default:
-				return clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
 			}
 
 			var base, decimal string
@@ -771,7 +778,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().StringVar(&providerArg, "provider", "", "Swap provider (defaults: 1inch for EVM, jupiter for Solana; options: 1inch|uniswap|jupiter|fibrous|bungee; fibrous/bungee require no API key)")
+	cmd.Flags().StringVar(&providerArg, "provider", "", "Swap provider (defaults: 1inch for EVM exact-input, uniswap for EVM exact-output, jupiter for Solana exact-input; options: 1inch|uniswap|jupiter|fibrous|bungee; fibrous/bungee require no API key)")
 	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	cmd.Flags().StringVar(&fromAssetArg, "from-asset", "", "Input asset")
 	cmd.Flags().StringVar(&toAssetArg, "to-asset", "", "Output asset")

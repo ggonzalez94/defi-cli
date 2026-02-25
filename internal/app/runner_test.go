@@ -751,6 +751,97 @@ func TestSwapExactOutputPassedToProvider(t *testing.T) {
 	}
 }
 
+func TestSwapExactOutputDefaultsToUniswapOnEVM(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch":   oneinch,
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "base",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--type", "exact-output",
+		"--amount-out", "1000000000000000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if oneinch.calls != 0 {
+		t.Fatalf("expected 1inch not to be called, got %d calls", oneinch.calls)
+	}
+	if uniswap.calls != 1 {
+		t.Fatalf("expected uniswap to be called once, got %d calls", uniswap.calls)
+	}
+	if uniswap.lastReq.TradeType != providers.SwapTradeTypeExactOutput {
+		t.Fatalf("expected trade type exact-output, got %s", uniswap.lastReq.TradeType)
+	}
+}
+
+func TestSwapExactOutputWithoutProviderRejectedOnSolana(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	jupiter := &fakeSwapProvider{name: "jupiter"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"jupiter": jupiter,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "solana",
+		"--from-asset", "USDC",
+		"--to-asset", "SOL",
+		"--type", "exact-output",
+		"--amount-out", "1000000",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected unsupported error, stderr=%s", stderr.String())
+	}
+	if jupiter.calls != 0 {
+		t.Fatalf("expected jupiter not to be called, got %d calls", jupiter.calls)
+	}
+}
+
 func TestSwapExactOutputRequiresOutputAmount(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

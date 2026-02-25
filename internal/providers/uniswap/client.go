@@ -119,6 +119,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 
 	inputAmountBase := req.AmountBaseUnits
 	inputAmountDecimal := req.AmountDecimal
+	inputAmountDecimals := req.FromAsset.Decimals
 	if tradeType == providers.SwapTradeTypeExactOutput {
 		inputAmountBase = resp.AmountIn
 		if inputAmountBase == "" {
@@ -127,7 +128,10 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		if inputAmountBase == "" {
 			return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "uniswap exact-output quote missing input amount")
 		}
-		inputAmountDecimal = id.FormatDecimalCompat(inputAmountBase, req.FromAsset.Decimals)
+		if inputAmountDecimals <= 0 {
+			inputAmountDecimals = 18
+		}
+		inputAmountDecimal = id.FormatDecimalCompat(inputAmountBase, inputAmountDecimals)
 	}
 
 	gasUSD, err := parseJSONFloat(resp.GasUSD)
@@ -150,7 +154,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		InputAmount: model.AmountInfo{
 			AmountBaseUnits: inputAmountBase,
 			AmountDecimal:   inputAmountDecimal,
-			Decimals:        req.FromAsset.Decimals,
+			Decimals:        inputAmountDecimals,
 		},
 		EstimatedOut: model.AmountInfo{
 			AmountBaseUnits: amountOut,

@@ -246,6 +246,7 @@ providers:
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
 - Bungee dedicated backend routing only activates when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set; if either is missing, requests use the public backend.
 - Swap quote type defaults to `--type exact-input`; use `--type exact-output` with `--amount-out`/`--amount-out-decimal` when supported by the provider.
+- For EVM exact-output requests without `--provider`, the default provider is `uniswap`; Solana exact-output is currently unsupported.
 - Uniswap supports both `exact-input` and `exact-output`; 1inch/Jupiter/Fibrous/Bungee currently support `exact-input` only.
 - Uniswap quote requests use a deterministic placeholder `swapper` (`0x000...001`) and default to provider auto slippage; use `--slippage-pct` to set a manual max slippage percent.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
