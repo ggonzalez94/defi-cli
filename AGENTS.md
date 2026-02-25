@@ -79,6 +79,8 @@ README.md                         # user-facing usage + caveats
   - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
   - `lend`/`rewards`/`approvals` action construction uses internal planners for deterministic contract-call composition.
 - All execution `run` / `submit` commands can broadcast transactions.
+- Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts into larger approvals when required.
+- Bridge execution pre-sign checks validate provider settlement metadata/endpoints by default; `--unsafe-provider-tx` bypasses these guardrails.
 - LiFi bridge quote/plan/run support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.

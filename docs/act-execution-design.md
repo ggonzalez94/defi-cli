@@ -186,7 +186,10 @@ Tradeoff:
 
 Canonical execution metadata currently lives in `internal/registry/execution_data.go`:
 
-- Provider endpoint constants (for example `LiFiBaseURL`)
+- Execution endpoint constants:
+  - LiFi quote/status endpoints
+  - Across quote/status endpoints
+  - Morpho GraphQL endpoint used by execution planners
 - Contract address registries:
   - TaikoSwap contracts by chain
   - Aave PoolAddressesProvider by chain
@@ -198,7 +201,7 @@ Canonical execution metadata currently lives in `internal/registry/execution_dat
 
 Important nuance:
 
-- Not all provider endpoints are centralized there yet (for example Across base URL is in provider code).
+- Execution-critical endpoints are centralized; quote-only/read-only provider endpoints may still remain adapter-local.
 
 Design decision:
 
@@ -215,12 +218,13 @@ Core executor: `internal/execution/executor.go`.
 Per step execution flow:
 
 1. Validate RPC URL, target, and chain match.
-2. Optional simulation (`eth_call`) when `--simulate=true`.
-3. Gas estimation (`eth_estimateGas`) with configurable multiplier.
-4. EIP-1559 fee resolution (suggested or overridden by flags).
-5. Nonce resolution from pending state.
-6. Local signing and broadcast.
-7. Receipt polling until success/failure/timeout.
+2. Apply lightweight pre-sign policy checks (approval bounds, TaikoSwap target/selector checks, bridge settlement metadata checks).
+3. Optional simulation (`eth_call`) when `--simulate=true`.
+4. Gas estimation (`eth_estimateGas`) with configurable multiplier.
+5. EIP-1559 fee resolution (suggested or overridden by flags).
+6. Nonce resolution from pending state.
+7. Local signing and broadcast.
+8. Receipt polling until success/failure/timeout.
 
 Bridge-specific consistency:
 
@@ -236,11 +240,12 @@ Context and timeout behavior:
 
 Design decision:
 
-- Simulation defaults to on, and bridge completion requires both source receipt and provider settlement.
+- Simulation defaults to on, bridge completion requires both source receipt and provider settlement, and pre-sign policy checks are fail-closed by default.
 
 Tradeoff:
 
 - Better safety and operational visibility, but slower execution paths and dependence on provider status APIs.
+- Advanced users may need explicit overrides (`--allow-max-approval`, `--unsafe-provider-tx`) for provider-specific edge cases.
 
 Current limitation:
 

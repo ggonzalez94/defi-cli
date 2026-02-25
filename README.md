@@ -253,6 +253,8 @@ providers:
 - LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
+- Bridge execution pre-sign checks validate settlement provider metadata and known endpoint hosts for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `run` / `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
 - Provider/protocol selection is explicit for multi-provider flows; pass `--provider` or `--protocol` (no implicit defaults).
