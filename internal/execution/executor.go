@@ -3,21 +3,24 @@ package execution
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math/big"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution/signer"
+	"github.com/ggonzalez94/defi-cli/internal/httpx"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
 type ExecuteOptions struct {
@@ -27,7 +30,14 @@ type ExecuteOptions struct {
 	GasMultiplier      float64
 	MaxFeeGwei         string
 	MaxPriorityFeeGwei string
+	AllowMaxApproval   bool
+	UnsafeProviderTx   bool
 }
+
+var (
+	settlementHTTPClient = httpx.New(10*time.Second, 2)
+	signerNonceLocks     sync.Map
+)
 
 func DefaultExecuteOptions() ExecuteOptions {
 	return ExecuteOptions{
@@ -55,14 +65,17 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 		opts.StepTimeout = 2 * time.Minute
 	}
 	if opts.GasMultiplier <= 1 {
-		opts.GasMultiplier = 1.2
+		return clierr.New(clierr.CodeUsage, "gas multiplier must be > 1")
+	}
+	persist := func() {
+		action.Touch()
+		if store != nil {
+			_ = store.Save(*action)
+		}
 	}
 	action.Status = ActionStatusRunning
 	action.FromAddress = txSigner.Address().Hex()
-	action.Touch()
-	if store != nil {
-		_ = store.Save(*action)
-	}
+	persist()
 
 	for i := range action.Steps {
 		step := &action.Steps[i]
@@ -71,50 +84,43 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 		}
 		if strings.TrimSpace(step.RPCURL) == "" {
 			markStepFailed(action, step, "missing rpc url")
-			if store != nil {
-				_ = store.Save(*action)
-			}
+			persist()
 			return clierr.New(clierr.CodeUsage, "missing rpc url for action step")
 		}
 		if strings.TrimSpace(step.Target) == "" {
 			markStepFailed(action, step, "missing target")
-			if store != nil {
-				_ = store.Save(*action)
-			}
+			persist()
 			return clierr.New(clierr.CodeUsage, "missing target for action step")
+		}
+		if !common.IsHexAddress(step.Target) {
+			markStepFailed(action, step, "invalid target address")
+			persist()
+			return clierr.New(clierr.CodeUsage, "invalid target address for action step")
 		}
 		client, err := ethclient.DialContext(ctx, step.RPCURL)
 		if err != nil {
 			markStepFailed(action, step, err.Error())
-			if store != nil {
-				_ = store.Save(*action)
-			}
+			persist()
 			return clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
 		}
 
-		if err := executeStep(ctx, client, txSigner, step, opts); err != nil {
+		if err := executeStep(ctx, client, txSigner, action, step, opts, persist); err != nil {
 			client.Close()
-			markStepFailed(action, step, err.Error())
-			if store != nil {
-				_ = store.Save(*action)
+			if step.Status != StepStatusFailed {
+				markStepFailed(action, step, err.Error())
 			}
+			persist()
 			return err
 		}
 		client.Close()
-		action.Touch()
-		if store != nil {
-			_ = store.Save(*action)
-		}
+		persist()
 	}
 	action.Status = ActionStatusCompleted
-	action.Touch()
-	if store != nil {
-		_ = store.Save(*action)
-	}
+	persist()
 	return nil
 }
 
-func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.Signer, step *ActionStep, opts ExecuteOptions) error {
+func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.Signer, action *Action, step *ActionStep, opts ExecuteOptions, persist func()) error {
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
 		return clierr.Wrap(clierr.CodeUnavailable, "read chain id", err)
@@ -125,29 +131,45 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 			return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("step chain mismatch: expected %s, got %s", expected, step.ChainID))
 		}
 	}
+	if !common.IsHexAddress(step.Target) {
+		return clierr.New(clierr.CodeUsage, "invalid step target address")
+	}
 	target := common.HexToAddress(step.Target)
+	step.Target = target.Hex()
 	data, err := decodeHex(step.Data)
 	if err != nil {
 		return clierr.Wrap(clierr.CodeUsage, "decode step calldata", err)
+	}
+	if err := validateStepPolicy(action, step, chainID.Int64(), data, opts); err != nil {
+		return err
 	}
 	value, ok := new(big.Int).SetString(step.Value, 10)
 	if !ok {
 		return clierr.New(clierr.CodeUsage, "invalid step value")
 	}
 	msg := ethereum.CallMsg{From: txSigner.Address(), To: &target, Value: value, Data: data}
+	if txHash, ok := normalizeStepTxHash(step.TxHash); ok {
+		step.Status = StepStatusSubmitted
+		safePersist(persist)
+		return waitForStepConfirmation(ctx, client, step, msg, txHash, opts, persist)
+	}
 
 	if opts.Simulate {
 		if _, err := client.CallContract(ctx, msg, nil); err != nil {
-			return clierr.Wrap(clierr.CodeActionSim, "simulate step (eth_call)", err)
+			return wrapEVMExecutionError(clierr.CodeActionSim, "simulate step (eth_call)", err)
 		}
 		step.Status = StepStatusSimulated
+		safePersist(persist)
 	}
 
 	gasLimit, err := client.EstimateGas(ctx, msg)
 	if err != nil {
-		return clierr.Wrap(clierr.CodeActionSim, "estimate gas", err)
+		return wrapEVMExecutionError(clierr.CodeActionSim, "estimate gas", err)
 	}
 	gasLimit = uint64(float64(gasLimit) * opts.GasMultiplier)
+	if gasLimit == 0 {
+		return clierr.New(clierr.CodeActionSim, "estimate gas returned zero")
+	}
 
 	tipCap, err := resolveTipCap(ctx, client, opts.MaxPriorityFeeGwei)
 	if err != nil {
@@ -165,7 +187,8 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 	if err != nil {
 		return err
 	}
-
+	unlockNonce := acquireSignerNonceLock(chainID, txSigner.Address())
+	defer unlockNonce()
 	nonce, err := client.PendingNonceAt(ctx, txSigner.Address())
 	if err != nil {
 		return clierr.Wrap(clierr.CodeUnavailable, "fetch nonce", err)
@@ -186,24 +209,32 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 		return clierr.Wrap(clierr.CodeSigner, "sign transaction", err)
 	}
 	if err := client.SendTransaction(ctx, signed); err != nil {
-		return clierr.Wrap(clierr.CodeUnavailable, "broadcast transaction", err)
+		return wrapEVMExecutionError(clierr.CodeUnavailable, "broadcast transaction", err)
 	}
 	step.Status = StepStatusSubmitted
 	step.TxHash = signed.Hash().Hex()
+	safePersist(persist)
+	return waitForStepConfirmation(ctx, client, step, msg, signed.Hash(), opts, persist)
+}
 
+func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step *ActionStep, msg ethereum.CallMsg, txHash common.Hash, opts ExecuteOptions, persist func()) error {
 	waitCtx, cancel := context.WithTimeout(ctx, opts.StepTimeout)
 	defer cancel()
 	ticker := time.NewTicker(opts.PollInterval)
 	defer ticker.Stop()
 	for {
-		receipt, err := client.TransactionReceipt(waitCtx, signed.Hash())
+		receipt, err := client.TransactionReceipt(waitCtx, txHash)
 		if err == nil && receipt != nil {
 			if receipt.Status == types.ReceiptStatusSuccessful {
-				if err := verifyBridgeSettlement(ctx, step, signed.Hash().Hex(), opts); err != nil {
+				if err := verifyBridgeSettlement(ctx, step, txHash.Hex(), opts); err != nil {
 					return err
 				}
 				step.Status = StepStatusConfirmed
+				safePersist(persist)
 				return nil
+			}
+			if reason := decodeReceiptRevertReason(waitCtx, client, msg, receipt.BlockNumber); reason != "" {
+				return clierr.New(clierr.CodeUnavailable, "transaction reverted on-chain: "+reason)
 			}
 			return clierr.New(clierr.CodeUnavailable, "transaction reverted on-chain")
 		}
@@ -218,6 +249,103 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 			return clierr.Wrap(clierr.CodeActionTimeout, "timed out waiting for receipt", waitCtx.Err())
 		case <-ticker.C:
 		}
+	}
+}
+
+func safePersist(persist func()) {
+	if persist == nil {
+		return
+	}
+	persist()
+}
+
+func normalizeStepTxHash(value string) (common.Hash, bool) {
+	hash := strings.TrimSpace(value)
+	if hash == "" {
+		return common.Hash{}, false
+	}
+	decoded, err := decodeHex(hash)
+	if err != nil || len(decoded) != common.HashLength {
+		return common.Hash{}, false
+	}
+	return common.HexToHash(hash), true
+}
+
+func acquireSignerNonceLock(chainID *big.Int, signerAddress common.Address) func() {
+	key := strings.ToLower(chainID.String() + ":" + signerAddress.Hex())
+	lockAny, _ := signerNonceLocks.LoadOrStore(key, &sync.Mutex{})
+	lock := lockAny.(*sync.Mutex)
+	lock.Lock()
+	return lock.Unlock
+}
+
+func wrapEVMExecutionError(code clierr.Code, operation string, err error) error {
+	revert := decodeRevertFromError(err)
+	if revert == "" {
+		return clierr.Wrap(code, operation, err)
+	}
+	return clierr.Wrap(code, operation+": "+revert, err)
+}
+
+func decodeReceiptRevertReason(ctx context.Context, client *ethclient.Client, msg ethereum.CallMsg, blockNumber *big.Int) string {
+	if client == nil {
+		return ""
+	}
+	callCtx := ctx
+	if callCtx == nil {
+		callCtx = context.Background()
+	}
+	callCtx, cancel := context.WithTimeout(callCtx, 5*time.Second)
+	defer cancel()
+	_, err := client.CallContract(callCtx, msg, blockNumber)
+	return decodeRevertFromError(err)
+}
+
+type rpcDataError interface {
+	error
+	ErrorData() interface{}
+}
+
+func decodeRevertFromError(err error) string {
+	if err == nil {
+		return ""
+	}
+	var dataErr rpcDataError
+	if errors.As(err, &dataErr) {
+		return decodeRevertData(dataErr.ErrorData())
+	}
+	return ""
+}
+
+func decodeRevertData(data any) string {
+	bytesData, ok := normalizeErrorData(data)
+	if !ok || len(bytesData) == 0 {
+		return ""
+	}
+	if reason, err := abi.UnpackRevert(bytesData); err == nil && strings.TrimSpace(reason) != "" {
+		return reason
+	}
+	if len(bytesData) >= 4 {
+		return fmt.Sprintf("custom error selector 0x%s", hex.EncodeToString(bytesData[:4]))
+	}
+	return ""
+}
+
+func normalizeErrorData(data any) ([]byte, bool) {
+	switch v := data.(type) {
+	case []byte:
+		if len(v) == 0 {
+			return nil, false
+		}
+		return v, true
+	case string:
+		decoded, err := decodeHex(v)
+		if err != nil || len(decoded) == 0 {
+			return nil, false
+		}
+		return decoded, true
+	default:
+		return nil, false
 	}
 }
 
@@ -236,13 +364,13 @@ func verifyBridgeSettlement(ctx context.Context, step *ActionStep, sourceTxHash 
 	case "lifi":
 		statusEndpoint := strings.TrimSpace(step.ExpectedOutputs["settlement_status_endpoint"])
 		if statusEndpoint == "" {
-			statusEndpoint = "https://li.quest/v1/status"
+			statusEndpoint = registry.LiFiSettlementURL
 		}
 		return waitForLiFiSettlement(ctx, step, sourceTxHash, statusEndpoint, opts)
 	case "across":
 		statusEndpoint := strings.TrimSpace(step.ExpectedOutputs["settlement_status_endpoint"])
 		if statusEndpoint == "" {
-			statusEndpoint = "https://app.across.to/api/deposit/status"
+			statusEndpoint = registry.AcrossSettlementURL
 		}
 		return waitForAcrossSettlement(ctx, step, sourceTxHash, statusEndpoint, opts)
 	default:
@@ -368,7 +496,7 @@ func queryLiFiStatus(ctx context.Context, sourceTxHash, statusEndpoint string, e
 
 	endpoint := strings.TrimSpace(statusEndpoint)
 	if endpoint == "" {
-		endpoint = "https://li.quest/v1/status"
+		endpoint = registry.LiFiSettlementURL
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
@@ -391,14 +519,8 @@ func queryLiFiStatus(ctx context.Context, sourceTxHash, statusEndpoint string, e
 	if err != nil {
 		return out, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return out, err
-	}
-	defer resp.Body.Close()
-
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return out, err
+	if _, err := settlementHTTPClient.DoJSON(ctx, req, &out); err != nil {
+		return out, clierr.Wrap(clierr.CodeUnavailable, "query lifi settlement status", err)
 	}
 	if out.Code != 0 && out.Status == "" {
 		// LiFi can report pending/non-indexed transfers with API-level codes.
@@ -415,7 +537,7 @@ func queryAcrossStatus(ctx context.Context, sourceTxHash, statusEndpoint string,
 
 	endpoint := strings.TrimSpace(statusEndpoint)
 	if endpoint == "" {
-		endpoint = "https://app.across.to/api/deposit/status"
+		endpoint = registry.AcrossSettlementURL
 	}
 	parsed, err := url.Parse(endpoint)
 	if err != nil {
@@ -435,14 +557,8 @@ func queryAcrossStatus(ctx context.Context, sourceTxHash, statusEndpoint string,
 	if err != nil {
 		return out, err
 	}
-	resp, err := http.DefaultClient.Do(req)
-	if err != nil {
-		return out, err
-	}
-	defer resp.Body.Close()
-
-	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
-		return out, err
+	if _, err := settlementHTTPClient.DoJSON(ctx, req, &out); err != nil {
+		return out, clierr.Wrap(clierr.CodeUnavailable, "query across settlement status", err)
 	}
 	if strings.TrimSpace(out.Error) != "" {
 		if strings.EqualFold(strings.TrimSpace(out.Error), "DepositNotFoundException") {

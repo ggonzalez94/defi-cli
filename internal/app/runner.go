@@ -838,6 +838,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
+	var runAllowMaxApproval, runUnsafeProviderTx bool
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Plan and execute a swap action in one command",
@@ -878,7 +879,16 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
-			execOpts, err := parseExecuteOptions(runSimulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				runSimulate,
+				runPollInterval,
+				runStepTimeout,
+				runGasMultiplier,
+				runMaxFeeGwei,
+				runMaxPriorityFeeGwei,
+				runAllowMaxApproval,
+				runUnsafeProviderTx,
+			)
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -909,6 +919,8 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("from-asset")
 	_ = runCmd.MarkFlagRequired("to-asset")
@@ -920,6 +932,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
+	var submitAllowMaxApproval, submitUnsafeProviderTx bool
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute a previously planned swap action",
@@ -952,7 +965,16 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
-			execOpts, err := parseExecuteOptions(submitSimulate, submitPollInterval, submitStepTimeout, submitGasMultiplier, submitMaxFeeGwei, submitMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				submitSimulate,
+				submitPollInterval,
+				submitStepTimeout,
+				submitGasMultiplier,
+				submitMaxFeeGwei,
+				submitMaxPriorityFeeGwei,
+				submitAllowMaxApproval,
+				submitUnsafeProviderTx,
+			)
 			if err != nil {
 				return err
 			}
@@ -972,6 +994,8 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 
 	var statusActionID string
 	statusCmd := &cobra.Command{
@@ -1754,7 +1778,14 @@ func resolveRunSignerAndFromAddress(signerBackend, keySource, fromAddress string
 	return txSigner, signerAddress, nil
 }
 
-func parseExecuteOptions(simulate bool, pollInterval, stepTimeout string, gasMultiplier float64, maxFeeGwei, maxPriorityFeeGwei string) (execution.ExecuteOptions, error) {
+func parseExecuteOptions(
+	simulate bool,
+	pollInterval, stepTimeout string,
+	gasMultiplier float64,
+	maxFeeGwei, maxPriorityFeeGwei string,
+	allowMaxApproval bool,
+	unsafeProviderTx bool,
+) (execution.ExecuteOptions, error) {
 	opts := execution.DefaultExecuteOptions()
 	opts.Simulate = simulate
 	if strings.TrimSpace(pollInterval) != "" {
@@ -1777,12 +1808,14 @@ func parseExecuteOptions(simulate bool, pollInterval, stepTimeout string, gasMul
 		}
 		opts.StepTimeout = d
 	}
-	if gasMultiplier <= 0 {
-		return execution.ExecuteOptions{}, clierr.New(clierr.CodeUsage, "--gas-multiplier must be > 0")
+	if gasMultiplier <= 1 {
+		return execution.ExecuteOptions{}, clierr.New(clierr.CodeUsage, "--gas-multiplier must be > 1")
 	}
 	opts.GasMultiplier = gasMultiplier
 	opts.MaxFeeGwei = strings.TrimSpace(maxFeeGwei)
 	opts.MaxPriorityFeeGwei = strings.TrimSpace(maxPriorityFeeGwei)
+	opts.AllowMaxApproval = allowMaxApproval
+	opts.UnsafeProviderTx = unsafeProviderTx
 	return opts, nil
 }
 

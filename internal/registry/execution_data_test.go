@@ -50,3 +50,44 @@ func TestExecutionABIConstantsParse(t *testing.T) {
 		}
 	}
 }
+
+func TestBridgeSettlementURL(t *testing.T) {
+	got, ok := BridgeSettlementURL("lifi")
+	if !ok || got != LiFiSettlementURL {
+		t.Fatalf("unexpected lifi settlement url: ok=%v url=%q", ok, got)
+	}
+	got, ok = BridgeSettlementURL("across")
+	if !ok || got != AcrossSettlementURL {
+		t.Fatalf("unexpected across settlement url: ok=%v url=%q", ok, got)
+	}
+	if _, ok := BridgeSettlementURL("unknown"); ok {
+		t.Fatal("did not expect settlement url for unknown provider")
+	}
+}
+
+func TestIsAllowedBridgeSettlementURL(t *testing.T) {
+	if !IsAllowedBridgeSettlementURL("lifi", "") {
+		t.Fatal("expected empty endpoint to be allowed")
+	}
+	if !IsAllowedBridgeSettlementURL("lifi", LiFiSettlementURL) {
+		t.Fatal("expected canonical lifi endpoint to be allowed")
+	}
+	if !IsAllowedBridgeSettlementURL("lifi", "https://li.quest:443/v1/status") {
+		t.Fatal("expected canonical endpoint with explicit default port to be allowed")
+	}
+	if IsAllowedBridgeSettlementURL("lifi", AcrossSettlementURL) {
+		t.Fatal("did not expect across endpoint to be allowed for lifi")
+	}
+	if IsAllowedBridgeSettlementURL("lifi", "http://li.quest/v1/status") {
+		t.Fatal("did not expect non-https endpoint to be allowed for non-loopback")
+	}
+	if IsAllowedBridgeSettlementURL("lifi", "https://li.quest/v1/other") {
+		t.Fatal("did not expect non-canonical lifi path to be allowed")
+	}
+	if !IsAllowedBridgeSettlementURL("across", "http://127.0.0.1:8080/status") {
+		t.Fatal("expected loopback endpoint to be allowed for tests/dev")
+	}
+	if IsAllowedBridgeSettlementURL("across", "not-a-url") {
+		t.Fatal("did not expect malformed endpoint to be allowed")
+	}
+}

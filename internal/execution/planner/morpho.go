@@ -19,7 +19,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
-const defaultMorphoGraphQLEndpoint = "https://api.morpho.org/graphql"
+const defaultMorphoGraphQLEndpoint = registry.MorphoGraphQLEndpoint
 
 var morphoGraphQLEndpoint = defaultMorphoGraphQLEndpoint
 

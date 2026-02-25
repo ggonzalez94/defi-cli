@@ -54,6 +54,28 @@ func TestResolveRunSignerAndFromAddressRejectsMismatch(t *testing.T) {
 	}
 }
 
+func TestParseExecuteOptionsRejectsGasMultiplierLTEOne(t *testing.T) {
+	if _, err := parseExecuteOptions(true, "2s", "2m", 1, "", "", false, false); err == nil {
+		t.Fatal("expected gas multiplier <= 1 to fail")
+	}
+}
+
+func TestParseExecuteOptionsAcceptsGasMultiplierAboveOne(t *testing.T) {
+	opts, err := parseExecuteOptions(true, "2s", "2m", 1.05, "", "", true, true)
+	if err != nil {
+		t.Fatalf("expected parseExecuteOptions to succeed, got %v", err)
+	}
+	if opts.GasMultiplier != 1.05 {
+		t.Fatalf("expected gas multiplier 1.05, got %f", opts.GasMultiplier)
+	}
+	if !opts.AllowMaxApproval {
+		t.Fatal("expected AllowMaxApproval=true")
+	}
+	if !opts.UnsafeProviderTx {
+		t.Fatal("expected UnsafeProviderTx=true")
+	}
+}
+
 func TestShouldOpenActionStore(t *testing.T) {
 	if !shouldOpenActionStore("swap run") {
 		t.Fatal("expected swap run to require action store")

@@ -130,6 +130,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	var runSigner, runKeySource, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
+	var runAllowMaxApproval, runUnsafeProviderTx bool
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Plan and execute a bridge action",
@@ -171,7 +172,16 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
-			execOpts, err := parseExecuteOptions(runSimulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				runSimulate,
+				runPollInterval,
+				runStepTimeout,
+				runGasMultiplier,
+				runMaxFeeGwei,
+				runMaxPriorityFeeGwei,
+				runAllowMaxApproval,
+				runUnsafeProviderTx,
+			)
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -204,6 +214,8 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 	_ = runCmd.MarkFlagRequired("from")
 	_ = runCmd.MarkFlagRequired("to")
 	_ = runCmd.MarkFlagRequired("asset")
@@ -214,6 +226,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	var submitSigner, submitKeySource, submitFromAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
+	var submitAllowMaxApproval, submitUnsafeProviderTx bool
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing bridge action",
@@ -242,7 +255,16 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
-			execOpts, err := parseExecuteOptions(submitSimulate, submitPollInterval, submitStepTimeout, submitGasMultiplier, submitMaxFeeGwei, submitMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				submitSimulate,
+				submitPollInterval,
+				submitStepTimeout,
+				submitGasMultiplier,
+				submitMaxFeeGwei,
+				submitMaxPriorityFeeGwei,
+				submitAllowMaxApproval,
+				submitUnsafeProviderTx,
+			)
 			if err != nil {
 				return err
 			}
@@ -262,6 +284,8 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 
 	var statusActionID string
 	statusCmd := &cobra.Command{

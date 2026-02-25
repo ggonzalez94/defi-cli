@@ -44,6 +44,9 @@ Format:
 - Execution `run` commands now default sender to signer address when `--from-address` is omitted.
 - Local signer `--key-source auto` now discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
 - Local signer key/keystore file loading no longer hard-fails on non-`0600` file permissions.
+- Execution endpoint defaults for Across/LiFi settlement polling and Morpho GraphQL planning are now centralized in `internal/registry`.
+- Execution pre-sign validation now enforces bounded ERC-20 approvals by default and validates TaikoSwap router/selector invariants before signing.
+- Execution `run`/`submit` commands now expose `--allow-max-approval` and `--unsafe-provider-tx` overrides for advanced/provider-specific flows.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.

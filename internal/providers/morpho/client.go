@@ -17,9 +17,10 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
-const defaultEndpoint = "https://api.morpho.org/graphql"
+const defaultEndpoint = registry.MorphoGraphQLEndpoint
 
 type Client struct {
 	http     *httpx.Client

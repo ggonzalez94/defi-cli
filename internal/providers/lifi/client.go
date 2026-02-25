@@ -325,7 +325,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeActionPlan, "parse bridge transaction value", err)
 	}
-	statusEndpoint := strings.TrimSuffix(c.baseURL, "/") + "/status"
+	statusEndpoint := registry.LiFiSettlementURL
 	action.Steps = append(action.Steps, execution.ActionStep{
 		StepID:      "bridge-transfer",
 		Type:        execution.StepTypeBridge,
