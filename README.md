@@ -188,7 +188,7 @@ Key env/file inputs (in precedence order when `--key-source auto` and `--private
 
 - `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
 - `DEFI_PRIVATE_KEY_FILE` (preferred explicit key-file path)
-- default key file: `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex`
+- default key file: `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex` when `XDG_CONFIG_HOME` is set)
 - `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
 
 You can force source selection with `--key-source env|file|keystore`.

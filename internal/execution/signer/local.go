@@ -28,6 +28,7 @@ const (
 	KeySourceKeystore = "keystore"
 
 	defaultPrivateKeyRelativePath = "defi/key.hex"
+	defaultPrivateKeyHintPath     = "~/.config/defi/key.hex"
 )
 
 type LocalSigner struct {
@@ -155,7 +156,15 @@ func loadPrivateKey(cfg LocalSignerConfig) (*ecdsa.PrivateKey, error) {
 		}
 		return key.PrivateKey, nil
 	}
-	return nil, fmt.Errorf("missing signing key: set %s or %s or %s", EnvPrivateKey, EnvPrivateKeyFile, EnvKeystorePath)
+	return nil, fmt.Errorf(
+		"missing signing key: pass --private-key, set %s, set %s, or put key at %s (XDG_CONFIG_HOME override); alternatively set %s (+ %s or %s)",
+		EnvPrivateKey,
+		EnvPrivateKeyFile,
+		defaultPrivateKeyHintPath,
+		EnvKeystorePath,
+		EnvKeystorePassword,
+		EnvKeystorePasswordFile,
+	)
 }
 
 func parseHexKey(raw string) (*ecdsa.PrivateKey, error) {
@@ -172,6 +181,21 @@ func parseHexKey(raw string) (*ecdsa.PrivateKey, error) {
 }
 
 func discoverDefaultPrivateKeyFile() string {
+	path := defaultPrivateKeyPath()
+	if path == "" {
+		return ""
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		return ""
+	}
+	if info.IsDir() {
+		return ""
+	}
+	return path
+}
+
+func defaultPrivateKeyPath() string {
 	base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
 	if base == "" {
 		home, err := os.UserHomeDir()
@@ -182,13 +206,6 @@ func discoverDefaultPrivateKeyFile() string {
 	}
 	path := filepath.Join(base, defaultPrivateKeyRelativePath)
 	if path == "" {
-		return ""
-	}
-	info, err := os.Stat(path)
-	if err != nil {
-		return ""
-	}
-	if info.IsDir() {
 		return ""
 	}
 	return path

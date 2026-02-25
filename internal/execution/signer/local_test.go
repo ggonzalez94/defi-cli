@@ -4,6 +4,7 @@ import (
 	"math/big"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
@@ -108,6 +109,35 @@ func TestNewLocalSignerFromInputsOverrideWinsOverFileSource(t *testing.T) {
 	}
 	if s.Address() == (common.Address{}) {
 		t.Fatal("expected non-zero signer address")
+	}
+}
+
+func TestDefaultPrivateKeyPathUsesXDGConfigHome(t *testing.T) {
+	t.Setenv("XDG_CONFIG_HOME", "/tmp/defi-config-home")
+	got := defaultPrivateKeyPath()
+	want := "/tmp/defi-config-home/defi/key.hex"
+	if got != want {
+		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestNewLocalSignerFromInputsMissingKeyErrorIncludesSimplePathHint(t *testing.T) {
+	t.Setenv(EnvPrivateKey, "")
+	t.Setenv(EnvPrivateKeyFile, "")
+	t.Setenv(EnvKeystorePath, "")
+	t.Setenv(EnvKeystorePassword, "")
+	t.Setenv(EnvKeystorePasswordFile, "")
+
+	_, err := NewLocalSignerFromInputs(KeySourceAuto, "")
+	if err == nil {
+		t.Fatal("expected missing key error")
+	}
+	msg := err.Error()
+	if !strings.Contains(msg, defaultPrivateKeyHintPath) {
+		t.Fatalf("expected missing key message to include %q, got: %s", defaultPrivateKeyHintPath, msg)
+	}
+	if !strings.Contains(msg, "--private-key") {
+		t.Fatalf("expected missing key message to include --private-key, got: %s", msg)
 	}
 }
 

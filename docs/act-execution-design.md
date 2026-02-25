@@ -168,7 +168,7 @@ Key sources:
 1. `--private-key` (when provided)
 2. `DEFI_PRIVATE_KEY`
 3. `DEFI_PRIVATE_KEY_FILE`
-4. `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` (default key-file fallback when present)
+4. `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex` when `XDG_CONFIG_HOME` is set; fallback only when file is present)
 5. `DEFI_KEYSTORE_PATH` (+ password input)
 
 Security controls:
