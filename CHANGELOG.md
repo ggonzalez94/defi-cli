@@ -17,7 +17,7 @@ Format:
 - Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|run|submit|status` (Aave and Morpho).
 - Added rewards execution workflow commands under `rewards claim|compound ... plan|run|submit|status` (Aave).
 - Added action persistence and inspection commands: `actions list` and `actions status`.
-- Added local signer support for execution with env/file/keystore key sources and strict file-permission checks.
+- Added local signer support for execution with env/file/keystore key sources.
 - Added Taiko Hoodi chain alias and token registry entries (`USDC`, `USDT`, `WETH`) for deterministic asset parsing.
 - Added planner unit tests for approvals, Aave lend/rewards flows, and LiFi bridge action building.
 - Added centralized execution registry data in `internal/registry` for endpoint, contract, and ABI references.
@@ -40,6 +40,10 @@ Format:
 - Morpho lend execution now requires explicit `--market-id` to avoid ambiguous market selection.
 - Execution `run`/`submit` commands no longer require `--yes`; command intent now gates execution.
 - Unified execution action-construction dispatch under a shared ActionBuilder registry while preserving existing command semantics.
+- Execution commands now use `--from-address` as the single signer-address guard; `--confirm-address` has been removed.
+- Execution `run` commands now default sender to signer address when `--from-address` is omitted.
+- Local signer `--key-source auto` now discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
+- Local signer key/keystore file loading no longer hard-fails on non-`0600` file permissions.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.

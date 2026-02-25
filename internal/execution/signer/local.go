@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"math/big"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/ethereum/go-ethereum/accounts/keystore"
@@ -25,6 +26,8 @@ const (
 	KeySourceEnv      = "env"
 	KeySourceFile     = "file"
 	KeySourceKeystore = "keystore"
+
+	defaultPrivateKeyRelativePath = "defi/key.hex"
 )
 
 type LocalSigner struct {
@@ -54,6 +57,9 @@ func NewLocalSignerFromEnv(source string) (*LocalSigner, error) {
 	keystorePath := strings.TrimSpace(os.Getenv(EnvKeystorePath))
 	keystorePassword := strings.TrimSpace(os.Getenv(EnvKeystorePassword))
 	keystorePasswordFile := strings.TrimSpace(os.Getenv(EnvKeystorePasswordFile))
+	if privateKeyFile == "" {
+		privateKeyFile = discoverDefaultPrivateKeyFile()
+	}
 
 	switch source {
 	case KeySourceAuto:
@@ -110,9 +116,6 @@ func loadPrivateKey(cfg LocalSignerConfig) (*ecdsa.PrivateKey, error) {
 		return parseHexKey(cfg.PrivateKeyHex)
 	}
 	if strings.TrimSpace(cfg.PrivateKeyFile) != "" {
-		if err := validateFilePermissions(cfg.PrivateKeyFile); err != nil {
-			return nil, err
-		}
 		buf, err := os.ReadFile(cfg.PrivateKeyFile)
 		if err != nil {
 			return nil, fmt.Errorf("read private key file: %w", err)
@@ -120,14 +123,8 @@ func loadPrivateKey(cfg LocalSignerConfig) (*ecdsa.PrivateKey, error) {
 		return parseHexKey(string(buf))
 	}
 	if strings.TrimSpace(cfg.KeystorePath) != "" {
-		if err := validateFilePermissions(cfg.KeystorePath); err != nil {
-			return nil, err
-		}
 		password := cfg.KeystorePassword
 		if strings.TrimSpace(password) == "" && strings.TrimSpace(cfg.KeystorePasswordFile) != "" {
-			if err := validateFilePermissions(cfg.KeystorePasswordFile); err != nil {
-				return nil, err
-			}
 			buf, err := os.ReadFile(cfg.KeystorePasswordFile)
 			if err != nil {
 				return nil, fmt.Errorf("read keystore password file: %w", err)
@@ -163,13 +160,25 @@ func parseHexKey(raw string) (*ecdsa.PrivateKey, error) {
 	return pk, nil
 }
 
-func validateFilePermissions(path string) error {
+func discoverDefaultPrivateKeyFile() string {
+	base := strings.TrimSpace(os.Getenv("XDG_CONFIG_HOME"))
+	if base == "" {
+		home, err := os.UserHomeDir()
+		if err != nil || strings.TrimSpace(home) == "" {
+			return ""
+		}
+		base = filepath.Join(home, ".config")
+	}
+	path := filepath.Join(base, defaultPrivateKeyRelativePath)
+	if path == "" {
+		return ""
+	}
 	info, err := os.Stat(path)
 	if err != nil {
-		return fmt.Errorf("stat secret file: %w", err)
+		return ""
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return fmt.Errorf("insecure file permissions on %s: expected 0600 or stricter", path)
+	if info.IsDir() {
+		return ""
 	}
-	return nil
+	return path
 }

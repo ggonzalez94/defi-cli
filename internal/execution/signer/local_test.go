@@ -50,15 +50,39 @@ func TestNewLocalSignerFromEnvFile(t *testing.T) {
 	}
 }
 
-func TestNewLocalSignerRejectsInsecurePermissions(t *testing.T) {
+func TestNewLocalSignerFromEnvFileAllowsNonStrictPermissions(t *testing.T) {
 	dir := t.TempDir()
 	keyFile := filepath.Join(dir, "key.txt")
 	if err := os.WriteFile(keyFile, []byte(testPrivateKey), 0o644); err != nil {
 		t.Fatalf("write key file: %v", err)
 	}
 	t.Setenv(EnvPrivateKeyFile, keyFile)
-	if _, err := NewLocalSignerFromEnv(KeySourceFile); err == nil {
-		t.Fatal("expected insecure permissions error")
+	if _, err := NewLocalSignerFromEnv(KeySourceFile); err != nil {
+		t.Fatalf("expected non-strict permission key file to load: %v", err)
+	}
+}
+
+func TestNewLocalSignerFromEnvAutoUsesDefaultKeyFile(t *testing.T) {
+	cfgDir := t.TempDir()
+	keyDir := filepath.Join(cfgDir, "defi")
+	keyFile := filepath.Join(keyDir, "key.hex")
+	if err := os.MkdirAll(keyDir, 0o755); err != nil {
+		t.Fatalf("create config dir: %v", err)
+	}
+	if err := os.WriteFile(keyFile, []byte(testPrivateKey), 0o644); err != nil {
+		t.Fatalf("write key file: %v", err)
+	}
+	t.Setenv("XDG_CONFIG_HOME", cfgDir)
+	t.Setenv(EnvPrivateKey, "")
+	t.Setenv(EnvPrivateKeyFile, "")
+	t.Setenv(EnvKeystorePath, "")
+
+	s, err := NewLocalSignerFromEnv(KeySourceAuto)
+	if err != nil {
+		t.Fatalf("expected auto key-source to use default key path: %v", err)
+	}
+	if s.Address() == (common.Address{}) {
+		t.Fatal("expected non-zero signer address")
 	}
 }
 

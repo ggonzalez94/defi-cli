@@ -109,7 +109,7 @@ defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset 
 Swap execution flow (local signer):
 
 ```bash
-export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex  # chmod 600
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
 
 # 1) Plan only
 defi swap plan \
@@ -181,10 +181,14 @@ Execution `run`/`submit` commands currently support a local key signer.
 Key env inputs (in precedence order when `--key-source auto`):
 
 - `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
-- `DEFI_PRIVATE_KEY_FILE` (preferred; file must be `0600` or stricter)
+- `DEFI_PRIVATE_KEY_FILE` (preferred explicit key-file path)
+- default key file: `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex`
 - `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
 
 You can force source selection with `--key-source env|file|keystore`.
+
+`run` commands default sender to the loaded signer address; when `--from-address` is provided, it must match the signer.
+`submit` commands support optional `--from-address` as an explicit signer-address guard.
 
 ## Config (Optional)
 

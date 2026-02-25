@@ -834,7 +834,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var runAmountBase, runAmountDecimal, runFromAddress, runRecipient string
 	var runSlippageBps int64
 	var runSimulate bool
-	var runSigner, runKeySource, runConfirmAddress string
+	var runSigner, runKeySource string
 	var runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
@@ -850,12 +850,16 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runFromAddress)
+			if err != nil {
+				return err
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
 			action, providerInfoName, err := s.actionBuilderRegistry().BuildSwapAction(ctx, providerName, "execution", reqStruct, providers.SwapExecutionOptions{
-				Sender:      runFromAddress,
+				Sender:      runSenderAddress,
 				Recipient:   runRecipient,
 				SlippageBps: runSlippageBps,
 				Simulate:    runSimulate,
@@ -873,16 +877,6 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			}
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-
-			txSigner, err := newExecutionSigner(runSigner, runKeySource, runConfirmAddress)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if !strings.EqualFold(strings.TrimSpace(runFromAddress), txSigner.Address().Hex()) {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			execOpts, err := parseExecuteOptions(runSimulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
 			if err != nil {
@@ -904,13 +898,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	runCmd.Flags().StringVar(&runToAssetArg, "to-asset", "", "Output asset")
 	runCmd.Flags().StringVar(&runAmountBase, "amount", "", "Amount in base units")
 	runCmd.Flags().StringVar(&runAmountDecimal, "amount-decimal", "", "Amount in decimal units")
-	runCmd.Flags().StringVar(&runFromAddress, "from-address", "", "Sender EOA address")
+	runCmd.Flags().StringVar(&runFromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().StringVar(&runRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	runCmd.Flags().Int64Var(&runSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	runCmd.Flags().BoolVar(&runSimulate, "simulate", true, "Run preflight simulation before submission")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runConfirmAddress, "confirm-address", "", "Require signer address to match this value")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
@@ -919,12 +912,11 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("from-asset")
 	_ = runCmd.MarkFlagRequired("to-asset")
-	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("provider")
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitConfirmAddress string
+	var submitSigner, submitKeySource, submitFromAddress string
 	var submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -950,9 +942,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
 
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitConfirmAddress)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource)
 			if err != nil {
 				return err
+			}
+			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
@@ -971,7 +966,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
@@ -1732,7 +1727,7 @@ func resolveActionID(actionID string) (string, error) {
 	return actionID, nil
 }
 
-func newExecutionSigner(signerBackend, keySource, confirmAddress string) (execsigner.Signer, error) {
+func newExecutionSigner(signerBackend, keySource string) (execsigner.Signer, error) {
 	signerBackend = strings.ToLower(strings.TrimSpace(signerBackend))
 	if signerBackend == "" {
 		signerBackend = "local"
@@ -1744,10 +1739,19 @@ func newExecutionSigner(signerBackend, keySource, confirmAddress string) (execsi
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeSigner, "initialize local signer", err)
 	}
-	if strings.TrimSpace(confirmAddress) != "" && !strings.EqualFold(confirmAddress, localSigner.Address().Hex()) {
-		return nil, clierr.New(clierr.CodeSigner, "signer address does not match --confirm-address")
-	}
 	return localSigner, nil
+}
+
+func resolveRunSignerAndFromAddress(signerBackend, keySource, fromAddress string) (execsigner.Signer, string, error) {
+	txSigner, err := newExecutionSigner(signerBackend, keySource)
+	if err != nil {
+		return nil, "", err
+	}
+	signerAddress := txSigner.Address().Hex()
+	if strings.TrimSpace(fromAddress) != "" && !strings.EqualFold(strings.TrimSpace(fromAddress), signerAddress) {
+		return nil, "", clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
+	}
+	return txSigner, signerAddress, nil
 }
 
 func parseExecuteOptions(simulate bool, pollInterval, stepTimeout string, gasMultiplier float64, maxFeeGwei, maxPriorityFeeGwei string) (execution.ExecuteOptions, error) {

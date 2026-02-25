@@ -90,15 +90,22 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("from-address")
 
 	var run approvalArgs
-	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
+	var runSigner, runKeySource, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Plan and execute an approval action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, run.fromAddress)
+			if err != nil {
+				return err
+			}
+			runArgs := run
+			runArgs.fromAddress = runSenderAddress
+
 			start := time.Now()
-			action, err := buildAction(run)
+			action, err := buildAction(runArgs)
 			status := []model.ProviderStatus{{Name: "native", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, status, false)
@@ -109,13 +116,6 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			}
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-			txSigner, err := newExecutionSigner(runSigner, runKeySource, runConfirmAddress)
-			if err != nil {
-				return err
-			}
-			if !strings.EqualFold(strings.TrimSpace(run.fromAddress), txSigner.Address().Hex()) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			execOpts, err := parseExecuteOptions(run.simulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
 			if err != nil {
@@ -133,12 +133,11 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	runCmd.Flags().StringVar(&run.spender, "spender", "", "Spender address")
 	runCmd.Flags().StringVar(&run.amountBase, "amount", "", "Amount in base units")
 	runCmd.Flags().StringVar(&run.amountDecimal, "amount-decimal", "", "Amount in decimal units")
-	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address")
+	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().BoolVar(&run.simulate, "simulate", true, "Run preflight simulation before submission")
 	runCmd.Flags().StringVar(&run.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runConfirmAddress, "confirm-address", "", "Require signer address to match this value")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
@@ -147,11 +146,10 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("asset")
 	_ = runCmd.MarkFlagRequired("spender")
-	_ = runCmd.MarkFlagRequired("from-address")
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
+	var submitSigner, submitKeySource, submitFromAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
 	submitCmd := &cobra.Command{
@@ -172,9 +170,12 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			if action.IntentType != "approve" {
 				return clierr.New(clierr.CodeUsage, "action is not an approval intent")
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitConfirmAddress)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource)
 			if err != nil {
 				return err
+			}
+			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
@@ -193,7 +194,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")

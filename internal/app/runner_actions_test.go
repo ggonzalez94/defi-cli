@@ -6,7 +6,11 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 )
+
+const runSignerTestPrivateKey = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1"
 
 func TestResolveActionID(t *testing.T) {
 	id, err := resolveActionID("act_123")
@@ -19,6 +23,34 @@ func TestResolveActionID(t *testing.T) {
 
 	if _, err := resolveActionID(""); err == nil {
 		t.Fatal("expected error when action id is missing")
+	}
+}
+
+func TestResolveRunSignerAndFromAddressDefaultsToSigner(t *testing.T) {
+	t.Setenv(execsigner.EnvPrivateKey, runSignerTestPrivateKey)
+	txSigner, fromAddress, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceEnv, "")
+	if err != nil {
+		t.Fatalf("resolveRunSignerAndFromAddress failed: %v", err)
+	}
+	if txSigner == nil {
+		t.Fatal("expected non-nil signer")
+	}
+	if fromAddress == "" {
+		t.Fatal("expected non-empty from address")
+	}
+	if !strings.EqualFold(fromAddress, txSigner.Address().Hex()) {
+		t.Fatalf("expected from address %s to match signer %s", fromAddress, txSigner.Address().Hex())
+	}
+}
+
+func TestResolveRunSignerAndFromAddressRejectsMismatch(t *testing.T) {
+	t.Setenv(execsigner.EnvPrivateKey, runSignerTestPrivateKey)
+	_, _, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceEnv, "0x0000000000000000000000000000000000000001")
+	if err == nil {
+		t.Fatal("expected mismatch error")
+	}
+	if !strings.Contains(err.Error(), "--from-address") {
+		t.Fatalf("expected --from-address mismatch error, got: %v", err)
 	}
 }
 

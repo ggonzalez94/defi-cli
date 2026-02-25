@@ -67,7 +67,7 @@ README.md                         # user-facing usage + caveats
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit provider/protocol selection (`--provider` or `--protocol`); no implicit defaults.
-- TaikoSwap quote/planning does not require an API key; execution uses local signer env inputs (`DEFI_PRIVATE_KEY{,_FILE}` or keystore envs).
+- TaikoSwap quote/planning does not require an API key; execution uses local signer env inputs (`DEFI_PRIVATE_KEY{,_FILE}` or keystore envs) and also auto-discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
 - Execution commands currently available:
   - `swap plan|run|submit|status`
   - `bridge plan|run|submit|status` (Across, LiFi)

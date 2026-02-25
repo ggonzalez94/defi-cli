@@ -166,13 +166,13 @@ Key sources:
 
 1. `DEFI_PRIVATE_KEY`
 2. `DEFI_PRIVATE_KEY_FILE`
-3. `DEFI_KEYSTORE_PATH` (+ password input)
+3. `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` (default key-file fallback when present)
+4. `DEFI_KEYSTORE_PATH` (+ password input)
 
 Security controls:
 
-- strict secret file permissions (`0600` or stricter) for key files and keystore/password files
-- optional `--confirm-address` signer guard
-- explicit `--from-address` to signer-address match checks in run flows
+- run flows derive sender from signer when omitted; if `--from-address` is provided it must match signer address
+- optional `--from-address` signer-address check in submit flows
 
 Design decision:
 
