@@ -76,7 +76,7 @@ defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
 defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
-defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --rpc-url https://rpc.mainnet.taiko.xyz --results-only
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
 defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --from-amount-for-gas 100000 --results-only
 defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 defi lend supply plan --protocol aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
@@ -234,7 +234,7 @@ providers:
     api_key_env: DEFI_UNISWAP_API_KEY
 ```
 
-Execution `plan`/`run` `--rpc-url` flags override chain default RPCs for that invocation.
+`swap quote` (on-chain quote providers) and execution `plan`/`run` `--rpc-url` flags override chain default RPCs for that invocation.
 `submit`/`status` commands use stored per-step RPC URLs from the persisted action.
 
 ## Execution Metadata Locations (Implementers)
