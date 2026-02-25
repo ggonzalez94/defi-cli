@@ -1,0 +1,53 @@
+---
+title: Providers and Auth
+description: Provider coverage, key requirements, and routing behavior.
+---
+
+## Provider matrix
+
+| Provider | Capabilities | Key required |
+| --- | --- | --- |
+| `defillama` | chains/protocols + bridge analytics (`bridge list`, `bridge details`) | Route-specific |
+| `aave` | lend, yield | No |
+| `morpho` | lend, yield | No |
+| `kamino` | lend, yield (Solana mainnet) | No |
+| `across` | bridge quote | No |
+| `lifi` | bridge quote | No |
+| `bungee` | bridge quote, swap quote | No (default mode) |
+| `1inch` | swap quote | Yes |
+| `uniswap` | swap quote | Yes |
+| `jupiter` | swap quote (Solana) | Optional |
+| `fibrous` | swap quote | No |
+
+API keys in `defi-cli` are provider constraints, not CLI monetization/auth. If a provider endpoint requires credentials, the corresponding command requires that provider key.
+
+## Key requirements by route
+
+- `swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
+- `swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `swap quote --provider jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
+- `chains assets`, `bridge list`, `bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+
+Optional Bungee dedicated backend mode requires:
+
+- `DEFI_BUNGEE_API_KEY`
+- `DEFI_BUNGEE_AFFILIATE`
+
+If either is missing, bungee quotes use public backend.
+
+## Routing and fallback
+
+- Lending routes by `--protocol` (`aave`, `morpho`, `kamino`) using direct adapters only.
+- `yield opportunities` aggregates direct providers and accepts `--providers aave,morpho,kamino`.
+- `swap quote` defaults by chain family: `1inch` for EVM chains, `jupiter` for Solana.
+- Provider/chain-family mismatches fail fast with `unsupported` errors (for example `--provider jupiter` on EVM chains).
+
+## Data caveats
+
+- Morpho can surface very high APY in tiny markets. Use `--min-tvl-usd`.
+- Kamino currently supports Solana mainnet only.
+- Solana devnet/testnet and custom Solana CAIP-2 references are unsupported.
+- Bungee quote support is chain + token dependent.
+- Fibrous currently supports `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled).
+- Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
+- Across may omit native USD fee fields for some routes; when missing, `estimated_fee_usd` can fall back to a stable-asset approximation while token-unit fees remain in `fee_breakdown`.

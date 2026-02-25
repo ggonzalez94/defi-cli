@@ -73,6 +73,14 @@ type quoteResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	tradeType := req.TradeType
+	if tradeType == "" {
+		tradeType = providers.SwapTradeTypeExactInput
+	}
+	if tradeType != providers.SwapTradeTypeExactInput {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "jupiter supports only --type exact-input")
+	}
+
 	if !req.Chain.IsSolana() {
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "jupiter swap quotes support only Solana chains")
 	}
@@ -108,6 +116,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		ChainID:     req.Chain.CAIP2,
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
+		TradeType:   string(tradeType),
 		InputAmount: model.AmountInfo{
 			AmountBaseUnits: req.AmountBaseUnits,
 			AmountDecimal:   req.AmountDecimal,

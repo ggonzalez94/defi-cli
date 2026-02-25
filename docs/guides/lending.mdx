@@ -1,0 +1,42 @@
+---
+title: Lending
+description: Query lending markets and rates across direct protocol adapters.
+---
+
+## Markets
+
+```bash
+defi lend markets --protocol aave --chain 1 --asset USDC --limit 10 --results-only
+defi lend markets --protocol kamino --chain solana --asset USDC --limit 10 --results-only
+```
+
+## Rates
+
+```bash
+defi lend rates --protocol morpho --chain 1 --asset USDC --limit 10 --results-only
+defi lend rates --protocol kamino --chain solana --asset USDC --limit 10 --results-only
+```
+
+## Protocol routing
+
+- `--protocol aave` -> Aave adapter
+- `--protocol morpho` -> Morpho adapter
+- `--protocol kamino` -> Kamino adapter (Solana mainnet only)
+
+## Suggested filters and reliability defaults
+
+```bash
+defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --timeout 12s --retries 2 --max-stale 5m --results-only
+```
+
+## Output fields
+
+`lend markets` returns:
+
+- `protocol`, `chain_id`, `asset_id`
+- `provider`, `provider_native_id`, `provider_native_id_kind`
+- `supply_apy`, `borrow_apy`
+- `tvl_usd`, `liquidity_usd`
+- `source_url`, `fetched_at`
+
+`lend rates` adds `utilization`.

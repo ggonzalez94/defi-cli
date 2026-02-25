@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ethereum/go-ethereum/common"
 	"github.com/ggonzalez94/defi-cli/internal/cache"
 	"github.com/ggonzalez94/defi-cli/internal/config"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -723,11 +724,14 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			AmountBaseUnits: base,
 			AmountDecimal:   decimal,
 			RPCURL:          strings.TrimSpace(rpcURL),
+			TradeType:       providers.SwapTradeTypeExactInput,
 		}, nil
 	}
 
-	var quoteProviderArg, quoteChainArg, quoteFromAssetArg, quoteToAssetArg string
-	var quoteAmountBase, quoteAmountDecimal, quoteRPCURL string
+	var quoteProviderArg, quoteChainArg, quoteFromAssetArg, quoteToAssetArg, quoteTradeTypeArg string
+	var quoteAmountBase, quoteAmountDecimal, quoteAmountOutBase, quoteAmountOutDecimal, quoteRPCURL string
+	var quoteFromAddress string
+	var quoteSlippagePct float64
 	quoteCmd := &cobra.Command{
 		Use:   "quote",
 		Short: "Get swap quote",
@@ -740,18 +744,105 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if !ok {
 				return clierr.New(clierr.CodeUnsupported, "unsupported swap provider")
 			}
-			reqStruct, err := parseSwapRequest(quoteChainArg, quoteFromAssetArg, quoteToAssetArg, quoteAmountBase, quoteAmountDecimal, quoteRPCURL)
+			chain, err := id.ParseChain(quoteChainArg)
+			if err != nil {
+				return err
+			}
+			fromAsset, err := id.ParseAsset(quoteFromAssetArg, chain)
+			if err != nil {
+				return err
+			}
+			toAsset, err := id.ParseAsset(quoteToAssetArg, chain)
 			if err != nil {
 				return err
 			}
 
+			tradeType := providers.SwapTradeType(strings.ToLower(strings.TrimSpace(quoteTradeTypeArg)))
+			switch tradeType {
+			case "", providers.SwapTradeTypeExactInput:
+				tradeType = providers.SwapTradeTypeExactInput
+			case providers.SwapTradeTypeExactOutput:
+			default:
+				return clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
+			}
+			if tradeType == providers.SwapTradeTypeExactOutput && providerName != "uniswap" {
+				return clierr.New(clierr.CodeUnsupported, "exact-output swap quotes currently support only --provider uniswap")
+			}
+
+			var base, decimal string
+			switch tradeType {
+			case providers.SwapTradeTypeExactInput:
+				if quoteAmountOutBase != "" || quoteAmountOutDecimal != "" {
+					return clierr.New(clierr.CodeUsage, "--amount-out/--amount-out-decimal are only valid with --type exact-output")
+				}
+				decimals := fromAsset.Decimals
+				if decimals <= 0 {
+					decimals = 18
+				}
+				base, decimal, err = id.NormalizeAmount(quoteAmountBase, quoteAmountDecimal, decimals)
+				if err != nil {
+					return err
+				}
+			case providers.SwapTradeTypeExactOutput:
+				if quoteAmountBase != "" || quoteAmountDecimal != "" {
+					return clierr.New(clierr.CodeUsage, "--amount/--amount-decimal are only valid with --type exact-input")
+				}
+				if quoteAmountOutBase == "" && quoteAmountOutDecimal == "" {
+					return clierr.New(clierr.CodeUsage, "exact-output requires --amount-out or --amount-out-decimal")
+				}
+				decimals := toAsset.Decimals
+				if decimals <= 0 {
+					decimals = 18
+				}
+				base, decimal, err = id.NormalizeAmount(quoteAmountOutBase, quoteAmountOutDecimal, decimals)
+				if err != nil {
+					return err
+				}
+			}
+
+			var slippagePtr *float64
+			slippageMode := "auto"
+			if cmd.Flags().Changed("slippage-pct") {
+				if providerName != "uniswap" {
+					return clierr.New(clierr.CodeUsage, "--slippage-pct is supported only with --provider uniswap")
+				}
+				if quoteSlippagePct <= 0 || quoteSlippagePct > 100 {
+					return clierr.New(clierr.CodeUsage, "--slippage-pct must be > 0 and <= 100")
+				}
+				slippageMode = "manual"
+				slippagePtr = &quoteSlippagePct
+			}
+
+			swapper := strings.TrimSpace(quoteFromAddress)
+			if swapper != "" && !common.IsHexAddress(swapper) {
+				return clierr.New(clierr.CodeUsage, "--from-address must be a valid EVM hex address")
+			}
+			if providerName == "uniswap" && swapper == "" {
+				return clierr.New(clierr.CodeUsage, "--from-address is required for --provider uniswap")
+			}
+
+			reqStruct := providers.SwapQuoteRequest{
+				Chain:           chain,
+				FromAsset:       fromAsset,
+				ToAsset:         toAsset,
+				AmountBaseUnits: base,
+				AmountDecimal:   decimal,
+				RPCURL:          strings.TrimSpace(quoteRPCURL),
+				TradeType:       tradeType,
+				SlippagePct:     slippagePtr,
+				Swapper:         swapper,
+			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
-				"provider": providerName,
-				"chain":    reqStruct.Chain.CAIP2,
-				"from":     reqStruct.FromAsset.AssetID,
-				"to":       reqStruct.ToAsset.AssetID,
-				"amount":   reqStruct.AmountBaseUnits,
-				"rpc_url":  reqStruct.RPCURL,
+				"provider":      providerName,
+				"chain":         reqStruct.Chain.CAIP2,
+				"from":          reqStruct.FromAsset.AssetID,
+				"to":            reqStruct.ToAsset.AssetID,
+				"trade_type":    reqStruct.TradeType,
+				"amount":        reqStruct.AmountBaseUnits,
+				"slippage_mode": slippageMode,
+				"slippage_pct":  reqStruct.SlippagePct,
+				"swapper":       strings.ToLower(reqStruct.Swapper),
+				"rpc_url":       reqStruct.RPCURL,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
@@ -765,8 +856,13 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	quoteCmd.Flags().StringVar(&quoteChainArg, "chain", "", "Chain identifier")
 	quoteCmd.Flags().StringVar(&quoteFromAssetArg, "from-asset", "", "Input asset")
 	quoteCmd.Flags().StringVar(&quoteToAssetArg, "to-asset", "", "Output asset")
-	quoteCmd.Flags().StringVar(&quoteAmountBase, "amount", "", "Amount in base units")
-	quoteCmd.Flags().StringVar(&quoteAmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	quoteCmd.Flags().StringVar(&quoteTradeTypeArg, "type", string(providers.SwapTradeTypeExactInput), "Swap type (exact-input|exact-output)")
+	quoteCmd.Flags().StringVar(&quoteAmountBase, "amount", "", "Exact-input amount in base units")
+	quoteCmd.Flags().StringVar(&quoteAmountDecimal, "amount-decimal", "", "Exact-input amount in decimal units")
+	quoteCmd.Flags().StringVar(&quoteAmountOutBase, "amount-out", "", "Exact-output amount in base units")
+	quoteCmd.Flags().StringVar(&quoteAmountOutDecimal, "amount-out-decimal", "", "Exact-output amount in decimal units")
+	quoteCmd.Flags().Float64Var(&quoteSlippagePct, "slippage-pct", 0, "Manual max slippage percent override (Uniswap only; default uses provider auto slippage)")
+	quoteCmd.Flags().StringVar(&quoteFromAddress, "from-address", "", "Swapper/sender EOA address (required for --provider uniswap)")
 	quoteCmd.Flags().StringVar(&quoteRPCURL, "rpc-url", "", "RPC URL override for on-chain quote providers")
 	_ = quoteCmd.MarkFlagRequired("chain")
 	_ = quoteCmd.MarkFlagRequired("from-asset")

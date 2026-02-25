@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
+	"strings"
 	"time"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -46,13 +48,17 @@ func (c *Client) Info() model.ProviderInfo {
 
 type quoteResponse struct {
 	Quote struct {
+		Input struct {
+			Amount string `json:"amount"`
+		} `json:"input"`
 		Output struct {
 			Amount string `json:"amount"`
 		} `json:"output"`
-		GasFeeUSD float64 `json:"gasFeeUSD"`
+		GasFeeUSD json.RawMessage `json:"gasFeeUSD"`
 	} `json:"quote"`
-	AmountOut string  `json:"amountOut"`
-	GasUSD    float64 `json:"gasUSD"`
+	AmountIn  string          `json:"amountIn"`
+	AmountOut string          `json:"amountOut"`
+	GasUSD    json.RawMessage `json:"gasUSD"`
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
@@ -63,13 +69,33 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		return model.SwapQuote{}, clierr.New(clierr.CodeAuth, "missing required API key for uniswap (DEFI_UNISWAP_API_KEY)")
 	}
 
+	tradeType := req.TradeType
+	if tradeType == "" {
+		tradeType = providers.SwapTradeTypeExactInput
+	}
+	switch tradeType {
+	case providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput:
+	default:
+		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "uniswap swap type must be exact-input or exact-output")
+	}
+	swapper := strings.TrimSpace(req.Swapper)
+	if swapper == "" {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUsage, "uniswap swap quotes require a swapper address")
+	}
+
 	payload := map[string]any{
 		"tokenInChainId":  req.Chain.EVMChainID,
 		"tokenOutChainId": req.Chain.EVMChainID,
 		"tokenIn":         req.FromAsset.Address,
 		"tokenOut":        req.ToAsset.Address,
 		"amount":          req.AmountBaseUnits,
-		"type":            "EXACT_INPUT",
+		"type":            uniswapTradeType(tradeType),
+		"swapper":         swapper,
+	}
+	if req.SlippagePct != nil {
+		payload["slippageTolerance"] = *req.SlippagePct
+	} else {
+		payload["autoSlippage"] = "DEFAULT"
 	}
 	buf, err := json.Marshal(payload)
 	if err != nil {
@@ -91,9 +117,33 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	if amountOut == "" {
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "uniswap quote missing output amount")
 	}
-	gasUSD := resp.GasUSD
+
+	inputAmountBase := req.AmountBaseUnits
+	inputAmountDecimal := req.AmountDecimal
+	inputAmountDecimals := req.FromAsset.Decimals
+	if tradeType == providers.SwapTradeTypeExactOutput {
+		inputAmountBase = resp.AmountIn
+		if inputAmountBase == "" {
+			inputAmountBase = resp.Quote.Input.Amount
+		}
+		if inputAmountBase == "" {
+			return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "uniswap exact-output quote missing input amount")
+		}
+		if inputAmountDecimals <= 0 {
+			inputAmountDecimals = 18
+		}
+		inputAmountDecimal = id.FormatDecimalCompat(inputAmountBase, inputAmountDecimals)
+	}
+
+	gasUSD, err := parseJSONFloat(resp.GasUSD)
+	if err != nil {
+		return model.SwapQuote{}, clierr.Wrap(clierr.CodeUnavailable, "decode uniswap gasUSD", err)
+	}
 	if gasUSD == 0 {
-		gasUSD = resp.Quote.GasFeeUSD
+		gasUSD, err = parseJSONFloat(resp.Quote.GasFeeUSD)
+		if err != nil {
+			return model.SwapQuote{}, clierr.Wrap(clierr.CodeUnavailable, "decode uniswap quote.gasFeeUSD", err)
+		}
 	}
 
 	return model.SwapQuote{
@@ -101,10 +151,11 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		ChainID:     req.Chain.CAIP2,
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
+		TradeType:   string(tradeType),
 		InputAmount: model.AmountInfo{
-			AmountBaseUnits: req.AmountBaseUnits,
-			AmountDecimal:   req.AmountDecimal,
-			Decimals:        req.FromAsset.Decimals,
+			AmountBaseUnits: inputAmountBase,
+			AmountDecimal:   inputAmountDecimal,
+			Decimals:        inputAmountDecimals,
 		},
 		EstimatedOut: model.AmountInfo{
 			AmountBaseUnits: amountOut,
@@ -117,4 +168,37 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		SourceURL:       "https://app.uniswap.org",
 		FetchedAt:       c.now().UTC().Format(time.RFC3339),
 	}, nil
+}
+
+func parseJSONFloat(raw json.RawMessage) (float64, error) {
+	if len(raw) == 0 {
+		return 0, nil
+	}
+	trimmed := strings.TrimSpace(string(raw))
+	if trimmed == "" || trimmed == "null" {
+		return 0, nil
+	}
+
+	var value float64
+	if err := json.Unmarshal(raw, &value); err == nil {
+		return value, nil
+	}
+
+	var valueStr string
+	if err := json.Unmarshal(raw, &valueStr); err == nil {
+		parsed, parseErr := strconv.ParseFloat(valueStr, 64)
+		if parseErr != nil {
+			return 0, parseErr
+		}
+		return parsed, nil
+	}
+
+	return 0, clierr.New(clierr.CodeUnavailable, "expected numeric or string-encoded numeric value")
+}
+
+func uniswapTradeType(t providers.SwapTradeType) string {
+	if t == providers.SwapTradeTypeExactOutput {
+		return "EXACT_OUTPUT"
+	}
+	return "EXACT_INPUT"
 }

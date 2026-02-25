@@ -18,6 +18,28 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
 
+## Documentation Site (Mintlify)
+
+This repo includes a dedicated Mintlify docs site under [`docs/`](docs) (`docs/docs.json` + `.mdx` pages).
+
+Preview locally:
+
+```bash
+cd docs
+npx --yes mint@4.2.378 dev --no-open
+```
+
+Validate before publishing:
+
+```bash
+cd docs
+npx --yes mint@4.2.378 validate
+npx --yes mint@4.2.378 broken-links
+npx --yes mint@4.2.378 a11y
+```
+
+Production docs deployment should target `docs-live` in Mintlify Git settings. The release workflow syncs `docs-live` to each `v*` tag so live docs align with released binaries.
+
 ## Install
 
 ### 1) Quick install (macOS/Linux)
@@ -31,7 +53,7 @@ curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/i
 Install a specific version (accepted: `latest`, `stable`, `vX.Y.Z`, `X.Y.Z`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.1.1
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.3.1
 ```
 
 ### 2) Go install
@@ -101,9 +123,15 @@ Swap quote examples:
 
 ```bash
 export DEFI_1INCH_API_KEY=...
+export DEFI_UNISWAP_API_KEY=...
 defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
-defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
 defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --from-address 0xYourEOA --results-only
+# Exact-output on Uniswap
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --from-address 0xYourEOA --results-only
+# Optional manual slippage override for Uniswap (percent)
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --slippage-pct 1.0 --from-address 0xYourEOA --results-only
+defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
 ```
 
 Swap execution flow (local signer):
@@ -259,7 +287,16 @@ providers:
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
-- `--chain` normalization supports additional EVM aliases and IDs including `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- `--chain` normalization supports additional aliases/IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.
+- Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
+- Bungee dedicated backend routing only activates when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set; if either is missing, requests use the public backend.
+- Swap quote type defaults to `--type exact-input`; use `--type exact-output` with `--amount-out`/`--amount-out-decimal` when supported by the provider.
+- Exact-output swap quotes currently support `--provider uniswap` only; Solana exact-output is currently unsupported.
+- Uniswap supports both `exact-input` and `exact-output`; 1inch/Jupiter/Fibrous/Bungee currently support `exact-input` only.
+- Uniswap quote requests require `--from-address` as the `swapper`; provider auto slippage is used by default, and `--slippage-pct` sets a manual max slippage percent.
+- MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
+- `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
 - Swap execution currently supports TaikoSwap only.
@@ -325,6 +362,7 @@ internal/
 
 .github/workflows/ci.yml          # CI (test/vet/build)
 .github/workflows/nightly-execution-smoke.yml # nightly live execution planning smoke
+docs/                             # Mintlify docs site (docs.json + MDX pages)
 AGENTS.md                         # contributor guide for agents
 ```
 ### Testing

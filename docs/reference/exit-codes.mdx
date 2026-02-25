@@ -1,0 +1,25 @@
+---
+title: Exit Codes
+description: Stable exit code contract for scripts and agents.
+---
+
+## Stable mapping
+
+| Exit code | Type | Meaning |
+| --- | --- | --- |
+| `0` | success | Command succeeded |
+| `1` | internal_error | Internal execution error |
+| `2` | usage_error | Invalid command or flags |
+| `10` | auth_error | Missing/invalid provider key |
+| `11` | rate_limited | Provider throttling |
+| `12` | provider_unavailable | Provider unavailable |
+| `13` | unsupported | Unsupported input/provider pair |
+| `14` | stale_data | Stale data beyond configured budget |
+| `15` | partial_results | Partial results with `--strict` |
+| `16` | command_blocked | Blocked by `--enable-commands` policy |
+
+## Error handling recommendation
+
+- Parse stderr envelope on non-zero exits.
+- Branch logic on `error.code`.
+- Use retries only for transient types (`11`, `12`).

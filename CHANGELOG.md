@@ -53,6 +53,7 @@ Format:
 - Execution `run`/`submit` commands now expose `--allow-max-approval` and `--unsafe-provider-tx` overrides for advanced/provider-specific flows.
 - `swap quote` (on-chain providers) and `swap plan`/`swap run` now support `--rpc-url` to override chain default RPCs per invocation.
 - Swap execution planning now validates sender/recipient fields as EVM addresses before route planning.
+- Uniswap `swap quote` now requires a real `--from-address` swapper input instead of using a deterministic placeholder address.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
@@ -62,6 +63,70 @@ Format:
 - Updated `AGENTS.md` with expanded execution command coverage and caveats.
 - Updated `docs/act-execution-design.md` implementation status to reflect the shipped Phase 2 surface.
 - Clarified execution builder architecture split (provider-backed route builders for swap/bridge vs internal planners for lend/rewards/approvals) in `AGENTS.md` and execution design docs.
+
+### Security
+- None yet.
+
+## [v0.3.1] - 2026-02-25
+
+### Added
+- None yet.
+
+### Changed
+- Added `swap quote --slippage-pct` to optionally override Uniswap max slippage percent; default behavior remains provider auto slippage.
+- Added `swap quote --type` with `exact-input|exact-output` modes plus explicit `--amount-out`/`--amount-out-decimal` for exact-output requests.
+- Swap quote rows now include `trade_type`; `uniswap` supports `exact-output` while other swap providers currently return `unsupported` for non-default types.
+- EVM exact-output swaps without `--provider` now default to `uniswap` (instead of defaulting to `1inch` and failing unsupported).
+
+### Fixed
+- Fixed `swap quote --provider uniswap` live quote compatibility by adding required request fields (`swapper`, `autoSlippage`) and accepting string-encoded `gasFeeUSD` values from Trade API responses.
+
+### Docs
+- Release pipeline now syncs `docs-live` to each `v*` tag so Mintlify production docs can track the latest release instead of unreleased `main`.
+
+### Security
+- None yet.
+
+## [v0.3.0] - 2026-02-24
+
+### Added
+- Added Solana canonical ID parsing for both chain references (`solana:<reference>`) and token IDs (`solana:<reference>/token:<mint>`).
+- Added direct Kamino support for `lend markets`, `lend rates`, and `yield opportunities` on Solana mainnet.
+- Added direct Jupiter swap quotes on Solana; `DEFI_JUPITER_API_KEY` remains optional for higher limits.
+- Added Bungee Auto quote support for both `bridge quote` and `swap quote` (keyless by default).
+- Added the `fibrous` swap provider for `base`, `hyperevm`, and `citrea` without an API key.
+- Added MegaETH alias normalization (`megaeth`, `mega eth`, `mega-eth`) to canonical chain ID `eip155:4326`.
+- Expanded chain normalization/bootstrap coverage for `hyperevm` (`eip155:999`), `monad` (`eip155:143`), and `citrea` (`eip155:4114`).
+- Expanded bootstrap token symbol/address coverage across supported EVM chains, including MegaETH/HyperEVM/Fraxtal updates.
+- Added provider-scoped identifier metadata to lending/yield rows: `provider`, `provider_native_id`, and `provider_native_id_kind`.
+- Added `fee_breakdown` on bridge quotes with component fees (`lp_fee`, `relayer_fee`, `gas_fee`), totals, and amount-delta consistency metadata.
+
+### Changed
+- `swap quote` now defaults by chain family: `1inch` on EVM and `jupiter` on Solana.
+- Lending and yield routes now use direct protocol adapters only; DefiLlama fallback routing was removed.
+- Removed `spark` from lending protocol routing.
+- Added explicit chain-family validation so unsupported EVM/Solana provider combinations fail with clear `unsupported` errors.
+- Solana parsing is now mainnet-only; `solana-devnet`, `solana-testnet`, and custom Solana CAIP-2 references are rejected.
+- Bungee quote mode now uses deterministic placeholder sender/receiver addresses for quote-only requests.
+- Bungee dedicated backend mode now activates only when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set.
+- Across quote normalization now uses provider `outputAmount` when available and fills missing USD fees with stable-asset approximations when needed.
+
+### Fixed
+- Tightened direct lending asset matching to prioritize canonical token address/mint over symbol-only matches.
+- Improved Kamino reserve collection reliability and performance by fetching per-market metrics concurrently while keeping deterministic output order.
+- Fixed missing Fraxtal bootstrap mapping for `FRAX` to the official Frax system predeploy contract.
+- Corrected HyperEVM canonical mapping to `eip155:999` across normalization and provider routing.
+- Corrected Monad bootstrap addresses for `WMON` and `USDC` to match the official Monad token list.
+- Fixed Fibrous route decoding for nested token objects and nullable gas values.
+- Disabled Fibrous `monad` routing while Monad upstream route responses remain unstable.
+- Commands now continue with cache disabled when cache initialization fails, instead of returning internal errors.
+- Reduced sqlite cache lock contention in parallel runs using lock coordination, busy-timeout, and retry/backoff handling.
+
+### Docs
+- Launched a Mintlify docs site (`docs/docs.json` + structured MDX guides, concepts, and reference pages).
+- Updated README and AGENTS docs for Solana support, Kamino/Jupiter routing, and provider API key behavior.
+- Added docs CI checks (`mint validate`, `mint broken-links`) for docs-related changes.
+- Simplified docs information architecture and refreshed branding/header assets.
 
 ### Security
 - None yet.
@@ -108,7 +173,9 @@ Format:
 ### Changed
 - Project/module path migrated to `github.com/ggonzalez94/defi-cli`.
 
-[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.1...HEAD
+[v0.3.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.0...v0.3.1
+[v0.3.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.0...v0.1.1
 [v0.1.0]: https://github.com/ggonzalez94/defi-cli/releases/tag/v0.1.0

@@ -1,0 +1,69 @@
+---
+title: Quickstart
+description: Run the most common defi-cli workflows in a few minutes.
+---
+
+## 1. List providers
+
+```bash
+defi providers list --results-only
+```
+
+## 2. Discover market context
+
+```bash
+defi chains top --limit 10 --results-only --select rank,chain,chain_id,tvl_usd
+defi protocols top --category lending --limit 10 --results-only
+```
+
+## 3. Resolve an asset to canonical ID
+
+```bash
+defi assets resolve --chain base --asset USDC --results-only
+defi assets resolve --chain solana --asset USDC --results-only
+```
+
+## 4. Query lending markets and rates
+
+```bash
+defi lend markets --protocol aave --chain 1 --asset USDC --limit 5 --results-only
+defi lend rates --protocol morpho --chain 1 --asset USDC --limit 5 --results-only
+defi lend markets --protocol kamino --chain solana --asset USDC --limit 5 --results-only
+```
+
+## 5. Rank yield opportunities
+
+```bash
+defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
+defi yield opportunities --chain solana --asset USDC --providers kamino --limit 10 --results-only
+defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --min-tvl-usd 1000000 --limit 10 --results-only
+```
+
+`--providers` expects provider names from `providers list` (`aave,morpho,kamino`), not protocol categories.
+
+## 6. Get bridge and swap quotes
+
+```bash
+defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 1000000 --results-only
+
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+On Solana, `swap quote` defaults to the Jupiter adapter.
+
+## 7. Use schema for machine integration
+
+```bash
+defi schema --results-only
+defi schema "yield opportunities" --results-only
+```
+
+## 8. Add reliability defaults
+
+```bash
+defi yield opportunities --chain 1 --asset USDC --timeout 12s --retries 2 --max-stale 5m --results-only
+```
+
+Next: [Output Contract](/concepts/output-contract)

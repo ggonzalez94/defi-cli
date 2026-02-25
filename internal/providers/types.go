@@ -98,6 +98,13 @@ type SwapExecutionProvider interface {
 	BuildSwapAction(ctx context.Context, req SwapQuoteRequest, opts SwapExecutionOptions) (execution.Action, error)
 }
 
+type SwapTradeType string
+
+const (
+	SwapTradeTypeExactInput  SwapTradeType = "exact-input"
+	SwapTradeTypeExactOutput SwapTradeType = "exact-output"
+)
+
 type SwapQuoteRequest struct {
 	Chain           id.Chain
 	FromAsset       id.Asset
@@ -105,6 +112,9 @@ type SwapQuoteRequest struct {
 	AmountBaseUnits string
 	AmountDecimal   string
 	RPCURL          string
+	TradeType       SwapTradeType
+	SlippagePct     *float64
+	Swapper         string
 }
 
 type SwapExecutionOptions struct {

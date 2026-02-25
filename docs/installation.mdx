@@ -1,0 +1,60 @@
+---
+title: Installation
+description: Install defi-cli from release artifacts, Go, or source.
+---
+
+## Quick install (macOS/Linux)
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
+```
+
+Install a specific version:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.3.1
+```
+
+## Go install
+
+```bash
+go install github.com/ggonzalez94/defi-cli/cmd/defi@latest
+```
+
+## Build from source
+
+```bash
+git clone https://github.com/ggonzalez94/defi-cli.git
+cd defi-cli
+go build -o defi ./cmd/defi
+```
+
+## Verify install
+
+```bash
+defi version --long
+defi --help
+```
+
+## Optional shell completion
+
+```bash
+defi completion zsh > ~/.zsh/completions/_defi
+defi completion bash > ~/.local/share/bash-completion/completions/defi
+defi completion fish > ~/.config/fish/completions/defi.fish
+```
+
+## API key setup
+
+Use environment variables (recommended):
+
+```bash
+export DEFI_1INCH_API_KEY=...
+export DEFI_UNISWAP_API_KEY=...
+export DEFI_JUPITER_API_KEY=...
+export DEFI_DEFILLAMA_API_KEY=...
+export DEFI_BUNGEE_API_KEY=...
+export DEFI_BUNGEE_AFFILIATE=...
+```
+
+Most routes do not require keys. `DEFI_JUPITER_API_KEY` is optional and mainly useful for higher Jupiter API limits. See [Providers and Auth](/concepts/providers-and-auth) for route-level requirements.

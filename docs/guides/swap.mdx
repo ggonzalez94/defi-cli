@@ -1,0 +1,59 @@
+---
+title: Swap
+description: Get swap quotes across 1inch, Uniswap, Jupiter, Fibrous, and Bungee.
+---
+
+## 1inch (key required)
+
+```bash
+export DEFI_1INCH_API_KEY=...
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+## Uniswap (key required)
+
+```bash
+export DEFI_UNISWAP_API_KEY=...
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+# Exact-output on Uniswap
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --results-only
+# Optional manual slippage override (percent). Default uses provider auto slippage.
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --slippage-pct 1.0 --results-only
+```
+
+## Jupiter (Solana, key optional)
+
+```bash
+defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+Optional higher-limit setup:
+
+```bash
+export DEFI_JUPITER_API_KEY=...
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+## Fibrous (keyless)
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+```
+
+## Bungee auto (keyless default)
+
+```bash
+defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
+```
+
+## Notes
+
+- `swap quote` defaults by chain family for exact-input: `1inch` on EVM and `jupiter` on Solana.
+- `--type` defaults to `exact-input`.
+- `--amount` and `--amount-decimal` are for `--type exact-input`.
+- `--amount-out` and `--amount-out-decimal` are for `--type exact-output`.
+- Providers currently supporting `exact-output`: `uniswap`.
+- On EVM, `--type exact-output` without `--provider` defaults to `uniswap`.
+- `--slippage-pct` is optional and currently applies to Uniswap quotes only.
+- Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
+- Fibrous currently supports `base`, `hyperevm`, and `citrea`.

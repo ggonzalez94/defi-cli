@@ -74,6 +74,9 @@ func TestQuoteSwap_Success(t *testing.T) {
 	if quote.Provider != "fibrous" {
 		t.Errorf("expected provider=fibrous, got %s", quote.Provider)
 	}
+	if quote.TradeType != "exact-input" {
+		t.Errorf("expected trade_type=exact-input, got %s", quote.TradeType)
+	}
 	if quote.ChainID != "eip155:8453" {
 		t.Errorf("expected chain_id=eip155:8453, got %s", quote.ChainID)
 	}
@@ -109,6 +112,28 @@ func TestQuoteSwap_UnsupportedChain(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected unsupported chain error")
+	}
+}
+
+func TestQuoteSwap_RejectsExactOutput(t *testing.T) {
+	srv := httptest.NewServer(http.NewServeMux())
+	defer srv.Close()
+
+	chain, _ := id.ParseChain("base")
+	fromAsset, _ := id.ParseAsset("0x833589fcd6edb6e08f4c7c32d4f71b54bda02913", chain)
+	toAsset, _ := id.ParseAsset("0x4200000000000000000000000000000000000006", chain)
+
+	c := newTestClient(srv)
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       fromAsset,
+		ToAsset:         toAsset,
+		AmountBaseUnits: "1000000000000000000",
+		AmountDecimal:   "1",
+		TradeType:       providers.SwapTradeTypeExactOutput,
+	})
+	if err == nil {
+		t.Fatal("expected unsupported exact-output error")
 	}
 }
 

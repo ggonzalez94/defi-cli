@@ -35,3 +35,21 @@ func TestQuoteSwapRejectsNonEVMChain(t *testing.T) {
 		t.Fatal("expected unsupported chain error")
 	}
 }
+
+func TestQuoteSwapRejectsExactOutput(t *testing.T) {
+	chain, _ := id.ParseChain("ethereum")
+	assetIn, _ := id.ParseAsset("USDC", chain)
+	assetOut, _ := id.ParseAsset("DAI", chain)
+	c := New(httpx.New(1*time.Second, 0), "test-key")
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       assetIn,
+		ToAsset:         assetOut,
+		AmountBaseUnits: "1000000000000000000",
+		AmountDecimal:   "1",
+		TradeType:       providers.SwapTradeTypeExactOutput,
+	})
+	if err == nil {
+		t.Fatal("expected unsupported exact-output error")
+	}
+}

@@ -55,6 +55,9 @@ internal/
 scripts/install.sh                # macOS/Linux installer from GitHub Releases
 .goreleaser.yml                   # cross-platform release artifact config
 assets/                            # static assets (logo, images)
+docs/                             # Mintlify docs site
+  docs.json                       # Mintlify docs site config
+  *.mdx + concepts/ guides/ ...   # Mintlify docs content pages
 README.md                         # user-facing usage + caveats
 ```
 
@@ -94,7 +97,11 @@ README.md                         # user-facing usage + caveats
 - Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
-- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, and `zksync`.
+- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
+- Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap only (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
+- Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
+- MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
@@ -104,7 +111,9 @@ README.md                         # user-facing usage + caveats
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama symbol matching and fallback/provider selection where symbol-based matching would be unsafe.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
+- Mintlify production docs should use the `docs-live` branch; the release workflow force-syncs `docs-live` to each `v*` tag.
 - `scripts/install.sh` installs the latest tagged release artifact into a writable user-space `PATH` directory by default (fallback `~/.local/bin`) and never uses sudo unless explicitly requested.
+- Docs site local checks (from `docs/`): `npx --yes mint@4.2.378 validate`, `npx --yes mint@4.2.378 broken-links`, and `npx --yes mint@4.2.378 a11y`.
 
 ## Change patterns
 
@@ -120,6 +129,10 @@ README.md                         # user-facing usage + caveats
 - Behavior changes:
   1. keep cache keys deterministic
   2. add runner-level tests for routing/fallback/strict mode
+- Docs sync for user-facing changes:
+  1. if adding a feature/command or changing behavior, update Mintlify docs + README + CHANGELOG
+  2. if changing output schema/fields/exit codes, update contract/reference docs before merge
+  3. if adding providers/chains/assets/aliases/key requirements, update provider/auth and examples docs
 
 ## Quality bar
 
@@ -141,6 +154,6 @@ README.md                         # user-facing usage + caveats
 
 ## Maintenance note
 
-- Keep `README.md`, `AGENTS.md`, and `CHANGELOG.md` aligned when commands, routing, caveats, or release-relevant behavior change.
+- Keep `README.md`, `AGENTS.md`, `CHANGELOG.md`, and Mintlify docs (`docs/docs.json` + `docs/**/*.mdx`) aligned when commands, routing, caveats, or release-relevant behavior change.
 
 Do not commit transient binaries like `./defi`.
