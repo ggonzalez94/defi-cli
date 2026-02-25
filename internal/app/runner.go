@@ -834,7 +834,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var runAmountBase, runAmountDecimal, runFromAddress, runRecipient string
 	var runSlippageBps int64
 	var runSimulate bool
-	var runSigner, runKeySource string
+	var runSigner, runKeySource, runPrivateKey string
 	var runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
@@ -851,7 +851,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runFromAddress)
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, runFromAddress)
 			if err != nil {
 				return err
 			}
@@ -914,6 +914,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	runCmd.Flags().BoolVar(&runSimulate, "simulate", true, "Run preflight simulation before submission")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
@@ -928,7 +929,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitFromAddress string
+	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress string
 	var submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
@@ -955,7 +956,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
 
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
 			if err != nil {
 				return err
 			}
@@ -988,6 +989,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
@@ -1027,7 +1029,16 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 }
 
 func (s *runtimeState) newActionsCommand() *cobra.Command {
-	root := &cobra.Command{Use: "actions", Short: "Execution action inspection commands"}
+	root := &cobra.Command{
+		Use:   "actions",
+		Short: "Execution action inspection commands",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			return clierr.New(clierr.CodeUsage, fmt.Sprintf("unknown actions subcommand %q", args[0]))
+		},
+	}
 
 	var listStatus string
 	var listLimit int
@@ -1048,29 +1059,33 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "Optional action status filter")
 	listCmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum actions to return")
 
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get action details by action id",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			actionID, err := resolveActionID(statusActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			item, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), item, nil, cacheMetaBypass(), nil, false)
+	lookupAction := func(cmd *cobra.Command, actionIDArg string) error {
+		actionID, err := resolveActionID(actionIDArg)
+		if err != nil {
+			return err
+		}
+		if err := s.ensureActionStore(); err != nil {
+			return err
+		}
+		item, err := s.actionStore.Get(actionID)
+		if err != nil {
+			return clierr.Wrap(clierr.CodeUsage, "load action", err)
+		}
+		return s.emitSuccess(trimRootPath(cmd.CommandPath()), item, nil, cacheMetaBypass(), nil, false)
+	}
+
+	var showActionID string
+	showCmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show action details by action id",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return lookupAction(cmd, showActionID)
 		},
 	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
+	showCmd.Flags().StringVar(&showActionID, "action-id", "", "Action identifier")
 
 	root.AddCommand(listCmd)
-	root.AddCommand(statusCmd)
+	root.AddCommand(showCmd)
 	return root
 }
 
@@ -1688,7 +1703,7 @@ func normalizeCommandPath(commandPath string) string {
 
 func isExecutionCommandPath(path string) bool {
 	switch path {
-	case "actions", "actions list", "actions status":
+	case "actions", "actions list", "actions show":
 		return true
 	}
 	parts := strings.Fields(path)
@@ -1751,7 +1766,7 @@ func resolveActionID(actionID string) (string, error) {
 	return actionID, nil
 }
 
-func newExecutionSigner(signerBackend, keySource string) (execsigner.Signer, error) {
+func newExecutionSigner(signerBackend, keySource, privateKey string) (execsigner.Signer, error) {
 	signerBackend = strings.ToLower(strings.TrimSpace(signerBackend))
 	if signerBackend == "" {
 		signerBackend = "local"
@@ -1759,15 +1774,15 @@ func newExecutionSigner(signerBackend, keySource string) (execsigner.Signer, err
 	if signerBackend != "local" {
 		return nil, clierr.New(clierr.CodeUnsupported, "only local signer is supported")
 	}
-	localSigner, err := execsigner.NewLocalSignerFromEnv(keySource)
+	localSigner, err := execsigner.NewLocalSignerFromInputs(keySource, privateKey)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeSigner, "initialize local signer", err)
 	}
 	return localSigner, nil
 }
 
-func resolveRunSignerAndFromAddress(signerBackend, keySource, fromAddress string) (execsigner.Signer, string, error) {
-	txSigner, err := newExecutionSigner(signerBackend, keySource)
+func resolveRunSignerAndFromAddress(signerBackend, keySource, privateKey, fromAddress string) (execsigner.Signer, string, error) {
+	txSigner, err := newExecutionSigner(signerBackend, keySource, privateKey)
 	if err != nil {
 		return nil, "", err
 	}

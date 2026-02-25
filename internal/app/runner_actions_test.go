@@ -28,7 +28,7 @@ func TestResolveActionID(t *testing.T) {
 
 func TestResolveRunSignerAndFromAddressDefaultsToSigner(t *testing.T) {
 	t.Setenv(execsigner.EnvPrivateKey, runSignerTestPrivateKey)
-	txSigner, fromAddress, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceEnv, "")
+	txSigner, fromAddress, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceEnv, "", "")
 	if err != nil {
 		t.Fatalf("resolveRunSignerAndFromAddress failed: %v", err)
 	}
@@ -45,12 +45,29 @@ func TestResolveRunSignerAndFromAddressDefaultsToSigner(t *testing.T) {
 
 func TestResolveRunSignerAndFromAddressRejectsMismatch(t *testing.T) {
 	t.Setenv(execsigner.EnvPrivateKey, runSignerTestPrivateKey)
-	_, _, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceEnv, "0x0000000000000000000000000000000000000001")
+	_, _, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceEnv, "", "0x0000000000000000000000000000000000000001")
 	if err == nil {
 		t.Fatal("expected mismatch error")
 	}
 	if !strings.Contains(err.Error(), "--from-address") {
 		t.Fatalf("expected --from-address mismatch error, got: %v", err)
+	}
+}
+
+func TestResolveRunSignerAndFromAddressUsesPrivateKeyOverride(t *testing.T) {
+	t.Setenv(execsigner.EnvPrivateKey, "")
+	txSigner, fromAddress, err := resolveRunSignerAndFromAddress("local", execsigner.KeySourceAuto, runSignerTestPrivateKey, "")
+	if err != nil {
+		t.Fatalf("resolveRunSignerAndFromAddress failed with private key override: %v", err)
+	}
+	if txSigner == nil {
+		t.Fatal("expected non-nil signer")
+	}
+	if fromAddress == "" {
+		t.Fatal("expected non-empty from address")
+	}
+	if !strings.EqualFold(fromAddress, txSigner.Address().Hex()) {
+		t.Fatalf("expected from address %s to match signer %s", fromAddress, txSigner.Address().Hex())
 	}
 }
 
@@ -95,11 +112,34 @@ func TestShouldOpenActionStore(t *testing.T) {
 	if !shouldOpenActionStore("actions list") {
 		t.Fatal("expected actions list to require action store")
 	}
+	if !shouldOpenActionStore("actions show") {
+		t.Fatal("expected actions show to require action store")
+	}
 	if shouldOpenActionStore("swap quote") {
 		t.Fatal("did not expect swap quote to require action store")
 	}
 	if shouldOpenActionStore("lend markets") {
 		t.Fatal("did not expect lend markets to require action store")
+	}
+}
+
+func TestActionsCommandHasNoStatusAlias(t *testing.T) {
+	state := &runtimeState{}
+	actionsCmd := state.newActionsCommand()
+
+	names := map[string]struct{}{}
+	for _, cmd := range actionsCmd.Commands() {
+		names[cmd.Name()] = struct{}{}
+	}
+
+	if _, ok := names["list"]; !ok {
+		t.Fatal("expected actions list command to be present")
+	}
+	if _, ok := names["show"]; !ok {
+		t.Fatal("expected actions show command to be present")
+	}
+	if _, ok := names["status"]; ok {
+		t.Fatal("did not expect deprecated actions status alias")
 	}
 }
 
@@ -118,6 +158,9 @@ func TestShouldOpenCacheBypassesExecutionCommands(t *testing.T) {
 	}
 	if shouldOpenCache("rewards compound run") {
 		t.Fatal("did not expect rewards compound run to open cache")
+	}
+	if shouldOpenCache("actions show") {
+		t.Fatal("did not expect actions show to open cache")
 	}
 	if !shouldOpenCache("lend rates") {
 		t.Fatal("expected lend rates to open cache")
@@ -208,6 +251,29 @@ func TestRunnerActionsListBypassesCacheOpen(t *testing.T) {
 	var out []map[string]any
 	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
 		t.Fatalf("failed to parse actions output json: %v output=%s", err, stdout.String())
+	}
+}
+
+func TestRunnerActionsStatusRejected(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"actions", "status"})
+	if code != 2 {
+		t.Fatalf("expected usage exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stderr.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse error envelope: %v output=%s", err, stderr.String())
+	}
+	errBody, ok := env["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected error body, got %+v", env["error"])
+	}
+	msg, _ := errBody["message"].(string)
+	if !strings.Contains(msg, "unknown actions subcommand") {
+		t.Fatalf("expected unknown actions subcommand message, got %q", msg)
 	}
 }
 

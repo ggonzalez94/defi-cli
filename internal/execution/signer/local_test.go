@@ -86,4 +86,29 @@ func TestNewLocalSignerFromEnvAutoUsesDefaultKeyFile(t *testing.T) {
 	}
 }
 
+func TestNewLocalSignerFromInputsPrivateKeyOverride(t *testing.T) {
+	t.Setenv(EnvPrivateKey, "")
+	t.Setenv(EnvPrivateKeyFile, "")
+	t.Setenv(EnvKeystorePath, "")
+
+	s, err := NewLocalSignerFromInputs(KeySourceAuto, testPrivateKey)
+	if err != nil {
+		t.Fatalf("expected private key override to initialize signer: %v", err)
+	}
+	if s.Address() == (common.Address{}) {
+		t.Fatal("expected non-zero signer address")
+	}
+}
+
+func TestNewLocalSignerFromInputsOverrideWinsOverFileSource(t *testing.T) {
+	t.Setenv(EnvPrivateKeyFile, "/tmp/does-not-exist")
+	s, err := NewLocalSignerFromInputs(KeySourceFile, testPrivateKey)
+	if err != nil {
+		t.Fatalf("expected private key override to win over file key-source: %v", err)
+	}
+	if s.Address() == (common.Address{}) {
+		t.Fatal("expected non-zero signer address")
+	}
+}
+
 func ptrAddress(v common.Address) *common.Address { return &v }

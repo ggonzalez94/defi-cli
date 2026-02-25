@@ -48,6 +48,10 @@ func (s *LocalSigner) SignTx(chainID *big.Int, tx *types.Transaction) (*types.Tr
 }
 
 func NewLocalSignerFromEnv(source string) (*LocalSigner, error) {
+	return NewLocalSignerFromInputs(source, "")
+}
+
+func NewLocalSignerFromInputs(source, privateKeyOverride string) (*LocalSigner, error) {
 	source = strings.ToLower(strings.TrimSpace(source))
 	if source == "" {
 		source = KeySourceAuto
@@ -79,6 +83,13 @@ func NewLocalSignerFromEnv(source string) (*LocalSigner, error) {
 		privateKeyFile = ""
 	default:
 		return nil, fmt.Errorf("unsupported key source %q (expected %s|%s|%s|%s)", source, KeySourceAuto, KeySourceEnv, KeySourceFile, KeySourceKeystore)
+	}
+	if strings.TrimSpace(privateKeyOverride) != "" {
+		privateKeyHex = strings.TrimSpace(privateKeyOverride)
+		privateKeyFile = ""
+		keystorePath = ""
+		keystorePassword = ""
+		keystorePasswordFile = ""
 	}
 
 	return NewLocalSigner(LocalSignerConfig{

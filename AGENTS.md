@@ -67,14 +67,14 @@ README.md                         # user-facing usage + caveats
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit provider/protocol selection (`--provider` or `--protocol`); no implicit defaults.
-- TaikoSwap quote/planning does not require an API key; execution uses local signer env inputs (`DEFI_PRIVATE_KEY{,_FILE}` or keystore envs) and also auto-discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
+- TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
 - Execution commands currently available:
   - `swap plan|run|submit|status`
   - `bridge plan|run|submit|status` (Across, LiFi)
   - `approvals plan|run|submit|status`
   - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave, Morpho)
   - `rewards claim|compound plan|run|submit|status` (Aave)
-  - `actions list|status`
+  - `actions list|show`
 - Execution builder architecture is intentionally split:
   - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
   - `lend`/`rewards`/`approvals` action construction uses internal planners for deterministic contract-call composition.
@@ -94,7 +94,7 @@ README.md                         # user-facing usage + caveats
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|status`) bypass cache initialization.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show`) bypass cache initialization.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama symbol matching and fallback/provider selection where symbol-based matching would be unsafe.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.

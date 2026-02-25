@@ -16,7 +16,7 @@ Format:
 - Added approvals workflow commands: `approvals plan`, `approvals run`, `approvals submit`, and `approvals status`.
 - Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|run|submit|status` (Aave and Morpho).
 - Added rewards execution workflow commands under `rewards claim|compound ... plan|run|submit|status` (Aave).
-- Added action persistence and inspection commands: `actions list` and `actions status`.
+- Added action persistence and inspection commands: `actions list` and `actions show`.
 - Added local signer support for execution with env/file/keystore key sources.
 - Added Taiko Hoodi chain alias and token registry entries (`USDC`, `USDT`, `WETH`) for deterministic asset parsing.
 - Added planner unit tests for approvals, Aave lend/rewards flows, and LiFi bridge action building.
@@ -42,6 +42,7 @@ Format:
 - Unified execution action-construction dispatch under a shared ActionBuilder registry while preserving existing command semantics.
 - Execution commands now use `--from-address` as the single signer-address guard; `--confirm-address` has been removed.
 - Execution `run` commands now default sender to signer address when `--from-address` is omitted.
+- Execution `run`/`submit` commands now support `--private-key` as a one-off local signer override (highest precedence).
 - Local signer `--key-source auto` now discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
 - Local signer key/keystore file loading no longer hard-fails on non-`0600` file permissions.
 - Execution endpoint defaults for Across/LiFi settlement polling and Morpho GraphQL planning are now centralized in `internal/registry`.

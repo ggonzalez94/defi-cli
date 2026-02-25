@@ -23,7 +23,7 @@ Execution is integrated inside existing domain commands (for example `swap`, `br
 | Lend | `lend <supply|withdraw|borrow|repay> plan|run|submit|status` | `--protocol` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
 | Rewards | `rewards <claim|compound> plan|run|submit|status` | `--protocol` required | `aave` execution |
 | Approvals | `approvals plan|run|submit|status` | no provider selector | native ERC-20 approval execution |
-| Action inspection | `actions list|status` | optional `--status` filter | persisted action inspection |
+| Action inspection | `actions list|show` | optional `--status` filter | persisted action inspection |
 
 Notes:
 
@@ -138,7 +138,7 @@ Tradeoff:
 
 - Domain `status` commands fetch one action.
 - `actions list` gives cross-domain recent actions.
-- `actions status` fetches any action by ID.
+- `actions show` fetches any action by ID.
 
 ## 5. Signing and Key Handling
 
@@ -155,6 +155,7 @@ Supported backend today:
 Key sources:
 
 - `--key-source auto|env|file|keystore`
+- `--private-key` (run/submit one-off override)
 - Environment variables:
   - `DEFI_PRIVATE_KEY`
   - `DEFI_PRIVATE_KEY_FILE`
@@ -164,10 +165,11 @@ Key sources:
 
 `auto` precedence in current code:
 
-1. `DEFI_PRIVATE_KEY`
-2. `DEFI_PRIVATE_KEY_FILE`
-3. `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` (default key-file fallback when present)
-4. `DEFI_KEYSTORE_PATH` (+ password input)
+1. `--private-key` (when provided)
+2. `DEFI_PRIVATE_KEY`
+3. `DEFI_PRIVATE_KEY_FILE`
+4. `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` (default key-file fallback when present)
+5. `DEFI_KEYSTORE_PATH` (+ password input)
 
 Security controls:
 

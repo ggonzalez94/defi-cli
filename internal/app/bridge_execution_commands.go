@@ -127,7 +127,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	var runSlippageBps int64
 	var runSimulate bool
 	var runRPCURL string
-	var runSigner, runKeySource, runPollInterval, runStepTimeout string
+	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
 	var runAllowMaxApproval, runUnsafeProviderTx bool
@@ -139,7 +139,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runFromAddress)
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, runFromAddress)
 			if err != nil {
 				return err
 			}
@@ -209,6 +209,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	runCmd.Flags().StringVar(&runRPCURL, "rpc-url", "", "RPC URL override for source chain")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
@@ -223,7 +224,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitFromAddress, submitPollInterval, submitStepTimeout string
+	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
 	var submitAllowMaxApproval, submitUnsafeProviderTx bool
@@ -245,7 +246,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if action.IntentType != "bridge" {
 				return clierr.New(clierr.CodeUsage, "action is not a bridge intent")
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
 			if err != nil {
 				return err
 			}
@@ -278,6 +279,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")

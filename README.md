@@ -110,6 +110,7 @@ Swap execution flow (local signer):
 
 ```bash
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
+# or pass --private-key 0x... on run/submit commands for one-off usage
 
 # 1) Plan only
 defi swap plan \
@@ -139,7 +140,7 @@ Execution command surface:
 - `approvals plan|run|submit|status`
 - `lend supply|withdraw|borrow|repay plan|run|submit|status` (protocol: `aave|morpho`)
 - `rewards claim|compound plan|run|submit|status` (protocol: `aave`)
-- `actions list|status`
+- `actions list|show`
 
 ## Command API Key Requirements
 
@@ -178,7 +179,12 @@ If a keyed provider is used without a key, CLI exits with code `10`.
 
 Execution `run`/`submit` commands currently support a local key signer.
 
-Key env inputs (in precedence order when `--key-source auto`):
+Key input precedence:
+
+- `--private-key` (hex string, one-off override; less safe)
+- env/file/keystore inputs below (when `--private-key` is not provided)
+
+Key env/file inputs (in precedence order when `--key-source auto` and `--private-key` is unset):
 
 - `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
 - `DEFI_PRIVATE_KEY_FILE` (preferred explicit key-file path)
@@ -234,7 +240,7 @@ providers:
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|status`) bypass cache reads/writes.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show`) bypass cache reads/writes.
 
 ## Caveats
 
