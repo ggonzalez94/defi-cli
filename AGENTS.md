@@ -97,7 +97,7 @@ README.md                         # user-facing usage + caveats
 - Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
-- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
 - Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap only (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
