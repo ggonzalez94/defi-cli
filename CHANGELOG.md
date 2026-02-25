@@ -24,6 +24,7 @@ Format:
 - Added nightly execution-planning smoke workflow (`nightly-execution-smoke.yml`) and script.
 
 ### Changed
+- BREAKING: Lend and rewards commands now use `--provider` as the selector flag; `--protocol` has been removed.
 - `providers list` now includes TaikoSwap execution capabilities (`swap.plan`, `swap.execute`) alongside quote metadata.
 - `providers list` now includes LiFi bridge execution capabilities (`bridge.plan`, `bridge.execute`).
 - `providers list` now includes Across bridge execution capabilities (`bridge.plan`, `bridge.execute`).
@@ -31,7 +32,7 @@ Format:
 - Added execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
 - Added execution config/env support for action store paths.
 - Execution command cache/action-store policy now covers `swap|bridge|approvals|lend|rewards ... plan|run|submit|status`.
-- Removed implicit defaults for multi-provider command paths; `--provider`/`--protocol` must be set explicitly where applicable.
+- Removed implicit defaults for multi-provider command paths; `--provider` must be set explicitly where applicable.
 - Added bridge gas-top-up request support via `--from-amount-for-gas` for LiFi quote/plan/run flows.
 - Bridge execution now tracks LiFi destination settlement status before finalizing bridge steps.
 - Bridge execution now tracks Across destination settlement status before finalizing bridge steps.

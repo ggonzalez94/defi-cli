@@ -19,7 +19,7 @@ go test -race ./...
 go vet ./...
 
 ./defi providers list --results-only
-./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+./defi lend markets --provider aave --chain 1 --asset USDC --results-only
 ./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
 ```
 
@@ -63,10 +63,10 @@ README.md                         # user-facing usage + caveats
 - Error output always returns a full envelope, even with `--results-only` or `--select`.
 - Config precedence is `flags > env > config file > defaults`.
 - `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
-- Lending routes by `--protocol` to direct adapters when available, then may fallback to DefiLlama on selected failures.
+- Lending routes by `--provider` to direct adapters when available, then may fallback to DefiLlama on selected failures.
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
-- Multi-provider command paths require explicit provider/protocol selection (`--provider` or `--protocol`); no implicit defaults.
+- Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
 - TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
 - `swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `lend`, `rewards`); `submit`/`status` use stored action step RPC URLs.
 - Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.

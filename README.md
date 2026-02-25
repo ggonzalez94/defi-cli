@@ -67,8 +67,8 @@ defi providers list --results-only
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi assets resolve --chain base --symbol USDC --results-only
-defi lend markets --protocol aave --chain 1 --asset USDC --results-only
-defi lend rates --protocol morpho --chain 1 --asset USDC --results-only
+defi lend markets --provider aave --chain 1 --asset USDC --results-only
+defi lend rates --provider morpho --chain 1 --asset USDC --results-only
 defi yield opportunities --chain base --asset USDC --limit 20 --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
 defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
@@ -79,9 +79,9 @@ defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset 
 defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
 defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --from-amount-for-gas 100000 --results-only
 defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi lend supply plan --protocol aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi lend supply plan --protocol morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
-defi rewards claim plan --protocol aave --chain 1 --from-address 0xYourEOA --assets 0x... --reward-token 0x... --results-only
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --assets 0x... --reward-token 0x... --results-only
 defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap status --action-id <action_id> --results-only
 defi actions list --results-only
@@ -141,8 +141,8 @@ Execution command surface:
 - `swap plan|run|submit|status`
 - `bridge plan|run|submit|status` (provider: `across|lifi`)
 - `approvals plan|run|submit|status`
-- `lend supply|withdraw|borrow|repay plan|run|submit|status` (protocol: `aave|morpho`)
-- `rewards claim|compound plan|run|submit|status` (protocol: `aave`)
+- `lend supply|withdraw|borrow|repay plan|run|submit|status` (provider: `aave|morpho`)
+- `rewards claim|compound plan|run|submit|status` (provider: `aave`)
 - `actions list|show`
 
 ## Command API Key Requirements
@@ -275,7 +275,7 @@ providers:
 - Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `run` / `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
-- Provider/protocol selection is explicit for multi-provider flows; pass `--provider` or `--protocol` (no implicit defaults).
+- Selector choice is explicit for multi-provider flows; pass `--provider` (no implicit defaults).
 
 ## Exit Codes
 

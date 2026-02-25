@@ -117,9 +117,9 @@ type aaveReserve struct {
 	} `json:"borrowInfo"`
 }
 
-func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(protocol, "aave") {
-		return nil, clierr.New(clierr.CodeUnsupported, "aave adapter supports only protocol=aave")
+func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
+	if !strings.EqualFold(provider, "aave") {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave adapter supports only provider=aave")
 	}
 	markets, err := c.fetchMarkets(ctx, chain)
 	if err != nil {
@@ -171,9 +171,9 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 	return out, nil
 }
 
-func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(protocol, "aave") {
-		return nil, clierr.New(clierr.CodeUnsupported, "aave adapter supports only protocol=aave")
+func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
+	if !strings.EqualFold(provider, "aave") {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave adapter supports only provider=aave")
 	}
 	markets, err := c.fetchMarkets(ctx, chain)
 	if err != nil {

@@ -42,7 +42,7 @@ go build -o defi ./cmd/defi
   --results-only >/dev/null
 
 ./defi lend supply plan \
-  --protocol aave \
+  --provider aave \
   --chain 1 \
   --asset USDC \
   --amount 1000000 \
@@ -50,7 +50,7 @@ go build -o defi ./cmd/defi
   --results-only >/dev/null
 
 ./defi rewards claim plan \
-  --protocol aave \
+  --provider aave \
   --chain 1 \
   --from-address 0x00000000000000000000000000000000000000aa \
   --assets 0x00000000000000000000000000000000000000d1 \
@@ -58,7 +58,7 @@ go build -o defi ./cmd/defi
   --results-only >/dev/null
 
 ./defi rewards compound plan \
-  --protocol aave \
+  --provider aave \
   --chain 1 \
   --from-address 0x00000000000000000000000000000000000000aa \
   --assets 0x00000000000000000000000000000000000000d1 \

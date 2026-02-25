@@ -7,14 +7,14 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
-func TestNormalizeLendingProtocol(t *testing.T) {
-	if got := normalizeLendingProtocol("AAVE-V3"); got != "aave" {
+func TestNormalizeLendingProvider(t *testing.T) {
+	if got := normalizeLendingProvider("AAVE-V3"); got != "aave" {
 		t.Fatalf("expected aave, got %s", got)
 	}
-	if got := normalizeLendingProtocol("morpho-blue"); got != "morpho" {
+	if got := normalizeLendingProvider("morpho-blue"); got != "morpho" {
 		t.Fatalf("expected morpho, got %s", got)
 	}
-	if got := normalizeLendingProtocol("kamino-finance"); got != "kamino" {
+	if got := normalizeLendingProvider("kamino-finance"); got != "kamino" {
 		t.Fatalf("expected kamino, got %s", got)
 	}
 }

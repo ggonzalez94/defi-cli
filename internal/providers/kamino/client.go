@@ -72,9 +72,9 @@ type reserveWithMarket struct {
 	Reserve reserveMetric
 }
 
-func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(strings.TrimSpace(protocol), "kamino") {
-		return nil, clierr.New(clierr.CodeUnsupported, "kamino adapter supports only protocol=kamino")
+func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
+	if !strings.EqualFold(strings.TrimSpace(provider), "kamino") {
+		return nil, clierr.New(clierr.CodeUnsupported, "kamino adapter supports only provider=kamino")
 	}
 	reserves, err := c.fetchReserves(ctx, chain)
 	if err != nil {
@@ -126,9 +126,9 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 	return out, nil
 }
 
-func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(strings.TrimSpace(protocol), "kamino") {
-		return nil, clierr.New(clierr.CodeUnsupported, "kamino adapter supports only protocol=kamino")
+func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
+	if !strings.EqualFold(strings.TrimSpace(provider), "kamino") {
+		return nil, clierr.New(clierr.CodeUnsupported, "kamino adapter supports only provider=kamino")
 	}
 	reserves, err := c.fetchReserves(ctx, chain)
 	if err != nil {

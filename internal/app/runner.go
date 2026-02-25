@@ -447,7 +447,7 @@ func (s *runtimeState) newAssetsCommand() *cobra.Command {
 
 func (s *runtimeState) newLendCommand() *cobra.Command {
 	root := &cobra.Command{Use: "lend", Short: "Lending data"}
-	var protocolArg string
+	var providerArg string
 	var chainArg string
 	var assetArg string
 	var marketsLimit int
@@ -456,24 +456,24 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 		Use:   "markets",
 		Short: "List lending markets",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			protocol := normalizeLendingProtocol(protocolArg)
-			if protocol == "" {
-				return clierr.New(clierr.CodeUsage, "--protocol is required")
+			providerName := normalizeLendingProvider(providerArg)
+			if providerName == "" {
+				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
 			chain, asset, err := parseChainAsset(chainArg, assetArg)
 			if err != nil {
 				return err
 			}
-			req := map[string]any{"protocol": protocol, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit}
+			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				provider, err := s.selectLendingProvider(protocol)
+				provider, err := s.selectLendingProvider(providerName)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 
 				start := time.Now()
-				data, err := provider.LendMarkets(ctx, protocol, chain, asset)
+				data, err := provider.LendMarkets(ctx, providerName, chain, asset)
 				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 				if err != nil {
 					return nil, statuses, nil, false, err
@@ -483,35 +483,35 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	marketsCmd.Flags().StringVar(&protocolArg, "protocol", "", "Lending protocol (aave, morpho, kamino)")
+	marketsCmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino)")
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
 
-	var ratesProtocol, ratesChain, ratesAsset string
+	var ratesProvider, ratesChain, ratesAsset string
 	var ratesLimit int
 	ratesCmd := &cobra.Command{
 		Use:   "rates",
 		Short: "List lending rates",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			protocol := normalizeLendingProtocol(ratesProtocol)
-			if protocol == "" {
-				return clierr.New(clierr.CodeUsage, "--protocol is required")
+			providerName := normalizeLendingProvider(ratesProvider)
+			if providerName == "" {
+				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
 			chain, asset, err := parseChainAsset(ratesChain, ratesAsset)
 			if err != nil {
 				return err
 			}
-			req := map[string]any{"protocol": protocol, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit}
+			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				provider, err := s.selectLendingProvider(protocol)
+				provider, err := s.selectLendingProvider(providerName)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
 
 				start := time.Now()
-				data, err := provider.LendRates(ctx, protocol, chain, asset)
+				data, err := provider.LendRates(ctx, providerName, chain, asset)
 				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 				if err != nil {
 					return nil, statuses, nil, false, err
@@ -521,7 +521,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	ratesCmd.Flags().StringVar(&ratesProtocol, "protocol", "", "Lending protocol (aave, morpho, kamino)")
+	ratesCmd.Flags().StringVar(&ratesProvider, "provider", "", "Lending provider (aave, morpho, kamino)")
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
@@ -1372,7 +1372,7 @@ func (s *runtimeState) renderError(commandPath string, err error, warnings []str
 	_ = out.Render(s.runner.stderr, env, settings)
 }
 
-func normalizeLendingProtocol(input string) string {
+func normalizeLendingProvider(input string) string {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case "aave", "aave-v2", "aave-v3":
 		return "aave"
@@ -1385,10 +1385,10 @@ func normalizeLendingProtocol(input string) string {
 	}
 }
 
-func (s *runtimeState) selectLendingProvider(protocol string) (providers.LendingProvider, error) {
-	primary, ok := s.lendingProviders[protocol]
+func (s *runtimeState) selectLendingProvider(providerName string) (providers.LendingProvider, error) {
+	primary, ok := s.lendingProviders[providerName]
 	if !ok {
-		return nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported lending protocol: %s", protocol))
+		return nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported lending provider: %s", providerName))
 	}
 	return primary, nil
 }

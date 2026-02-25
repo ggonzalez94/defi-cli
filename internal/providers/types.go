@@ -22,8 +22,8 @@ type MarketDataProvider interface {
 
 type LendingProvider interface {
 	Provider
-	LendMarkets(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error)
-	LendRates(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendRate, error)
+	LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error)
+	LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error)
 }
 
 type YieldProvider interface {

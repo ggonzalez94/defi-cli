@@ -30,7 +30,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	expectedIntent := "lend_" + string(verb)
 
 	type lendArgs struct {
-		protocol            string
+		provider            string
 		chainArg            string
 		assetArg            string
 		marketID            string
@@ -59,7 +59,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return execution.Action{}, err
 		}
 		return s.actionBuilderRegistry().BuildLendAction(ctx, actionbuilder.LendRequest{
-			Protocol:            args.protocol,
+			Provider:            args.provider,
 			Verb:                verb,
 			Chain:               chain,
 			Asset:               asset,
@@ -85,7 +85,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			defer cancel()
 			start := time.Now()
 			action, err := buildAction(ctx, plan)
-			providerName := normalizeLendingProtocol(plan.protocol)
+			providerName := normalizeLendingProvider(plan.provider)
 			if providerName == "" {
 				providerName = "lend"
 			}
@@ -104,10 +104,10 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.protocol, "protocol", "", "Lending protocol (aave|morpho)")
+	planCmd.Flags().StringVar(&plan.provider, "provider", "", "Lending provider (aave|morpho)")
 	planCmd.Flags().StringVar(&plan.chainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	planCmd.Flags().StringVar(&plan.marketID, "market-id", "", "Morpho market unique key (required for --protocol morpho)")
+	planCmd.Flags().StringVar(&plan.marketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")
 	planCmd.Flags().StringVar(&plan.amountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.amountDecimal, "amount-decimal", "", "Amount in decimal units")
 	planCmd.Flags().StringVar(&plan.fromAddress, "from-address", "", "Sender EOA address")
@@ -121,7 +121,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("from-address")
-	_ = planCmd.MarkFlagRequired("protocol")
+	_ = planCmd.MarkFlagRequired("provider")
 
 	var run lendArgs
 	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
@@ -143,7 +143,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			defer cancel()
 			start := time.Now()
 			action, err := buildAction(ctx, runArgs)
-			providerName := normalizeLendingProtocol(run.protocol)
+			providerName := normalizeLendingProvider(run.provider)
 			if providerName == "" {
 				providerName = "lend"
 			}
@@ -180,10 +180,10 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Lending protocol (aave|morpho)")
+	runCmd.Flags().StringVar(&run.provider, "provider", "", "Lending provider (aave|morpho)")
 	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
 	runCmd.Flags().StringVar(&run.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	runCmd.Flags().StringVar(&run.marketID, "market-id", "", "Morpho market unique key (required for --protocol morpho)")
+	runCmd.Flags().StringVar(&run.marketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")
 	runCmd.Flags().StringVar(&run.amountBase, "amount", "", "Amount in base units")
 	runCmd.Flags().StringVar(&run.amountDecimal, "amount-decimal", "", "Amount in decimal units")
 	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
@@ -206,7 +206,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("asset")
-	_ = runCmd.MarkFlagRequired("protocol")
+	_ = runCmd.MarkFlagRequired("provider")
 
 	var submitActionID string
 	var submitSimulate bool

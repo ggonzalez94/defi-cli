@@ -40,11 +40,11 @@ func TestBuildBridgeActionRejectsQuoteOnlyProvider(t *testing.T) {
 	}
 }
 
-func TestBuildLendActionRejectsUnsupportedProtocol(t *testing.T) {
+func TestBuildLendActionRejectsUnsupportedProvider(t *testing.T) {
 	reg := New(nil, nil)
-	_, err := reg.BuildLendAction(context.Background(), LendRequest{Protocol: "kamino"})
+	_, err := reg.BuildLendAction(context.Background(), LendRequest{Provider: "kamino"})
 	if err == nil {
-		t.Fatal("expected unsupported protocol error")
+		t.Fatal("expected unsupported provider error")
 	}
 	cErr, ok := clierr.As(err)
 	if !ok || cErr.Code != clierr.CodeUnsupported {
@@ -52,15 +52,27 @@ func TestBuildLendActionRejectsUnsupportedProtocol(t *testing.T) {
 	}
 }
 
-func TestBuildRewardsClaimActionRejectsUnsupportedProtocol(t *testing.T) {
+func TestBuildRewardsClaimActionRejectsUnsupportedProvider(t *testing.T) {
 	reg := New(nil, nil)
-	_, err := reg.BuildRewardsClaimAction(context.Background(), RewardsClaimRequest{Protocol: "morpho"})
+	_, err := reg.BuildRewardsClaimAction(context.Background(), RewardsClaimRequest{Provider: "morpho"})
 	if err == nil {
-		t.Fatal("expected unsupported protocol error")
+		t.Fatal("expected unsupported provider error")
 	}
 	cErr, ok := clierr.As(err)
 	if !ok || cErr.Code != clierr.CodeUnsupported {
 		t.Fatalf("expected unsupported cli error, got %v", err)
+	}
+}
+
+func TestNormalizeLendingProviderAliases(t *testing.T) {
+	if got := normalizeLendingProvider("AAVE-V3"); got != "aave" {
+		t.Fatalf("expected aave, got %s", got)
+	}
+	if got := normalizeLendingProvider("morpho-blue"); got != "morpho" {
+		t.Fatalf("expected morpho, got %s", got)
+	}
+	if got := normalizeLendingProvider("kamino-finance"); got != "kamino" {
+		t.Fatalf("expected kamino, got %s", got)
 	}
 }
 

@@ -223,7 +223,7 @@ func TestRunnerMorphoLendPlanRequiresMarketID(t *testing.T) {
 	r := NewRunnerWithWriters(&stdout, &stderr)
 	code := r.Run([]string{
 		"lend", "supply", "plan",
-		"--protocol", "morpho",
+		"--provider", "morpho",
 		"--chain", "1",
 		"--asset", "USDC",
 		"--amount", "1000000",

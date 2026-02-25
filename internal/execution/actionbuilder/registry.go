@@ -84,7 +84,7 @@ func (r *Registry) BridgeExecutionProviderNames() []string {
 }
 
 type LendRequest struct {
-	Protocol            string
+	Provider            string
 	Verb                planner.AaveLendVerb
 	Chain               id.Chain
 	Asset               id.Asset
@@ -101,11 +101,11 @@ type LendRequest struct {
 }
 
 func (r *Registry) BuildLendAction(ctx context.Context, req LendRequest) (execution.Action, error) {
-	protocol := normalizeLendingProtocol(req.Protocol)
-	if protocol == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
+	providerName := normalizeLendingProvider(req.Provider)
+	if providerName == "" {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
-	switch protocol {
+	switch providerName {
 	case "aave":
 		return planner.BuildAaveLendAction(ctx, planner.AaveLendRequest{
 			Verb:                  req.Verb,
@@ -135,12 +135,12 @@ func (r *Registry) BuildLendAction(ctx context.Context, req LendRequest) (execut
 			RPCURL:          req.RPCURL,
 		})
 	default:
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports protocol=aave|morpho")
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports provider=aave|morpho")
 	}
 }
 
 type RewardsClaimRequest struct {
-	Protocol            string
+	Provider            string
 	Chain               id.Chain
 	Sender              string
 	Recipient           string
@@ -154,12 +154,12 @@ type RewardsClaimRequest struct {
 }
 
 func (r *Registry) BuildRewardsClaimAction(ctx context.Context, req RewardsClaimRequest) (execution.Action, error) {
-	protocol := normalizeLendingProtocol(req.Protocol)
-	if protocol == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
+	providerName := normalizeLendingProvider(req.Provider)
+	if providerName == "" {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
-	if protocol != "aave" {
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "rewards execution currently supports only protocol=aave")
+	if providerName != "aave" {
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "rewards execution currently supports only provider=aave")
 	}
 	return planner.BuildAaveRewardsClaimAction(ctx, planner.AaveRewardsClaimRequest{
 		Chain:                 req.Chain,
@@ -176,7 +176,7 @@ func (r *Registry) BuildRewardsClaimAction(ctx context.Context, req RewardsClaim
 }
 
 type RewardsCompoundRequest struct {
-	Protocol            string
+	Provider            string
 	Chain               id.Chain
 	Sender              string
 	Recipient           string
@@ -192,12 +192,12 @@ type RewardsCompoundRequest struct {
 }
 
 func (r *Registry) BuildRewardsCompoundAction(ctx context.Context, req RewardsCompoundRequest) (execution.Action, error) {
-	protocol := normalizeLendingProtocol(req.Protocol)
-	if protocol == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "--protocol is required")
+	providerName := normalizeLendingProvider(req.Provider)
+	if providerName == "" {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
-	if protocol != "aave" {
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "rewards execution currently supports only protocol=aave")
+	if providerName != "aave" {
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "rewards execution currently supports only provider=aave")
 	}
 	return planner.BuildAaveRewardsCompoundAction(ctx, planner.AaveRewardsCompoundRequest{
 		Chain:                 req.Chain,
@@ -219,6 +219,15 @@ func (r *Registry) BuildApprovalAction(req planner.ApprovalRequest) (execution.A
 	return planner.BuildApprovalAction(req)
 }
 
-func normalizeLendingProtocol(v string) string {
-	return strings.ToLower(strings.TrimSpace(v))
+func normalizeLendingProvider(v string) string {
+	switch strings.ToLower(strings.TrimSpace(v)) {
+	case "aave", "aave-v2", "aave-v3":
+		return "aave"
+	case "morpho", "morpho-blue":
+		return "morpho"
+	case "kamino", "kamino-lend", "kamino-finance":
+		return "kamino"
+	default:
+		return strings.ToLower(strings.TrimSpace(v))
+	}
 }

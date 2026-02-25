@@ -98,9 +98,9 @@ type morphoMarket struct {
 	} `json:"state"`
 }
 
-func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(protocol, "morpho") {
-		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only protocol=morpho")
+func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
+	if !strings.EqualFold(provider, "morpho") {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only provider=morpho")
 	}
 	markets, err := c.fetchMarkets(ctx, chain, asset)
 	if err != nil {
@@ -143,9 +143,9 @@ func (c *Client) LendMarkets(ctx context.Context, protocol string, chain id.Chai
 	return out, nil
 }
 
-func (c *Client) LendRates(ctx context.Context, protocol string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(protocol, "morpho") {
-		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only protocol=morpho")
+func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
+	if !strings.EqualFold(provider, "morpho") {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only provider=morpho")
 	}
 	markets, err := c.fetchMarkets(ctx, chain, asset)
 	if err != nil {

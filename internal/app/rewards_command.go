@@ -26,7 +26,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	const expectedIntent = "claim_rewards"
 
 	type claimArgs struct {
-		protocol            string
+		provider            string
 		chainArg            string
 		fromAddress         string
 		recipient           string
@@ -52,7 +52,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 			amount = "max"
 		}
 		return s.actionBuilderRegistry().BuildRewardsClaimAction(ctx, actionbuilder.RewardsClaimRequest{
-			Protocol:            args.protocol,
+			Provider:            args.provider,
 			Chain:               chain,
 			Sender:              args.fromAddress,
 			Recipient:           args.recipient,
@@ -90,7 +90,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.protocol, "protocol", "", "Rewards protocol (aave)")
+	planCmd.Flags().StringVar(&plan.provider, "provider", "", "Rewards provider (aave)")
 	planCmd.Flags().StringVar(&plan.chainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.fromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
@@ -105,7 +105,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("assets")
 	_ = planCmd.MarkFlagRequired("reward-token")
-	_ = planCmd.MarkFlagRequired("protocol")
+	_ = planCmd.MarkFlagRequired("provider")
 
 	var run claimArgs
 	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
@@ -160,7 +160,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Rewards protocol (aave)")
+	runCmd.Flags().StringVar(&run.provider, "provider", "", "Rewards provider (aave)")
 	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
 	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().StringVar(&run.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
@@ -184,7 +184,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("assets")
 	_ = runCmd.MarkFlagRequired("reward-token")
-	_ = runCmd.MarkFlagRequired("protocol")
+	_ = runCmd.MarkFlagRequired("provider")
 
 	var submitActionID string
 	var submitSimulate bool
@@ -292,7 +292,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	const expectedIntent = "compound_rewards"
 
 	type compoundArgs struct {
-		protocol            string
+		provider            string
 		chainArg            string
 		fromAddress         string
 		recipient           string
@@ -320,7 +320,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 			return execution.Action{}, clierr.New(clierr.CodeUsage, "--amount is required")
 		}
 		return s.actionBuilderRegistry().BuildRewardsCompoundAction(ctx, actionbuilder.RewardsCompoundRequest{
-			Protocol:            args.protocol,
+			Provider:            args.provider,
 			Chain:               chain,
 			Sender:              args.fromAddress,
 			Recipient:           args.recipient,
@@ -360,7 +360,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.protocol, "protocol", "", "Rewards protocol (aave)")
+	planCmd.Flags().StringVar(&plan.provider, "provider", "", "Rewards provider (aave)")
 	planCmd.Flags().StringVar(&plan.chainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.fromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
@@ -378,7 +378,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("assets")
 	_ = planCmd.MarkFlagRequired("reward-token")
 	_ = planCmd.MarkFlagRequired("amount")
-	_ = planCmd.MarkFlagRequired("protocol")
+	_ = planCmd.MarkFlagRequired("provider")
 
 	var run compoundArgs
 	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
@@ -433,7 +433,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Rewards protocol (aave)")
+	runCmd.Flags().StringVar(&run.provider, "provider", "", "Rewards provider (aave)")
 	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
 	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().StringVar(&run.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
@@ -460,7 +460,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	_ = runCmd.MarkFlagRequired("assets")
 	_ = runCmd.MarkFlagRequired("reward-token")
 	_ = runCmd.MarkFlagRequired("amount")
-	_ = runCmd.MarkFlagRequired("protocol")
+	_ = runCmd.MarkFlagRequired("provider")
 
 	var submitActionID string
 	var submitSimulate bool
