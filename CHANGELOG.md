@@ -22,7 +22,7 @@ Format:
 - Fixed `swap quote --provider uniswap` live quote compatibility by adding required request fields (`swapper`, `autoSlippage`) and accepting string-encoded `gasFeeUSD` values from Trade API responses.
 
 ### Docs
-- None yet.
+- Release pipeline now syncs `docs-live` to each `v*` tag so Mintlify production docs can track the latest release instead of unreleased `main`.
 
 ### Security
 - None yet.
