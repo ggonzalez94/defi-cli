@@ -32,6 +32,12 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: sync docs-live branch to release tag
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git push origin "${GITHUB_SHA}:refs/heads/docs-live" --force
+
       - name: upload install marker
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

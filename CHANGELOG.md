@@ -19,7 +19,7 @@ Format:
 - None yet.
 
 ### Docs
-- None yet.
+- Release pipeline now syncs `docs-live` to each `v*` tag so Mintlify production docs can track the latest release instead of unreleased `main`.
 
 ### Security
 - None yet.
