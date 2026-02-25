@@ -17,9 +17,10 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
-const defaultBase = "https://app.across.to/api"
+const defaultBase = registry.AcrossBaseURL
 
 type Client struct {
 	http    *httpx.Client
@@ -213,7 +214,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "across swap transaction chain does not match source chain")
 	}
 
-	rpcURL, err := execution.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
+	rpcURL, err := registry.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}
@@ -267,7 +268,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		ExpectedOutputs: map[string]string{
 			"to_amount_min":                firstNonEmpty(resp.MinOutputAmount, resp.ExpectedOutputAmount, resp.Steps.Bridge.OutputAmount),
 			"settlement_provider":          "across",
-			"settlement_status_endpoint":   c.baseURL + "/deposit/status",
+			"settlement_status_endpoint":   registry.AcrossSettlementURL,
 			"settlement_origin_chain":      strconv.FormatInt(req.FromChain.EVMChainID, 10),
 			"settlement_recipient":         common.HexToAddress(recipient).Hex(),
 			"settlement_destination_chain": strconv.FormatInt(req.ToChain.EVMChainID, 10),

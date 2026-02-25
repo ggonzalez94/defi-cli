@@ -109,7 +109,8 @@ defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset 
 Swap execution flow (local signer):
 
 ```bash
-export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex  # chmod 600
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
+# or pass --private-key 0x... on run/submit commands for one-off usage
 
 # 1) Plan only
 defi swap plan \
@@ -132,6 +133,9 @@ defi swap run \
   --results-only
 ```
 
+`swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `lend`, `rewards`).
+For bridge flows, `--rpc-url` applies to the source-chain execution RPC.
+
 Execution command surface:
 
 - `swap plan|run|submit|status`
@@ -139,7 +143,7 @@ Execution command surface:
 - `approvals plan|run|submit|status`
 - `lend supply|withdraw|borrow|repay plan|run|submit|status` (protocol: `aave|morpho`)
 - `rewards claim|compound plan|run|submit|status` (protocol: `aave`)
-- `actions list|status`
+- `actions list|show`
 
 ## Command API Key Requirements
 
@@ -178,13 +182,22 @@ If a keyed provider is used without a key, CLI exits with code `10`.
 
 Execution `run`/`submit` commands currently support a local key signer.
 
-Key env inputs (in precedence order when `--key-source auto`):
+Key input precedence:
+
+- `--private-key` (hex string, one-off override; less safe)
+- env/file/keystore inputs below (when `--private-key` is not provided)
+
+Key env/file inputs (in precedence order when `--key-source auto` and `--private-key` is unset):
 
 - `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
-- `DEFI_PRIVATE_KEY_FILE` (preferred; file must be `0600` or stricter)
+- `DEFI_PRIVATE_KEY_FILE` (preferred explicit key-file path)
+- default key file: `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex` when `XDG_CONFIG_HOME` is set)
 - `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
 
 You can force source selection with `--key-source env|file|keystore`.
+
+`run` commands default sender to the loaded signer address; when `--from-address` is provided, it must match the signer.
+`submit` commands support optional `--from-address` as an explicit signer-address guard.
 
 ## Config (Optional)
 
@@ -217,10 +230,18 @@ execution:
   actions_path: ~/.cache/defi/actions.db
   actions_lock_path: ~/.cache/defi/actions.lock
 providers:
-  taikoswap:
-    mainnet_rpc: https://rpc.mainnet.taiko.xyz
-    hoodi_rpc: https://rpc.hoodi.taiko.xyz
+  uniswap:
+    api_key_env: DEFI_UNISWAP_API_KEY
 ```
+
+`swap quote` (on-chain quote providers) and execution `plan`/`run` `--rpc-url` flags override chain default RPCs for that invocation.
+`submit`/`status` commands use stored per-step RPC URLs from the persisted action.
+
+## Execution Metadata Locations (Implementers)
+
+- `internal/registry`: canonical execution endpoints/contracts/ABI fragments and default chain RPC map used when no `--rpc-url` is provided.
+- `internal/providers/*/client.go`: provider quote/read API base URLs and external source URLs.
+- `internal/id/id.go`: bootstrap token symbol/address registry used for deterministic symbol parsing.
 
 ## Cache Policy
 
@@ -230,7 +251,7 @@ providers:
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|status`) bypass cache reads/writes.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show`) bypass cache reads/writes.
 
 ## Caveats
 
@@ -249,6 +270,9 @@ providers:
 - LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
+- Swap execution validates `--from-address` and `--recipient` as EVM hex addresses before planning transactions.
+- Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `run` / `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
 - Provider/protocol selection is explicit for multi-provider flows; pass `--provider` or `--protocol` (no implicit defaults).

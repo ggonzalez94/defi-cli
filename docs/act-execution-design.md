@@ -23,7 +23,7 @@ Execution is integrated inside existing domain commands (for example `swap`, `br
 | Lend | `lend <supply|withdraw|borrow|repay> plan|run|submit|status` | `--protocol` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
 | Rewards | `rewards <claim|compound> plan|run|submit|status` | `--protocol` required | `aave` execution |
 | Approvals | `approvals plan|run|submit|status` | no provider selector | native ERC-20 approval execution |
-| Action inspection | `actions list|status` | optional `--status` filter | persisted action inspection |
+| Action inspection | `actions list|show` | optional `--status` filter | persisted action inspection |
 
 Notes:
 
@@ -138,7 +138,7 @@ Tradeoff:
 
 - Domain `status` commands fetch one action.
 - `actions list` gives cross-domain recent actions.
-- `actions status` fetches any action by ID.
+- `actions show` fetches any action by ID.
 
 ## 5. Signing and Key Handling
 
@@ -155,6 +155,7 @@ Supported backend today:
 Key sources:
 
 - `--key-source auto|env|file|keystore`
+- `--private-key` (run/submit one-off override)
 - Environment variables:
   - `DEFI_PRIVATE_KEY`
   - `DEFI_PRIVATE_KEY_FILE`
@@ -164,15 +165,16 @@ Key sources:
 
 `auto` precedence in current code:
 
-1. `DEFI_PRIVATE_KEY`
-2. `DEFI_PRIVATE_KEY_FILE`
-3. `DEFI_KEYSTORE_PATH` (+ password input)
+1. `--private-key` (when provided)
+2. `DEFI_PRIVATE_KEY`
+3. `DEFI_PRIVATE_KEY_FILE`
+4. `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex` when `XDG_CONFIG_HOME` is set; fallback only when file is present)
+5. `DEFI_KEYSTORE_PATH` (+ password input)
 
 Security controls:
 
-- strict secret file permissions (`0600` or stricter) for key files and keystore/password files
-- optional `--confirm-address` signer guard
-- explicit `--from-address` to signer-address match checks in run flows
+- run flows derive sender from signer when omitted; if `--from-address` is provided it must match signer address
+- optional `--from-address` signer-address check in submit flows
 
 Design decision:
 
@@ -184,21 +186,26 @@ Tradeoff:
 
 ## 6. Endpoint, Contract, and ABI Management
 
-Canonical execution metadata currently lives in `internal/registry/execution_data.go`:
+Canonical execution metadata is split under `internal/registry/`:
 
-- Provider endpoint constants (for example `LiFiBaseURL`)
-- Contract address registries:
-  - TaikoSwap contracts by chain
+- `endpoints.go`:
+  - LiFi quote/status endpoints
+  - Across quote/status endpoints
+  - Morpho GraphQL endpoint used by execution planners
+- `rpc.go`:
+  - Default chain RPC map used by execution planners/providers when `--rpc-url` is not set
+- `contracts.go`:
+  - Uniswap V3-compatible contracts by chain (used by TaikoSwap today)
   - Aave PoolAddressesProvider by chain
-- ABI fragments:
+- `abis.go`:
   - ERC-20 minimal
-  - TaikoSwap quoter/router
+  - Uniswap V3 quoter/router
   - Aave pool/rewards/provider
   - Morpho Blue
 
 Important nuance:
 
-- Not all provider endpoints are centralized there yet (for example Across base URL is in provider code).
+- Execution-critical endpoints are centralized; quote-only/read-only provider endpoints may still remain adapter-local.
 
 Design decision:
 
@@ -215,12 +222,13 @@ Core executor: `internal/execution/executor.go`.
 Per step execution flow:
 
 1. Validate RPC URL, target, and chain match.
-2. Optional simulation (`eth_call`) when `--simulate=true`.
-3. Gas estimation (`eth_estimateGas`) with configurable multiplier.
-4. EIP-1559 fee resolution (suggested or overridden by flags).
-5. Nonce resolution from pending state.
-6. Local signing and broadcast.
-7. Receipt polling until success/failure/timeout.
+2. Apply lightweight pre-sign policy checks (approval bounds, TaikoSwap target/selector checks, bridge settlement metadata checks).
+3. Optional simulation (`eth_call`) when `--simulate=true`.
+4. Gas estimation (`eth_estimateGas`) with configurable multiplier.
+5. EIP-1559 fee resolution (suggested or overridden by flags).
+6. Nonce resolution from pending state.
+7. Local signing and broadcast.
+8. Receipt polling until success/failure/timeout.
 
 Bridge-specific consistency:
 
@@ -236,11 +244,12 @@ Context and timeout behavior:
 
 Design decision:
 
-- Simulation defaults to on, and bridge completion requires both source receipt and provider settlement.
+- Simulation defaults to on, bridge completion requires both source receipt and provider settlement, and pre-sign policy checks are fail-closed by default.
 
 Tradeoff:
 
 - Better safety and operational visibility, but slower execution paths and dependence on provider status APIs.
+- Advanced users may need explicit overrides (`--allow-max-approval`, `--unsafe-provider-tx`) for provider-specific edge cases.
 
 Current limitation:
 

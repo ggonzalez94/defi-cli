@@ -144,7 +144,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				morphoProvider := morpho.New(httpClient)
 				kaminoProvider := kamino.New(httpClient)
 				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
-				taikoSwapProvider := taikoswap.New(httpClient, settings.TaikoMainnetRPC, settings.TaikoHoodiRPC)
+				taikoSwapProvider := taikoswap.New()
 				s.marketProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
@@ -695,7 +695,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 func (s *runtimeState) newSwapCommand() *cobra.Command {
 	root := &cobra.Command{Use: "swap", Short: "Swap quote and execution commands"}
 
-	parseSwapRequest := func(chainArg, fromAssetArg, toAssetArg, amountBase, amountDecimal string) (providers.SwapQuoteRequest, error) {
+	parseSwapRequest := func(chainArg, fromAssetArg, toAssetArg, amountBase, amountDecimal, rpcURL string) (providers.SwapQuoteRequest, error) {
 		chain, err := id.ParseChain(chainArg)
 		if err != nil {
 			return providers.SwapQuoteRequest{}, err
@@ -722,11 +722,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			ToAsset:         toAsset,
 			AmountBaseUnits: base,
 			AmountDecimal:   decimal,
+			RPCURL:          strings.TrimSpace(rpcURL),
 		}, nil
 	}
 
 	var quoteProviderArg, quoteChainArg, quoteFromAssetArg, quoteToAssetArg string
-	var quoteAmountBase, quoteAmountDecimal string
+	var quoteAmountBase, quoteAmountDecimal, quoteRPCURL string
 	quoteCmd := &cobra.Command{
 		Use:   "quote",
 		Short: "Get swap quote",
@@ -739,7 +740,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if !ok {
 				return clierr.New(clierr.CodeUnsupported, "unsupported swap provider")
 			}
-			reqStruct, err := parseSwapRequest(quoteChainArg, quoteFromAssetArg, quoteToAssetArg, quoteAmountBase, quoteAmountDecimal)
+			reqStruct, err := parseSwapRequest(quoteChainArg, quoteFromAssetArg, quoteToAssetArg, quoteAmountBase, quoteAmountDecimal, quoteRPCURL)
 			if err != nil {
 				return err
 			}
@@ -750,6 +751,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				"from":     reqStruct.FromAsset.AssetID,
 				"to":       reqStruct.ToAsset.AssetID,
 				"amount":   reqStruct.AmountBaseUnits,
+				"rpc_url":  reqStruct.RPCURL,
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
@@ -765,6 +767,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	quoteCmd.Flags().StringVar(&quoteToAssetArg, "to-asset", "", "Output asset")
 	quoteCmd.Flags().StringVar(&quoteAmountBase, "amount", "", "Amount in base units")
 	quoteCmd.Flags().StringVar(&quoteAmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	quoteCmd.Flags().StringVar(&quoteRPCURL, "rpc-url", "", "RPC URL override for on-chain quote providers")
 	_ = quoteCmd.MarkFlagRequired("chain")
 	_ = quoteCmd.MarkFlagRequired("from-asset")
 	_ = quoteCmd.MarkFlagRequired("to-asset")
@@ -774,6 +777,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var planAmountBase, planAmountDecimal, planFromAddress, planRecipient string
 	var planSlippageBps int64
 	var planSimulate bool
+	var planRPCURL string
 	planCmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Create and persist a swap action plan",
@@ -782,7 +786,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			reqStruct, err := parseSwapRequest(planChainArg, planFromAssetArg, planToAssetArg, planAmountBase, planAmountDecimal)
+			reqStruct, err := parseSwapRequest(planChainArg, planFromAssetArg, planToAssetArg, planAmountBase, planAmountDecimal, "")
 			if err != nil {
 				return err
 			}
@@ -795,6 +799,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				Recipient:   planRecipient,
 				SlippageBps: planSlippageBps,
 				Simulate:    planSimulate,
+				RPCURL:      planRPCURL,
 			})
 			if strings.TrimSpace(providerInfoName) == "" {
 				providerInfoName = providerName
@@ -824,6 +829,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	planCmd.Flags().StringVar(&planRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	planCmd.Flags().Int64Var(&planSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	planCmd.Flags().BoolVar(&planSimulate, "simulate", true, "Include simulation checks during execution")
+	planCmd.Flags().StringVar(&planRPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("from-asset")
 	_ = planCmd.MarkFlagRequired("to-asset")
@@ -834,10 +840,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	var runAmountBase, runAmountDecimal, runFromAddress, runRecipient string
 	var runSlippageBps int64
 	var runSimulate bool
-	var runSigner, runKeySource, runConfirmAddress string
+	var runRPCURL string
+	var runSigner, runKeySource, runPrivateKey string
 	var runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
+	var runAllowMaxApproval, runUnsafeProviderTx bool
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Plan and execute a swap action in one command",
@@ -846,7 +854,11 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			reqStruct, err := parseSwapRequest(runChainArg, runFromAssetArg, runToAssetArg, runAmountBase, runAmountDecimal)
+			reqStruct, err := parseSwapRequest(runChainArg, runFromAssetArg, runToAssetArg, runAmountBase, runAmountDecimal, "")
+			if err != nil {
+				return err
+			}
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, runFromAddress)
 			if err != nil {
 				return err
 			}
@@ -855,10 +867,11 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			defer cancel()
 			start := time.Now()
 			action, providerInfoName, err := s.actionBuilderRegistry().BuildSwapAction(ctx, providerName, "execution", reqStruct, providers.SwapExecutionOptions{
-				Sender:      runFromAddress,
+				Sender:      runSenderAddress,
 				Recipient:   runRecipient,
 				SlippageBps: runSlippageBps,
 				Simulate:    runSimulate,
+				RPCURL:      runRPCURL,
 			})
 			if strings.TrimSpace(providerInfoName) == "" {
 				providerInfoName = providerName
@@ -874,17 +887,16 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
-
-			txSigner, err := newExecutionSigner(runSigner, runKeySource, runConfirmAddress)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if !strings.EqualFold(strings.TrimSpace(runFromAddress), txSigner.Address().Hex()) {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			execOpts, err := parseExecuteOptions(runSimulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				runSimulate,
+				runPollInterval,
+				runStepTimeout,
+				runGasMultiplier,
+				runMaxFeeGwei,
+				runMaxPriorityFeeGwei,
+				runAllowMaxApproval,
+				runUnsafeProviderTx,
+			)
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -904,30 +916,33 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	runCmd.Flags().StringVar(&runToAssetArg, "to-asset", "", "Output asset")
 	runCmd.Flags().StringVar(&runAmountBase, "amount", "", "Amount in base units")
 	runCmd.Flags().StringVar(&runAmountDecimal, "amount-decimal", "", "Amount in decimal units")
-	runCmd.Flags().StringVar(&runFromAddress, "from-address", "", "Sender EOA address")
+	runCmd.Flags().StringVar(&runFromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().StringVar(&runRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	runCmd.Flags().Int64Var(&runSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	runCmd.Flags().BoolVar(&runSimulate, "simulate", true, "Run preflight simulation before submission")
+	runCmd.Flags().StringVar(&runRPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 	_ = runCmd.MarkFlagRequired("chain")
 	_ = runCmd.MarkFlagRequired("from-asset")
 	_ = runCmd.MarkFlagRequired("to-asset")
-	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("provider")
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitConfirmAddress string
+	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress string
 	var submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
+	var submitAllowMaxApproval, submitUnsafeProviderTx bool
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute a previously planned swap action",
@@ -950,14 +965,26 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
 
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitConfirmAddress)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
 			if err != nil {
 				return err
+			}
+			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
-			execOpts, err := parseExecuteOptions(submitSimulate, submitPollInterval, submitStepTimeout, submitGasMultiplier, submitMaxFeeGwei, submitMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				submitSimulate,
+				submitPollInterval,
+				submitStepTimeout,
+				submitGasMultiplier,
+				submitMaxFeeGwei,
+				submitMaxPriorityFeeGwei,
+				submitAllowMaxApproval,
+				submitUnsafeProviderTx,
+			)
 			if err != nil {
 				return err
 			}
@@ -971,12 +998,15 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 
 	var statusActionID string
 	statusCmd := &cobra.Command{
@@ -1008,7 +1038,16 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 }
 
 func (s *runtimeState) newActionsCommand() *cobra.Command {
-	root := &cobra.Command{Use: "actions", Short: "Execution action inspection commands"}
+	root := &cobra.Command{
+		Use:   "actions",
+		Short: "Execution action inspection commands",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return cmd.Help()
+			}
+			return clierr.New(clierr.CodeUsage, fmt.Sprintf("unknown actions subcommand %q", args[0]))
+		},
+	}
 
 	var listStatus string
 	var listLimit int
@@ -1029,29 +1068,33 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 	listCmd.Flags().StringVar(&listStatus, "status", "", "Optional action status filter")
 	listCmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum actions to return")
 
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get action details by action id",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			actionID, err := resolveActionID(statusActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			item, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), item, nil, cacheMetaBypass(), nil, false)
+	lookupAction := func(cmd *cobra.Command, actionIDArg string) error {
+		actionID, err := resolveActionID(actionIDArg)
+		if err != nil {
+			return err
+		}
+		if err := s.ensureActionStore(); err != nil {
+			return err
+		}
+		item, err := s.actionStore.Get(actionID)
+		if err != nil {
+			return clierr.Wrap(clierr.CodeUsage, "load action", err)
+		}
+		return s.emitSuccess(trimRootPath(cmd.CommandPath()), item, nil, cacheMetaBypass(), nil, false)
+	}
+
+	var showActionID string
+	showCmd := &cobra.Command{
+		Use:   "show",
+		Short: "Show action details by action id",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return lookupAction(cmd, showActionID)
 		},
 	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
+	showCmd.Flags().StringVar(&showActionID, "action-id", "", "Action identifier")
 
 	root.AddCommand(listCmd)
-	root.AddCommand(statusCmd)
+	root.AddCommand(showCmd)
 	return root
 }
 
@@ -1669,7 +1712,7 @@ func normalizeCommandPath(commandPath string) string {
 
 func isExecutionCommandPath(path string) bool {
 	switch path {
-	case "actions", "actions list", "actions status":
+	case "actions", "actions list", "actions show":
 		return true
 	}
 	parts := strings.Fields(path)
@@ -1732,7 +1775,7 @@ func resolveActionID(actionID string) (string, error) {
 	return actionID, nil
 }
 
-func newExecutionSigner(signerBackend, keySource, confirmAddress string) (execsigner.Signer, error) {
+func newExecutionSigner(signerBackend, keySource, privateKey string) (execsigner.Signer, error) {
 	signerBackend = strings.ToLower(strings.TrimSpace(signerBackend))
 	if signerBackend == "" {
 		signerBackend = "local"
@@ -1740,17 +1783,33 @@ func newExecutionSigner(signerBackend, keySource, confirmAddress string) (execsi
 	if signerBackend != "local" {
 		return nil, clierr.New(clierr.CodeUnsupported, "only local signer is supported")
 	}
-	localSigner, err := execsigner.NewLocalSignerFromEnv(keySource)
+	localSigner, err := execsigner.NewLocalSignerFromInputs(keySource, privateKey)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeSigner, "initialize local signer", err)
-	}
-	if strings.TrimSpace(confirmAddress) != "" && !strings.EqualFold(confirmAddress, localSigner.Address().Hex()) {
-		return nil, clierr.New(clierr.CodeSigner, "signer address does not match --confirm-address")
 	}
 	return localSigner, nil
 }
 
-func parseExecuteOptions(simulate bool, pollInterval, stepTimeout string, gasMultiplier float64, maxFeeGwei, maxPriorityFeeGwei string) (execution.ExecuteOptions, error) {
+func resolveRunSignerAndFromAddress(signerBackend, keySource, privateKey, fromAddress string) (execsigner.Signer, string, error) {
+	txSigner, err := newExecutionSigner(signerBackend, keySource, privateKey)
+	if err != nil {
+		return nil, "", err
+	}
+	signerAddress := txSigner.Address().Hex()
+	if strings.TrimSpace(fromAddress) != "" && !strings.EqualFold(strings.TrimSpace(fromAddress), signerAddress) {
+		return nil, "", clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
+	}
+	return txSigner, signerAddress, nil
+}
+
+func parseExecuteOptions(
+	simulate bool,
+	pollInterval, stepTimeout string,
+	gasMultiplier float64,
+	maxFeeGwei, maxPriorityFeeGwei string,
+	allowMaxApproval bool,
+	unsafeProviderTx bool,
+) (execution.ExecuteOptions, error) {
 	opts := execution.DefaultExecuteOptions()
 	opts.Simulate = simulate
 	if strings.TrimSpace(pollInterval) != "" {
@@ -1773,12 +1832,14 @@ func parseExecuteOptions(simulate bool, pollInterval, stepTimeout string, gasMul
 		}
 		opts.StepTimeout = d
 	}
-	if gasMultiplier <= 0 {
-		return execution.ExecuteOptions{}, clierr.New(clierr.CodeUsage, "--gas-multiplier must be > 0")
+	if gasMultiplier <= 1 {
+		return execution.ExecuteOptions{}, clierr.New(clierr.CodeUsage, "--gas-multiplier must be > 1")
 	}
 	opts.GasMultiplier = gasMultiplier
 	opts.MaxFeeGwei = strings.TrimSpace(maxFeeGwei)
 	opts.MaxPriorityFeeGwei = strings.TrimSpace(maxPriorityFeeGwei)
+	opts.AllowMaxApproval = allowMaxApproval
+	opts.UnsafeProviderTx = unsafeProviderTx
 	return opts, nil
 }
 

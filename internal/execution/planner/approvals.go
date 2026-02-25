@@ -28,9 +28,15 @@ func BuildApprovalAction(req ApprovalRequest) (execution.Action, error) {
 	if sender == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "approval requires sender address")
 	}
+	if !common.IsHexAddress(sender) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "approval sender must be a valid EVM address")
+	}
 	spender := strings.TrimSpace(req.Spender)
 	if spender == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "approval requires spender address")
+	}
+	if !common.IsHexAddress(spender) {
+		return execution.Action{}, clierr.New(clierr.CodeUsage, "approval spender must be a valid EVM address")
 	}
 	if !common.IsHexAddress(req.Asset.Address) {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "approval requires ERC20 token address")
@@ -40,7 +46,7 @@ func BuildApprovalAction(req ApprovalRequest) (execution.Action, error) {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "approval amount must be a positive integer in base units")
 	}
 
-	rpcURL, err := execution.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
+	rpcURL, err := registry.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}

@@ -108,17 +108,25 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("protocol")
 
 	var run claimArgs
-	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
+	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
+	var runAllowMaxApproval, runUnsafeProviderTx bool
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Plan and execute a rewards-claim action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, run.fromAddress)
+			if err != nil {
+				return err
+			}
+			runArgs := run
+			runArgs.fromAddress = runSenderAddress
+
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := buildAction(ctx, run)
+			action, err := buildAction(ctx, runArgs)
 			statuses := []model.ProviderStatus{{Name: "aave", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
@@ -130,16 +138,16 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
-			txSigner, err := newExecutionSigner(runSigner, runKeySource, runConfirmAddress)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if !strings.EqualFold(strings.TrimSpace(run.fromAddress), txSigner.Address().Hex()) {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			execOpts, err := parseExecuteOptions(run.simulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				run.simulate,
+				runPollInterval,
+				runStepTimeout,
+				runGasMultiplier,
+				runMaxFeeGwei,
+				runMaxPriorityFeeGwei,
+				runAllowMaxApproval,
+				runUnsafeProviderTx,
+			)
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -154,7 +162,7 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	}
 	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Rewards protocol (aave)")
 	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
-	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address")
+	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().StringVar(&run.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	runCmd.Flags().StringVar(&run.assetsCSV, "assets", "", "Comma-separated rewards source asset addresses")
 	runCmd.Flags().StringVar(&run.rewardToken, "reward-token", "", "Reward token address")
@@ -165,23 +173,25 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	runCmd.Flags().StringVar(&run.poolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 	_ = runCmd.MarkFlagRequired("chain")
-	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("assets")
 	_ = runCmd.MarkFlagRequired("reward-token")
 	_ = runCmd.MarkFlagRequired("protocol")
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
+	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
+	var submitAllowMaxApproval, submitUnsafeProviderTx bool
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing rewards-claim action",
@@ -203,14 +213,26 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitConfirmAddress)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
 			if err != nil {
 				return err
+			}
+			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
-			execOpts, err := parseExecuteOptions(submitSimulate, submitPollInterval, submitStepTimeout, submitGasMultiplier, submitMaxFeeGwei, submitMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				submitSimulate,
+				submitPollInterval,
+				submitStepTimeout,
+				submitGasMultiplier,
+				submitMaxFeeGwei,
+				submitMaxPriorityFeeGwei,
+				submitAllowMaxApproval,
+				submitUnsafeProviderTx,
+			)
 			if err != nil {
 				return err
 			}
@@ -224,12 +246,15 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 
 	var statusActionID string
 	statusCmd := &cobra.Command{
@@ -356,17 +381,25 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("protocol")
 
 	var run compoundArgs
-	var runSigner, runKeySource, runConfirmAddress, runPollInterval, runStepTimeout string
+	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
 	var runGasMultiplier float64
 	var runMaxFeeGwei, runMaxPriorityFeeGwei string
+	var runAllowMaxApproval, runUnsafeProviderTx bool
 	runCmd := &cobra.Command{
 		Use:   "run",
 		Short: "Plan and execute a rewards-compound action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, run.fromAddress)
+			if err != nil {
+				return err
+			}
+			runArgs := run
+			runArgs.fromAddress = runSenderAddress
+
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := buildAction(ctx, run)
+			action, err := buildAction(ctx, runArgs)
 			statuses := []model.ProviderStatus{{Name: "aave", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
@@ -378,16 +411,16 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 			if err := s.actionStore.Save(action); err != nil {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
-			txSigner, err := newExecutionSigner(runSigner, runKeySource, runConfirmAddress)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if !strings.EqualFold(strings.TrimSpace(run.fromAddress), txSigner.Address().Hex()) {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			execOpts, err := parseExecuteOptions(run.simulate, runPollInterval, runStepTimeout, runGasMultiplier, runMaxFeeGwei, runMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				run.simulate,
+				runPollInterval,
+				runStepTimeout,
+				runGasMultiplier,
+				runMaxFeeGwei,
+				runMaxPriorityFeeGwei,
+				runAllowMaxApproval,
+				runUnsafeProviderTx,
+			)
 			if err != nil {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
@@ -402,7 +435,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	}
 	runCmd.Flags().StringVar(&run.protocol, "protocol", "", "Rewards protocol (aave)")
 	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
-	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address")
+	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
 	runCmd.Flags().StringVar(&run.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	runCmd.Flags().StringVar(&run.onBehalfOf, "on-behalf-of", "", "Aave onBehalfOf address for compounding supply")
 	runCmd.Flags().StringVar(&run.assetsCSV, "assets", "", "Comma-separated rewards source asset addresses")
@@ -415,14 +448,15 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	runCmd.Flags().StringVar(&run.poolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
 	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
 	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 	_ = runCmd.MarkFlagRequired("chain")
-	_ = runCmd.MarkFlagRequired("from-address")
 	_ = runCmd.MarkFlagRequired("assets")
 	_ = runCmd.MarkFlagRequired("reward-token")
 	_ = runCmd.MarkFlagRequired("amount")
@@ -430,9 +464,10 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 
 	var submitActionID string
 	var submitSimulate bool
-	var submitSigner, submitKeySource, submitConfirmAddress, submitPollInterval, submitStepTimeout string
+	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress, submitPollInterval, submitStepTimeout string
 	var submitGasMultiplier float64
 	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
+	var submitAllowMaxApproval, submitUnsafeProviderTx bool
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing rewards-compound action",
@@ -454,14 +489,26 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitConfirmAddress)
+			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
 			if err != nil {
 				return err
+			}
+			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
-			execOpts, err := parseExecuteOptions(submitSimulate, submitPollInterval, submitStepTimeout, submitGasMultiplier, submitMaxFeeGwei, submitMaxPriorityFeeGwei)
+			execOpts, err := parseExecuteOptions(
+				submitSimulate,
+				submitPollInterval,
+				submitStepTimeout,
+				submitGasMultiplier,
+				submitMaxFeeGwei,
+				submitMaxPriorityFeeGwei,
+				submitAllowMaxApproval,
+				submitUnsafeProviderTx,
+			)
 			if err != nil {
 				return err
 			}
@@ -475,12 +522,15 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
 	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
 	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitConfirmAddress, "confirm-address", "", "Require signer address to match this value")
+	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
 	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
 	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
 	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
 	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
 	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
 
 	var statusActionID string
 	statusCmd := &cobra.Command{

@@ -215,7 +215,7 @@ func BuildAaveRewardsClaimAction(ctx context.Context, req AaveRewardsClaimReques
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "rewards claim requires at least one asset in --assets")
 	}
 
-	rpcURL, err := execution.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
+	rpcURL, err := registry.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}
@@ -290,7 +290,7 @@ func BuildAaveRewardsCompoundAction(ctx context.Context, req AaveRewardsCompound
 	claimAction.IntentType = "compound_rewards"
 	claimAction.Metadata["compound"] = true
 
-	rpcURL, err := execution.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
+	rpcURL, err := registry.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}
@@ -363,7 +363,7 @@ func normalizeLendInputs(req AaveLendRequest) (common.Address, common.Address, c
 	if !ok || amount.Sign() <= 0 {
 		return common.Address{}, common.Address{}, common.Address{}, nil, "", common.Address{}, clierr.New(clierr.CodeUsage, "lend amount must be a positive integer in base units")
 	}
-	rpcURL, err := execution.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
+	rpcURL, err := registry.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
 	if err != nil {
 		return common.Address{}, common.Address{}, common.Address{}, nil, "", common.Address{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
 	}
