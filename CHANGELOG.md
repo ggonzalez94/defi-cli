@@ -13,6 +13,23 @@ Format:
 - None yet.
 
 ### Changed
+- None yet.
+
+### Fixed
+- None yet.
+
+### Docs
+- None yet.
+
+### Security
+- None yet.
+
+## [v0.3.1] - 2026-02-25
+
+### Added
+- None yet.
+
+### Changed
 - Added `swap quote --slippage-pct` to optionally override Uniswap max slippage percent; default behavior remains provider auto slippage.
 - Added `swap quote --type` with `exact-input|exact-output` modes plus explicit `--amount-out`/`--amount-out-decimal` for exact-output requests.
 - Swap quote rows now include `trade_type`; `uniswap` supports `exact-output` while other swap providers currently return `unsupported` for non-default types.
@@ -113,7 +130,8 @@ Format:
 ### Changed
 - Project/module path migrated to `github.com/ggonzalez94/defi-cli`.
 
-[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.1...HEAD
+[v0.3.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.1...v0.2.0
 [v0.1.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.0...v0.1.1
