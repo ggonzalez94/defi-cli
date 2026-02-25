@@ -77,10 +77,19 @@ type SwapProvider interface {
 	QuoteSwap(ctx context.Context, req SwapQuoteRequest) (model.SwapQuote, error)
 }
 
+type SwapTradeType string
+
+const (
+	SwapTradeTypeExactInput  SwapTradeType = "exact-input"
+	SwapTradeTypeExactOutput SwapTradeType = "exact-output"
+)
+
 type SwapQuoteRequest struct {
 	Chain           id.Chain
 	FromAsset       id.Asset
 	ToAsset         id.Asset
 	AmountBaseUnits string
 	AmountDecimal   string
+	TradeType       SwapTradeType
+	SlippagePct     *float64
 }

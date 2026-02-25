@@ -59,11 +59,19 @@ defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000
 
 Flags:
 
-- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee`, default: `1inch` on EVM, `jupiter` on Solana)
+- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee`, default: `1inch` for EVM exact-input, `uniswap` for EVM exact-output, `jupiter` for Solana exact-input)
 - `--chain string` required
 - `--from-asset string` required
 - `--to-asset string` required
-- `--amount string` or `--amount-decimal string`
+- `--type string` (`exact-input|exact-output`, default `exact-input`)
+- `--amount string` or `--amount-decimal string` (for `--type exact-input`)
+- `--amount-out string` or `--amount-out-decimal string` (for `--type exact-output`)
+- `--slippage-pct float` optional (Uniswap only; default uses provider auto slippage)
+
+Type support:
+
+- `uniswap`: `exact-input`, `exact-output`
+- `1inch`, `jupiter`, `fibrous`, `bungee`: `exact-input` only
 
 Auth requirements:
 

@@ -55,6 +55,14 @@ type routeResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	tradeType := req.TradeType
+	if tradeType == "" {
+		tradeType = providers.SwapTradeTypeExactInput
+	}
+	if tradeType != providers.SwapTradeTypeExactInput {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "fibrous supports only --type exact-input")
+	}
+
 	chainSlug, ok := chainSlugs[req.Chain.EVMChainID]
 	if !ok {
 		supported := make([]string, 0, len(chainSlugs))
@@ -98,6 +106,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		ChainID:     req.Chain.CAIP2,
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
+		TradeType:   string(tradeType),
 		InputAmount: model.AmountInfo{
 			AmountBaseUnits: req.AmountBaseUnits,
 			AmountDecimal:   req.AmountDecimal,

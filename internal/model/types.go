@@ -229,6 +229,7 @@ type SwapQuote struct {
 	ChainID         string     `json:"chain_id"`
 	FromAssetID     string     `json:"from_asset_id"`
 	ToAssetID       string     `json:"to_asset_id"`
+	TradeType       string     `json:"trade_type"`
 	InputAmount     AmountInfo `json:"input_amount"`
 	EstimatedOut    AmountInfo `json:"estimated_out"`
 	EstimatedGasUSD float64    `json:"estimated_gas_usd"`

@@ -80,6 +80,9 @@ func TestQuoteSwapParsesJupiterResponse(t *testing.T) {
 	if got.Provider != "jupiter" {
 		t.Fatalf("unexpected provider: %+v", got)
 	}
+	if got.TradeType != "exact-input" {
+		t.Fatalf("unexpected trade type: %s", got.TradeType)
+	}
 	if got.EstimatedOut.AmountBaseUnits != "1995000" {
 		t.Fatalf("unexpected amount out: %+v", got.EstimatedOut)
 	}
@@ -88,5 +91,24 @@ func TestQuoteSwapParsesJupiterResponse(t *testing.T) {
 	}
 	if got.Route != "Meteora > Orca" {
 		t.Fatalf("unexpected route: %s", got.Route)
+	}
+}
+
+func TestQuoteSwapRejectsExactOutput(t *testing.T) {
+	chain, _ := id.ParseChain("solana")
+	assetIn, _ := id.ParseAsset("USDC", chain)
+	assetOut, _ := id.ParseAsset("USDT", chain)
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       assetIn,
+		ToAsset:         assetOut,
+		AmountBaseUnits: "1000000",
+		AmountDecimal:   "1",
+		TradeType:       providers.SwapTradeTypeExactOutput,
+	})
+	if err == nil {
+		t.Fatal("expected unsupported exact-output error")
 	}
 }

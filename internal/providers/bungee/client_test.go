@@ -121,6 +121,9 @@ func TestQuoteSwapHyperEVM(t *testing.T) {
 	if got.Provider != "bungee" {
 		t.Fatalf("unexpected provider: %s", got.Provider)
 	}
+	if got.TradeType != "exact-input" {
+		t.Fatalf("unexpected trade type: %s", got.TradeType)
+	}
 	if got.ChainID != chain.CAIP2 {
 		t.Fatalf("unexpected chain id: %s", got.ChainID)
 	}
@@ -237,6 +240,25 @@ func TestQuoteHandlesUnsuccessfulEnvelope(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected quote error")
+	}
+}
+
+func TestQuoteSwapRejectsExactOutput(t *testing.T) {
+	chain, _ := id.ParseChain("ethereum")
+	assetFrom, _ := id.ParseAsset("USDC", chain)
+	assetTo, _ := id.ParseAsset("USDT", chain)
+
+	c := NewSwap(httpx.New(time.Second, 0), "", "")
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       assetFrom,
+		ToAsset:         assetTo,
+		AmountBaseUnits: "1000000",
+		AmountDecimal:   "1",
+		TradeType:       providers.SwapTradeTypeExactOutput,
+	})
+	if err == nil {
+		t.Fatal("expected unsupported exact-output error")
 	}
 }
 

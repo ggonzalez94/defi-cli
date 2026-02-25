@@ -614,6 +614,359 @@ func TestSwapDefaultsToOneInchForEVM(t *testing.T) {
 	}
 }
 
+func TestSwapSlippageOverridePassedToProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "uniswap",
+		"--chain", "1",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--amount", "1000000",
+		"--slippage-pct", "1.25",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if uniswap.lastReq.SlippagePct == nil {
+		t.Fatal("expected slippage override to be passed to provider")
+	}
+	if *uniswap.lastReq.SlippagePct != 1.25 {
+		t.Fatalf("expected slippage=1.25, got %v", *uniswap.lastReq.SlippagePct)
+	}
+}
+
+func TestSwapSlippageOverrideValidation(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "uniswap",
+		"--chain", "1",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--amount", "1000000",
+		"--slippage-pct", "0",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected validation error, stderr=%s", stderr.String())
+	}
+	if uniswap.calls != 0 {
+		t.Fatalf("expected provider not to be called on invalid slippage, got %d calls", uniswap.calls)
+	}
+}
+
+func TestSwapExactOutputPassedToProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "uniswap",
+		"--chain", "1",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--type", "exact-output",
+		"--amount-out", "1000000000000000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if uniswap.lastReq.TradeType != providers.SwapTradeTypeExactOutput {
+		t.Fatalf("expected trade type exact-output, got %s", uniswap.lastReq.TradeType)
+	}
+	if uniswap.lastReq.AmountBaseUnits != "1000000000000000000" {
+		t.Fatalf("unexpected amount base units: %s", uniswap.lastReq.AmountBaseUnits)
+	}
+	if uniswap.lastReq.AmountDecimal != "1" {
+		t.Fatalf("unexpected amount decimal: %s", uniswap.lastReq.AmountDecimal)
+	}
+}
+
+func TestSwapExactOutputDefaultsToUniswapOnEVM(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch":   oneinch,
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "base",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--type", "exact-output",
+		"--amount-out", "1000000000000000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if oneinch.calls != 0 {
+		t.Fatalf("expected 1inch not to be called, got %d calls", oneinch.calls)
+	}
+	if uniswap.calls != 1 {
+		t.Fatalf("expected uniswap to be called once, got %d calls", uniswap.calls)
+	}
+	if uniswap.lastReq.TradeType != providers.SwapTradeTypeExactOutput {
+		t.Fatalf("expected trade type exact-output, got %s", uniswap.lastReq.TradeType)
+	}
+}
+
+func TestSwapExactOutputWithoutProviderRejectedOnSolana(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	jupiter := &fakeSwapProvider{name: "jupiter"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"jupiter": jupiter,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--chain", "solana",
+		"--from-asset", "USDC",
+		"--to-asset", "SOL",
+		"--type", "exact-output",
+		"--amount-out", "1000000",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected unsupported error, stderr=%s", stderr.String())
+	}
+	if jupiter.calls != 0 {
+		t.Fatalf("expected jupiter not to be called, got %d calls", jupiter.calls)
+	}
+}
+
+func TestSwapExactOutputRequiresOutputAmount(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "uniswap",
+		"--chain", "1",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--type", "exact-output",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected validation error, stderr=%s", stderr.String())
+	}
+	if uniswap.calls != 0 {
+		t.Fatalf("expected provider not to be called on invalid amount flags, got %d calls", uniswap.calls)
+	}
+}
+
+func TestSwapTypeValidation(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	uniswap := &fakeSwapProvider{name: "uniswap"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"uniswap": uniswap,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "uniswap",
+		"--chain", "1",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--type", "limit-order",
+		"--amount", "1000000",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected validation error, stderr=%s", stderr.String())
+	}
+	if uniswap.calls != 0 {
+		t.Fatalf("expected provider not to be called on invalid type, got %d calls", uniswap.calls)
+	}
+}
+
+func TestSwapSlippageOverrideRejectedForNonUniswap(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	oneinch := &fakeSwapProvider{name: "1inch"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"1inch": oneinch,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "1inch",
+		"--chain", "1",
+		"--from-asset", "USDC",
+		"--to-asset", "DAI",
+		"--amount", "1000000",
+		"--slippage-pct", "1.0",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected validation error, stderr=%s", stderr.String())
+	}
+	if oneinch.calls != 0 {
+		t.Fatalf("expected provider not to be called with unsupported slippage override, got %d calls", oneinch.calls)
+	}
+}
+
 type fakeMarketProvider struct {
 	categories          []model.ProtocolCategory
 	chainAssets         []model.ChainAssetTVL
@@ -652,8 +1005,9 @@ func (f fakeMarketProvider) ProtocolsCategories(context.Context) ([]model.Protoc
 }
 
 type fakeSwapProvider struct {
-	name  string
-	calls int
+	name    string
+	calls   int
+	lastReq providers.SwapQuoteRequest
 }
 
 func (f *fakeSwapProvider) Info() model.ProviderInfo {
@@ -667,11 +1021,17 @@ func (f *fakeSwapProvider) Info() model.ProviderInfo {
 
 func (f *fakeSwapProvider) QuoteSwap(_ context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
 	f.calls++
+	f.lastReq = req
+	tradeType := req.TradeType
+	if tradeType == "" {
+		tradeType = providers.SwapTradeTypeExactInput
+	}
 	return model.SwapQuote{
 		Provider:    f.name,
 		ChainID:     req.Chain.CAIP2,
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
+		TradeType:   string(tradeType),
 		InputAmount: model.AmountInfo{
 			AmountBaseUnits: req.AmountBaseUnits,
 			AmountDecimal:   req.AmountDecimal,

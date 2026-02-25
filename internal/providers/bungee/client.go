@@ -205,6 +205,14 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	tradeType := req.TradeType
+	if tradeType == "" {
+		tradeType = providers.SwapTradeTypeExactInput
+	}
+	if tradeType != providers.SwapTradeTypeExactInput {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "bungee supports only --type exact-input")
+	}
+
 	resp, err := c.quote(ctx, req.Chain, req.Chain, req.FromAsset.Address, req.ToAsset.Address, req.AmountBaseUnits)
 	if err != nil {
 		return model.SwapQuote{}, err
@@ -219,6 +227,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		ChainID:     req.Chain.CAIP2,
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
+		TradeType:   string(tradeType),
 		InputAmount: model.AmountInfo{
 			AmountBaseUnits: req.AmountBaseUnits,
 			AmountDecimal:   req.AmountDecimal,

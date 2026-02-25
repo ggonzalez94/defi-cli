@@ -118,7 +118,13 @@ Swap quote examples:
 
 ```bash
 export DEFI_1INCH_API_KEY=...
+export DEFI_UNISWAP_API_KEY=...
 defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+# Exact-output on Uniswap
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --results-only
+# Optional manual slippage override for Uniswap (percent)
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --slippage-pct 1.0 --results-only
 defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
 ```
 
@@ -241,6 +247,10 @@ providers:
 - Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
 - Bungee dedicated backend routing only activates when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set; if either is missing, requests use the public backend.
+- Swap quote type defaults to `--type exact-input`; use `--type exact-output` with `--amount-out`/`--amount-out-decimal` when supported by the provider.
+- For EVM exact-output requests without `--provider`, the default provider is `uniswap`; Solana exact-output is currently unsupported.
+- Uniswap supports both `exact-input` and `exact-output`; 1inch/Jupiter/Fibrous/Bungee currently support `exact-input` only.
+- Uniswap quote requests use a deterministic placeholder `swapper` (`0x000...001`) and default to provider auto slippage; use `--slippage-pct` to set a manual max slippage percent.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
