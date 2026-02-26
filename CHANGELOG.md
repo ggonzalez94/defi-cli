@@ -25,6 +25,7 @@ Format:
 - Added `lend positions` to query account-level lending positions by address for Aave and Morpho with `--type all|supply|borrow|collateral`.
 
 ### Changed
+- BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) sourced from Morpho vault/vault-v2 data instead of Morpho market IDs.
 - BREAKING: Lend and rewards commands now use `--provider` as the selector flag; `--protocol` has been removed.
 - `providers list` now includes TaikoSwap execution capabilities (`swap.plan`, `swap.execute`) alongside quote metadata.
 - `providers list` now includes LiFi bridge execution capabilities (`bridge.plan`, `bridge.execute`).

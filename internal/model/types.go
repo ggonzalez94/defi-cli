@@ -7,6 +7,7 @@ const EnvelopeVersion = "v1"
 const (
 	NativeIDKindCompositeMarketAsset = "composite_market_asset"
 	NativeIDKindMarketID             = "market_id"
+	NativeIDKindVaultAddress         = "vault_address"
 	NativeIDKindPoolID               = "pool_id"
 )
 

@@ -84,6 +84,67 @@ const positionsQuery = `query Positions($first:Int,$where:MarketPositionFilters,
   }
 }`
 
+const vaultsYieldQuery = `query Vaults($first:Int,$skip:Int,$where:VaultFilters,$orderBy:VaultOrderBy,$orderDirection:OrderDirection){
+  vaults(first:$first, skip:$skip, where:$where, orderBy:$orderBy, orderDirection:$orderDirection){
+    items{
+      address
+      name
+      symbol
+      asset{ address symbol }
+      state{
+        netApy
+        totalAssetsUsd
+        allocation{
+          supplyAssetsUsd
+          market{
+            collateralAsset{ address symbol }
+          }
+        }
+      }
+      liquidity{ usd }
+    }
+  }
+}`
+
+const vaultV2sYieldQuery = `query VaultV2s($first:Int,$skip:Int,$where:VaultV2sFilters,$orderBy:VaultV2OrderBy,$orderDirection:OrderDirection){
+  vaultV2s(first:$first, skip:$skip, where:$where, orderBy:$orderBy, orderDirection:$orderDirection){
+    items{
+      address
+      name
+      symbol
+      asset{ address symbol }
+      netApy
+      totalAssetsUsd
+      liquidityUsd
+      liquidityData{
+        __typename
+        ... on MarketV1LiquidityData {
+          market{
+            collateralAsset{ address symbol }
+          }
+        }
+        ... on MetaMorphoLiquidityData {
+          metaMorpho{
+            state{
+              allocation{
+                supplyAssetsUsd
+                market{
+                  collateralAsset{ address symbol }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}`
+
+const (
+	yieldVaultPageSize = 200
+	yieldVaultMaxPages = 20
+)
+
 type marketsResponse struct {
 	Data struct {
 		Markets struct {
@@ -100,6 +161,28 @@ type positionsResponse struct {
 		MarketPositions struct {
 			Items []morphoMarketPosition `json:"items"`
 		} `json:"marketPositions"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type vaultsResponse struct {
+	Data struct {
+		Vaults struct {
+			Items []morphoVault `json:"items"`
+		} `json:"vaults"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type vaultV2sResponse struct {
+	Data struct {
+		VaultV2s struct {
+			Items []morphoVaultV2 `json:"items"`
+		} `json:"vaultV2s"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -164,6 +247,75 @@ type morphoMarketPosition struct {
 		Collateral      bigintString `json:"collateral"`
 		CollateralUSD   float64      `json:"collateralUsd"`
 	} `json:"state"`
+}
+
+type morphoVault struct {
+	Address string `json:"address"`
+	Name    string `json:"name"`
+	Symbol  string `json:"symbol"`
+	Asset   *struct {
+		Address string `json:"address"`
+		Symbol  string `json:"symbol"`
+	} `json:"asset"`
+	State *struct {
+		NetAPY         float64            `json:"netApy"`
+		TotalAssetsUSD float64            `json:"totalAssetsUsd"`
+		Allocation     []marketAllocation `json:"allocation"`
+	} `json:"state"`
+	Liquidity *struct {
+		USD float64 `json:"usd"`
+	} `json:"liquidity"`
+}
+
+type morphoVaultV2 struct {
+	Address      string  `json:"address"`
+	Name         string  `json:"name"`
+	Symbol       string  `json:"symbol"`
+	NetAPY       float64 `json:"netApy"`
+	TotalAssets  float64 `json:"totalAssetsUsd"`
+	LiquidityUSD float64 `json:"liquidityUsd"`
+	Asset        *struct {
+		Address string `json:"address"`
+		Symbol  string `json:"symbol"`
+	} `json:"asset"`
+	LiquidityData *struct {
+		TypeName string `json:"__typename"`
+		Market   *struct {
+			CollateralAsset *struct {
+				Address string `json:"address"`
+				Symbol  string `json:"symbol"`
+			} `json:"collateralAsset"`
+		} `json:"market"`
+		MetaMorpho *struct {
+			State *struct {
+				Allocation []marketAllocation `json:"allocation"`
+			} `json:"state"`
+		} `json:"metaMorpho"`
+	} `json:"liquidityData"`
+}
+
+type marketAllocation struct {
+	SupplyAssetsUSD float64 `json:"supplyAssetsUsd"`
+	Market          *struct {
+		CollateralAsset *struct {
+			Address string `json:"address"`
+			Symbol  string `json:"symbol"`
+		} `json:"collateralAsset"`
+	} `json:"market"`
+}
+
+type vaultYieldCandidate struct {
+	Address          string
+	AssetAddress     string
+	NetAPYPercent    float64
+	TotalAssetsUSD   float64
+	LiquidityUSD     float64
+	CollateralShares []collateralShare
+}
+
+type collateralShare struct {
+	Symbol string
+	USD    float64
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
@@ -387,7 +539,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 }
 
 func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequest) ([]model.YieldOpportunity, error) {
-	markets, err := c.fetchMarkets(ctx, req.Chain, req.Asset)
+	vaults, err := c.fetchYieldVaultCandidates(ctx, req.Chain, req.Asset)
 	if err != nil {
 		return nil, err
 	}
@@ -396,10 +548,10 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		maxRisk = yieldutil.RiskOrder("high")
 	}
 
-	out := make([]model.YieldOpportunity, 0, len(markets))
-	for _, m := range markets {
-		apy := m.State.SupplyAPY * 100
-		tvl := yieldutil.PositiveFirst(m.State.SupplyAssetsUSD, m.State.TotalLiquidityUSD, m.State.LiquidityAssetsUSD)
+	out := make([]model.YieldOpportunity, 0, len(vaults))
+	for _, vault := range vaults {
+		apy := vault.NetAPYPercent
+		tvl := vault.TotalAssetsUSD
 		if (apy == 0 || tvl == 0) && !req.IncludeIncomplete {
 			continue
 		}
@@ -407,20 +559,24 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			continue
 		}
 
-		riskLevel, reasons := riskFromCollateral(m.CollateralAsset)
+		riskLevel, reasons := riskFromCollateralShares(vault.CollateralShares)
 		if yieldutil.RiskOrder(riskLevel) > maxRisk {
 			continue
 		}
-		liq := yieldutil.PositiveFirst(m.State.LiquidityAssetsUSD, m.State.TotalLiquidityUSD, tvl)
-		assetID := canonicalAssetID(req.Asset, m.LoanAsset.Address)
+		liq := yieldutil.PositiveFirst(vault.LiquidityUSD, tvl)
+		assetID := canonicalAssetID(req.Asset, vault.AssetAddress)
+		vaultAddress := normalizeEVMAddress(vault.Address)
+		if vaultAddress == "" {
+			continue
+		}
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, m.UniqueKey, assetID),
+			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
 			Provider:             "morpho",
 			Protocol:             "morpho",
 			ChainID:              req.Chain.CAIP2,
 			AssetID:              assetID,
-			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
-			ProviderNativeIDKind: model.NativeIDKindMarketID,
+			ProviderNativeID:     vaultAddress,
+			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
 			Type:                 "lend",
 			APYBase:              apy,
 			APYReward:            0,
@@ -432,7 +588,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			RiskLevel:            riskLevel,
 			RiskReasons:          reasons,
 			Score:                yieldutil.ScoreOpportunity(apy, tvl, liq, riskLevel),
-			SourceURL:            "https://app.morpho.org",
+			SourceURL:            sourceURLForVault(vaultAddress),
 			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
@@ -445,6 +601,75 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		req.Limit = len(out)
 	}
 	return out[:req.Limit], nil
+}
+
+func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, asset id.Asset) ([]vaultYieldCandidate, error) {
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
+	}
+
+	vaults, err := c.fetchVaults(ctx, chain, asset)
+	if err != nil {
+		return nil, err
+	}
+	vaultV2s, err := c.fetchVaultV2s(ctx, chain)
+	if err != nil {
+		return nil, err
+	}
+
+	out := make([]vaultYieldCandidate, 0, len(vaults)+len(vaultV2s))
+	for _, vault := range vaults {
+		assetAddress := ""
+		assetSymbol := ""
+		if vault.Asset != nil {
+			assetAddress = vault.Asset.Address
+			assetSymbol = vault.Asset.Symbol
+		}
+		if !matchesVaultAsset(assetAddress, assetSymbol, asset) {
+			continue
+		}
+		netAPY := 0.0
+		tvl := 0.0
+		if vault.State != nil {
+			netAPY = vault.State.NetAPY * 100
+			tvl = vault.State.TotalAssetsUSD
+		}
+		liquidity := 0.0
+		if vault.Liquidity != nil {
+			liquidity = vault.Liquidity.USD
+		}
+		out = append(out, vaultYieldCandidate{
+			Address:          vault.Address,
+			AssetAddress:     assetAddress,
+			NetAPYPercent:    netAPY,
+			TotalAssetsUSD:   tvl,
+			LiquidityUSD:     liquidity,
+			CollateralShares: collateralSharesFromAllocation(0, nil, allocationFromVault(vault)),
+		})
+	}
+	for _, vault := range vaultV2s {
+		assetAddress := ""
+		assetSymbol := ""
+		if vault.Asset != nil {
+			assetAddress = vault.Asset.Address
+			assetSymbol = vault.Asset.Symbol
+		}
+		if !matchesVaultAsset(assetAddress, assetSymbol, asset) {
+			continue
+		}
+		out = append(out, vaultYieldCandidate{
+			Address:          vault.Address,
+			AssetAddress:     assetAddress,
+			NetAPYPercent:    vault.NetAPY * 100,
+			TotalAssetsUSD:   vault.TotalAssets,
+			LiquidityUSD:     vault.LiquidityUSD,
+			CollateralShares: collateralSharesFromVaultV2(vault),
+		})
+	}
+	if len(out) == 0 {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho has no yield vault for requested chain/asset")
+	}
+	return out, nil
 }
 
 func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, asset id.Asset) ([]morphoMarket, error) {
@@ -484,6 +709,206 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, asset id.Asse
 	return resp.Data.Markets.Items, nil
 }
 
+func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset) ([]morphoVault, error) {
+	where := map[string]any{
+		"chainId_in": []int64{chain.EVMChainID},
+		"listed":     true,
+	}
+	if addr := normalizeEVMAddress(asset.Address); addr != "" {
+		where["assetAddress_in"] = []string{addr}
+	} else if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
+		where["assetSymbol_in"] = []string{symbol}
+	}
+
+	out := make([]morphoVault, 0, yieldVaultPageSize)
+	for page := 0; page < yieldVaultMaxPages; page++ {
+		body, err := json.Marshal(map[string]any{
+			"query": vaultsYieldQuery,
+			"variables": map[string]any{
+				"first": yieldVaultPageSize,
+				"skip":  page * yieldVaultPageSize,
+				"where": where,
+			},
+		})
+		if err != nil {
+			return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault query", err)
+		}
+
+		var resp vaultsResponse
+		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+			return nil, err
+		}
+		if len(resp.Errors) > 0 {
+			return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+		}
+		out = append(out, resp.Data.Vaults.Items...)
+		if len(resp.Data.Vaults.Items) < yieldVaultPageSize {
+			break
+		}
+	}
+
+	return out, nil
+}
+
+func (c *Client) fetchVaultV2s(ctx context.Context, chain id.Chain) ([]morphoVaultV2, error) {
+	where := map[string]any{
+		"chainId_in": []int64{chain.EVMChainID},
+		"listed":     true,
+	}
+
+	out := make([]morphoVaultV2, 0, yieldVaultPageSize)
+	for page := 0; page < yieldVaultMaxPages; page++ {
+		body, err := json.Marshal(map[string]any{
+			"query": vaultV2sYieldQuery,
+			"variables": map[string]any{
+				"first": yieldVaultPageSize,
+				"skip":  page * yieldVaultPageSize,
+				"where": where,
+			},
+		})
+		if err != nil {
+			return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault-v2 query", err)
+		}
+
+		var resp vaultV2sResponse
+		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+			return nil, err
+		}
+		if len(resp.Errors) > 0 {
+			return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+		}
+		out = append(out, resp.Data.VaultV2s.Items...)
+		if len(resp.Data.VaultV2s.Items) < yieldVaultPageSize {
+			break
+		}
+	}
+
+	return out, nil
+}
+
+func matchesVaultAsset(vaultAssetAddress, vaultAssetSymbol string, asset id.Asset) bool {
+	if addr := normalizeEVMAddress(asset.Address); addr != "" {
+		return strings.EqualFold(normalizeEVMAddress(vaultAssetAddress), addr)
+	}
+	if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
+		return strings.EqualFold(strings.TrimSpace(vaultAssetSymbol), symbol)
+	}
+	return true
+}
+
+func allocationFromVault(vault morphoVault) []marketAllocation {
+	if vault.State == nil {
+		return nil
+	}
+	return vault.State.Allocation
+}
+
+func collateralSharesFromVaultV2(vault morphoVaultV2) []collateralShare {
+	if vault.LiquidityData == nil {
+		if usd := yieldutil.PositiveFirst(vault.TotalAssets, vault.LiquidityUSD); usd > 0 {
+			return []collateralShare{{USD: usd}}
+		}
+		return nil
+	}
+
+	switch vault.LiquidityData.TypeName {
+	case "MarketV1LiquidityData":
+		symbol := ""
+		if vault.LiquidityData.Market != nil && vault.LiquidityData.Market.CollateralAsset != nil {
+			symbol = vault.LiquidityData.Market.CollateralAsset.Symbol
+		}
+		usd := yieldutil.PositiveFirst(vault.TotalAssets, vault.LiquidityUSD)
+		if usd <= 0 {
+			return nil
+		}
+		return []collateralShare{{Symbol: symbol, USD: usd}}
+	case "MetaMorphoLiquidityData":
+		if vault.LiquidityData.MetaMorpho != nil && vault.LiquidityData.MetaMorpho.State != nil {
+			shares := collateralSharesFromAllocation(vault.TotalAssets, nil, vault.LiquidityData.MetaMorpho.State.Allocation)
+			if len(shares) > 0 {
+				return shares
+			}
+		}
+	}
+
+	if usd := yieldutil.PositiveFirst(vault.TotalAssets, vault.LiquidityUSD); usd > 0 {
+		return []collateralShare{{USD: usd}}
+	}
+	return nil
+}
+
+func collateralSharesFromAllocation(totalOverride float64, shares []collateralShare, allocation []marketAllocation) []collateralShare {
+	total := 0.0
+	for _, item := range allocation {
+		if item.SupplyAssetsUSD > 0 {
+			total += item.SupplyAssetsUSD
+		}
+	}
+	for _, item := range allocation {
+		if item.SupplyAssetsUSD <= 0 {
+			continue
+		}
+		usd := item.SupplyAssetsUSD
+		if totalOverride > 0 && total > 0 {
+			usd = totalOverride * item.SupplyAssetsUSD / total
+		}
+		symbol := ""
+		if item.Market != nil && item.Market.CollateralAsset != nil {
+			symbol = item.Market.CollateralAsset.Symbol
+		}
+		shares = append(shares, collateralShare{Symbol: symbol, USD: usd})
+	}
+	return shares
+}
+
+var stableCollateralSymbols = map[string]struct{}{
+	"USDC": {},
+	"USDT": {},
+	"DAI":  {},
+	"USDE": {},
+}
+
+func riskFromCollateralShares(shares []collateralShare) (string, []string) {
+	hasNonStable := false
+	hasMissing := false
+	hasKnownStable := false
+
+	for _, share := range shares {
+		if share.USD <= 0 {
+			continue
+		}
+		symbol := strings.ToUpper(strings.TrimSpace(share.Symbol))
+		if symbol == "" {
+			hasMissing = true
+			continue
+		}
+		if _, ok := stableCollateralSymbols[symbol]; ok {
+			hasKnownStable = true
+			continue
+		}
+		hasNonStable = true
+	}
+
+	switch {
+	case hasNonStable:
+		return "medium", []string{"non-stable collateral"}
+	case hasMissing:
+		return "medium", []string{"missing collateral metadata"}
+	case hasKnownStable:
+		return "low", []string{"stable collateral"}
+	default:
+		return "medium", []string{"missing collateral metadata"}
+	}
+}
+
+func sourceURLForVault(address string) string {
+	addr := normalizeEVMAddress(address)
+	if addr == "" {
+		return "https://app.morpho.org"
+	}
+	return fmt.Sprintf("https://app.morpho.org/vault/%s", addr)
+}
+
 func canonicalAssetID(asset id.Asset, address string) string {
 	addr := strings.ToLower(strings.TrimSpace(address))
 	if addr == "" {
@@ -498,22 +923,6 @@ func canonicalAssetIDForChain(chainID, address string) string {
 		return ""
 	}
 	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
-}
-
-func riskFromCollateral(collateral *struct {
-	Address string `json:"address"`
-	Symbol  string `json:"symbol"`
-}) (string, []string) {
-	if collateral == nil {
-		return "medium", []string{"missing collateral metadata"}
-	}
-	s := strings.ToUpper(strings.TrimSpace(collateral.Symbol))
-	switch s {
-	case "USDC", "USDT", "DAI", "USDE":
-		return "low", []string{"stable collateral"}
-	default:
-		return "medium", []string{"non-stable collateral"}
-	}
 }
 
 func hashOpportunity(provider, chainID, marketID, assetID string) string {
