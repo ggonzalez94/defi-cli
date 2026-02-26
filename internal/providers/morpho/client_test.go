@@ -55,7 +55,7 @@ func TestLendRatesAndYield(t *testing.T) {
 									"allocation": [
 										{
 											"supplyAssetsUsd": 1000000,
-											"market": {"collateralAsset": {"address": "0x111", "symbol": "WETH"}}
+											"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH"}}
 										}
 									]
 								},
@@ -85,7 +85,7 @@ func TestLendRatesAndYield(t *testing.T) {
 											"allocation": [
 												{
 													"supplyAssetsUsd": 2000000,
-													"market": {"collateralAsset": {"address": "0x6b175474e89094c44da98b954eedeac495271d0f", "symbol": "DAI"}}
+													"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x6b175474e89094c44da98b954eedeac495271d0f", "symbol": "DAI"}}
 												}
 											]
 										}
@@ -134,7 +134,7 @@ func TestLendRatesAndYield(t *testing.T) {
 		t.Fatalf("expected morpho provider id metadata, got %+v", rates[0])
 	}
 
-	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "high"})
+	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10})
 	if err != nil {
 		t.Fatalf("YieldOpportunities failed: %v", err)
 	}
@@ -157,8 +157,11 @@ func TestLendRatesAndYield(t *testing.T) {
 	if vaultOne.ProviderNativeIDKind != model.NativeIDKindVaultAddress {
 		t.Fatalf("expected vault_address kind on first vault, got %+v", vaultOne)
 	}
-	if vaultOne.RiskLevel != "medium" || len(vaultOne.RiskReasons) == 0 || vaultOne.RiskReasons[0] != "non-stable collateral" {
-		t.Fatalf("expected medium/non-stable risk on first vault, got %+v", vaultOne)
+	if vaultOne.LiquidityUSD != 500000 {
+		t.Fatalf("expected first vault liquidity to come from vault liquidity USD, got %+v", vaultOne)
+	}
+	if len(vaultOne.BackingAssets) != 1 || vaultOne.BackingAssets[0].Symbol != "WETH" || vaultOne.BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected first vault backing assets to expose full WETH share, got %+v", vaultOne.BackingAssets)
 	}
 
 	vaultTwo, ok := byID["0x2222222222222222222222222222222222222222"]
@@ -168,15 +171,18 @@ func TestLendRatesAndYield(t *testing.T) {
 	if vaultTwo.ProviderNativeIDKind != model.NativeIDKindVaultAddress {
 		t.Fatalf("expected vault_address kind on second vault, got %+v", vaultTwo)
 	}
-	if vaultTwo.RiskLevel != "low" || len(vaultTwo.RiskReasons) == 0 || vaultTwo.RiskReasons[0] != "stable collateral" {
-		t.Fatalf("expected low/stable risk on second vault, got %+v", vaultTwo)
+	if vaultTwo.LiquidityUSD != 1500000 {
+		t.Fatalf("expected second vault liquidity to come from vaultV2 liquidityUsd, got %+v", vaultTwo)
+	}
+	if len(vaultTwo.BackingAssets) != 1 || vaultTwo.BackingAssets[0].Symbol != "DAI" || vaultTwo.BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected second vault backing assets to expose full DAI share, got %+v", vaultTwo.BackingAssets)
 	}
 	if _, ok := byID["0x3333333333333333333333333333333333333333"]; ok {
 		t.Fatalf("expected USDT vault to be filtered out for USDC request, got %+v", byID)
 	}
 }
 
-func TestYieldOpportunitiesVaultMaxRiskFilter(t *testing.T) {
+func TestYieldOpportunitiesVaultSortAndLimit(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
@@ -198,7 +204,7 @@ func TestYieldOpportunitiesVaultMaxRiskFilter(t *testing.T) {
 									"allocation": [
 										{
 											"supplyAssetsUsd": 1000000,
-											"market": {"collateralAsset": {"address": "0x111", "symbol": "WETH"}}
+											"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH"}}
 										}
 									]
 								},
@@ -228,7 +234,7 @@ func TestYieldOpportunitiesVaultMaxRiskFilter(t *testing.T) {
 											"allocation": [
 												{
 													"supplyAssetsUsd": 2000000,
-													"market": {"collateralAsset": {"address": "0x6b175474e89094c44da98b954eedeac495271d0f", "symbol": "DAI"}}
+													"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x6b175474e89094c44da98b954eedeac495271d0f", "symbol": "DAI"}}
 												}
 											]
 										}
@@ -250,18 +256,20 @@ func TestYieldOpportunitiesVaultMaxRiskFilter(t *testing.T) {
 	chain, _ := id.ParseChain("ethereum")
 	asset, _ := id.ParseAsset("USDC", chain)
 
-	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "low"})
+	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{
+		Chain:  chain,
+		Asset:  asset,
+		Limit:  1,
+		SortBy: "tvl_usd",
+	})
 	if err != nil {
 		t.Fatalf("YieldOpportunities failed: %v", err)
 	}
 	if len(opps) != 1 {
-		t.Fatalf("expected one low-risk vault after max-risk filter, got %+v", opps)
+		t.Fatalf("expected one opportunity after limit, got %+v", opps)
 	}
 	if opps[0].ProviderNativeID != "0x2222222222222222222222222222222222222222" {
-		t.Fatalf("expected low-risk vault id, got %+v", opps[0])
-	}
-	if opps[0].RiskLevel != "low" {
-		t.Fatalf("expected low risk, got %+v", opps[0])
+		t.Fatalf("expected highest-tvl vault first, got %+v", opps[0])
 	}
 }
 

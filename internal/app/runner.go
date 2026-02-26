@@ -1273,7 +1273,7 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 func (s *runtimeState) newYieldCommand() *cobra.Command {
 	root := &cobra.Command{Use: "yield", Short: "Yield opportunity commands"}
 
-	var opportunitiesChainArg, opportunitiesAssetArg, opportunitiesProvidersArg, opportunitiesSortArg, opportunitiesMaxRisk string
+	var opportunitiesChainArg, opportunitiesAssetArg, opportunitiesProvidersArg, opportunitiesSortArg string
 	var opportunitiesLimit int
 	var opportunitiesMinTVL, opportunitiesMinAPY float64
 	var opportunitiesIncludeIncomplete bool
@@ -1291,7 +1291,6 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				Limit:             opportunitiesLimit,
 				MinTVLUSD:         opportunitiesMinTVL,
 				MinAPY:            opportunitiesMinAPY,
-				MaxRisk:           opportunitiesMaxRisk,
 				Providers:         splitCSV(opportunitiesProvidersArg),
 				SortBy:            opportunitiesSortArg,
 				IncludeIncomplete: opportunitiesIncludeIncomplete,
@@ -1302,7 +1301,6 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				"limit":              req.Limit,
 				"min_tvl_usd":        req.MinTVLUSD,
 				"min_apy":            req.MinAPY,
-				"max_risk":           req.MaxRisk,
 				"providers":          req.Providers,
 				"sort":               req.SortBy,
 				"include_incomplete": req.IncludeIncomplete,
@@ -1363,10 +1361,9 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	opportunitiesCmd.Flags().StringVar(&opportunitiesAssetArg, "asset", "", "Asset symbol/address/CAIP-19")
 	opportunitiesCmd.Flags().IntVar(&opportunitiesLimit, "limit", 20, "Maximum opportunities to return")
 	opportunitiesCmd.Flags().Float64Var(&opportunitiesMinTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
-	opportunitiesCmd.Flags().StringVar(&opportunitiesMaxRisk, "max-risk", "high", "Maximum risk level (low|medium|high|unknown)")
 	opportunitiesCmd.Flags().Float64Var(&opportunitiesMinAPY, "min-apy", 0, "Minimum total APY percent")
 	opportunitiesCmd.Flags().StringVar(&opportunitiesProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
-	opportunitiesCmd.Flags().StringVar(&opportunitiesSortArg, "sort", "score", "Sort key (score|apy_total|tvl_usd|liquidity_usd)")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesSortArg, "sort", "apy_total", "Sort key (apy_total|tvl_usd|liquidity_usd)")
 	opportunitiesCmd.Flags().BoolVar(&opportunitiesIncludeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
 	_ = opportunitiesCmd.MarkFlagRequired("chain")
 	_ = opportunitiesCmd.MarkFlagRequired("asset")
@@ -1440,16 +1437,15 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 						continue
 					}
 
-					discoveryReq := providers.YieldRequest{
-						Chain:             chain,
-						Asset:             asset,
-						Limit:             historyLimit,
-						MinTVLUSD:         0,
-						MinAPY:            0,
-						MaxRisk:           "high",
-						SortBy:            "score",
-						IncludeIncomplete: true,
-					}
+						discoveryReq := providers.YieldRequest{
+							Chain:             chain,
+							Asset:             asset,
+							Limit:             historyLimit,
+							MinTVLUSD:         0,
+							MinAPY:            0,
+							SortBy:            "apy_total",
+							IncludeIncomplete: true,
+						}
 					if len(opportunityIDSet) > 0 {
 						discoveryReq.Limit = 0
 					}
@@ -1796,7 +1792,7 @@ func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpp
 	byID := make(map[string]model.YieldOpportunity, len(items))
 	for _, item := range items {
 		existing, ok := byID[item.OpportunityID]
-		if !ok || item.Score > existing.Score {
+		if !ok || compareYieldOpportunities(item, existing, "apy_total") {
 			byID[item.OpportunityID] = item
 		}
 	}
@@ -1810,36 +1806,38 @@ func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpp
 func sortYieldOpportunities(items []model.YieldOpportunity, sortBy string) {
 	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
 	if sortBy == "" {
-		sortBy = "score"
+		sortBy = "apy_total"
 	}
 	sort.Slice(items, func(i, j int) bool {
-		a, b := items[i], items[j]
-		switch sortBy {
-		case "apy_total":
-			if a.APYTotal != b.APYTotal {
-				return a.APYTotal > b.APYTotal
-			}
-		case "tvl_usd":
-			if a.TVLUSD != b.TVLUSD {
-				return a.TVLUSD > b.TVLUSD
-			}
-		case "liquidity_usd":
-			if a.LiquidityUSD != b.LiquidityUSD {
-				return a.LiquidityUSD > b.LiquidityUSD
-			}
-		default:
-			if a.Score != b.Score {
-				return a.Score > b.Score
-			}
-		}
-		if a.APYTotal != b.APYTotal {
-			return a.APYTotal > b.APYTotal
-		}
+		return compareYieldOpportunities(items[i], items[j], sortBy)
+	})
+}
+
+func compareYieldOpportunities(a, b model.YieldOpportunity, sortBy string) bool {
+	switch sortBy {
+	case "tvl_usd":
 		if a.TVLUSD != b.TVLUSD {
 			return a.TVLUSD > b.TVLUSD
 		}
-		return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
-	})
+	case "liquidity_usd":
+		if a.LiquidityUSD != b.LiquidityUSD {
+			return a.LiquidityUSD > b.LiquidityUSD
+		}
+	default:
+		if a.APYTotal != b.APYTotal {
+			return a.APYTotal > b.APYTotal
+		}
+	}
+	if a.APYTotal != b.APYTotal {
+		return a.APYTotal > b.APYTotal
+	}
+	if a.TVLUSD != b.TVLUSD {
+		return a.TVLUSD > b.TVLUSD
+	}
+	if a.LiquidityUSD != b.LiquidityUSD {
+		return a.LiquidityUSD > b.LiquidityUSD
+	}
+	return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
 }
 
 func filterYieldOpportunitiesByID(items []model.YieldOpportunity, ids map[string]struct{}) []model.YieldOpportunity {

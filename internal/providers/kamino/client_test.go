@@ -152,8 +152,7 @@ func TestYieldOpportunitiesFiltersByAPYAndTVL(t *testing.T) {
 		Limit:     10,
 		MinTVLUSD: 50000,
 		MinAPY:    1,
-		MaxRisk:   "high",
-		SortBy:    "score",
+		SortBy:    "apy_total",
 	})
 	if err != nil {
 		t.Fatalf("YieldOpportunities failed: %v", err)
@@ -169,6 +168,12 @@ func TestYieldOpportunitiesFiltersByAPYAndTVL(t *testing.T) {
 	}
 	if opps[0].APYTotal != 4 {
 		t.Fatalf("expected APY total 4, got %+v", opps[0])
+	}
+	if opps[0].LiquidityUSD != 600000 {
+		t.Fatalf("expected liquidity_usd = totalSupplyUsd-totalBorrowUsd (600000), got %+v", opps[0])
+	}
+	if len(opps[0].BackingAssets) != 1 || opps[0].BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected single backing asset at 100%%, got %+v", opps[0].BackingAssets)
 	}
 }
 

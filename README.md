@@ -286,6 +286,8 @@ providers:
 ## Caveats
 
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
+- `yield opportunities` returns objective metrics and composition data: `apy_total`, `tvl_usd`, `liquidity_usd`, and full `backing_assets` (subjective `risk_*`/`score` fields were removed).
+- `liquidity_usd` is provider-sourced available liquidity and is intentionally distinct from `tvl_usd` (total supplied/managed value).
 - `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
 - Aave historical windows are lookback-based and effectively end near current time; use `--window` for Aave-friendly history requests.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.

@@ -62,7 +62,7 @@ const marketsQuery = `query Markets($request: MarketsRequest!) {
       aToken { address }
       size { usd }
       supplyInfo { apy { value } total { value } }
-      borrowInfo { apy { value } total { usd } utilizationRate { value } }
+      borrowInfo { apy { value } total { usd } utilizationRate { value } availableLiquidity { usd } }
     }
   }
 }`
@@ -181,6 +181,9 @@ type aaveReserve struct {
 		UtilizationRate struct {
 			Value string `json:"value"`
 		} `json:"utilizationRate"`
+		AvailableLiquidity struct {
+			USD string `json:"usd"`
+		} `json:"availableLiquidity"`
 	} `json:"borrowInfo"`
 }
 
@@ -469,11 +472,6 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		return nil, err
 	}
 
-	maxRisk := yieldutil.RiskOrder(req.MaxRisk)
-	if maxRisk == 0 {
-		maxRisk = yieldutil.RiskOrder("high")
-	}
-
 	out := make([]model.YieldOpportunity, 0)
 	for _, m := range markets {
 		for _, r := range m.Reserves {
@@ -492,12 +490,11 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 				continue
 			}
 
-			riskLevel, reasons := riskFromSymbol(r.UnderlyingToken.Symbol)
-			if yieldutil.RiskOrder(riskLevel) > maxRisk {
-				continue
-			}
-
 			assetID := canonicalAssetID(req.Asset, r.UnderlyingToken.Address)
+			liquidityUSD := tvl
+			if r.BorrowInfo != nil {
+				liquidityUSD = parseFloat(r.BorrowInfo.AvailableLiquidity.USD)
+			}
 			normalizedMarket := normalizeEVMAddress(m.Address)
 			normalizedUnderlying := normalizeEVMAddress(r.UnderlyingToken.Address)
 			nativeID := providerNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
@@ -515,12 +512,14 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 				APYReward:            0,
 				APYTotal:             apy,
 				TVLUSD:               tvl,
-				LiquidityUSD:         tvl,
+				LiquidityUSD:         liquidityUSD,
 				LockupDays:           0,
 				WithdrawalTerms:      "variable",
-				RiskLevel:            riskLevel,
-				RiskReasons:          reasons,
-				Score:                yieldutil.ScoreOpportunity(apy, tvl, tvl, riskLevel),
+				BackingAssets: []model.YieldBackingAsset{{
+					AssetID:  assetID,
+					Symbol:   strings.TrimSpace(r.UnderlyingToken.Symbol),
+					SharePct: 100,
+				}},
 				SourceURL:            "https://app.aave.com",
 				FetchedAt:            c.now().UTC().Format(time.RFC3339),
 			})
@@ -913,16 +912,6 @@ func parseFloat(v string) float64 {
 		return 0
 	}
 	return f
-}
-
-func riskFromSymbol(symbol string) (string, []string) {
-	s := strings.ToUpper(strings.TrimSpace(symbol))
-	switch s {
-	case "USDC", "USDT", "DAI", "GHO":
-		return "low", []string{"stablecoin asset"}
-	default:
-		return "medium", []string{"variable asset exposure"}
-	}
 }
 
 func hashOpportunity(provider, chainID, marketID, assetID string) string {

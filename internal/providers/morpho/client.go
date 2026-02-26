@@ -98,6 +98,7 @@ const vaultsYieldQuery = `query Vaults($first:Int,$skip:Int,$where:VaultFilters,
         allocation{
           supplyAssetsUsd
           market{
+            loanAsset{ address symbol }
             collateralAsset{ address symbol }
           }
         }
@@ -130,6 +131,7 @@ const vaultV2sYieldQuery = `query VaultV2s($first:Int,$skip:Int,$where:VaultV2sF
               allocation{
                 supplyAssetsUsd
                 market{
+                  loanAsset{ address symbol }
                   collateralAsset{ address symbol }
                 }
               }
@@ -337,6 +339,10 @@ type morphoVaultV2 struct {
 	LiquidityData *struct {
 		TypeName string `json:"__typename"`
 		Market   *struct {
+			LoanAsset *struct {
+				Address string `json:"address"`
+				Symbol  string `json:"symbol"`
+			} `json:"loanAsset"`
 			CollateralAsset *struct {
 				Address string `json:"address"`
 				Symbol  string `json:"symbol"`
@@ -353,6 +359,10 @@ type morphoVaultV2 struct {
 type marketAllocation struct {
 	SupplyAssetsUSD float64 `json:"supplyAssetsUsd"`
 	Market          *struct {
+		LoanAsset *struct {
+			Address string `json:"address"`
+			Symbol  string `json:"symbol"`
+		} `json:"loanAsset"`
 		CollateralAsset *struct {
 			Address string `json:"address"`
 			Symbol  string `json:"symbol"`
@@ -363,13 +373,15 @@ type marketAllocation struct {
 type vaultYieldCandidate struct {
 	Address          string
 	AssetAddress     string
+	AssetSymbol      string
 	NetAPYPercent    float64
 	TotalAssetsUSD   float64
 	LiquidityUSD     float64
-	CollateralShares []collateralShare
+	BackingShares    []collateralShare
 }
 
 type collateralShare struct {
+	Address string
 	Symbol string
 	USD    float64
 }
@@ -599,10 +611,6 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 	if err != nil {
 		return nil, err
 	}
-	maxRisk := yieldutil.RiskOrder(req.MaxRisk)
-	if maxRisk == 0 {
-		maxRisk = yieldutil.RiskOrder("high")
-	}
 
 	out := make([]model.YieldOpportunity, 0, len(vaults))
 	for _, vault := range vaults {
@@ -614,12 +622,8 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		if apy < req.MinAPY || tvl < req.MinTVLUSD {
 			continue
 		}
-
-		riskLevel, reasons := riskFromCollateralShares(vault.CollateralShares)
-		if yieldutil.RiskOrder(riskLevel) > maxRisk {
-			continue
-		}
-		liq := yieldutil.PositiveFirst(vault.LiquidityUSD, tvl)
+		backingAssets := backingAssetsFromShares(vault.BackingShares, req.Chain.CAIP2, vault.AssetAddress, vault.AssetSymbol, req.Asset.AssetID)
+		liq := vault.LiquidityUSD
 		assetID := canonicalAssetID(req.Asset, vault.AssetAddress)
 		vaultAddress := normalizeEVMAddress(vault.Address)
 		if vaultAddress == "" {
@@ -641,9 +645,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			LiquidityUSD:         liq,
 			LockupDays:           0,
 			WithdrawalTerms:      "variable",
-			RiskLevel:            riskLevel,
-			RiskReasons:          reasons,
-			Score:                yieldutil.ScoreOpportunity(apy, tvl, liq, riskLevel),
+			BackingAssets:        backingAssets,
 			SourceURL:            sourceURLForVault(vaultAddress),
 			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
@@ -790,10 +792,11 @@ func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, 
 		out = append(out, vaultYieldCandidate{
 			Address:          vault.Address,
 			AssetAddress:     assetAddress,
+			AssetSymbol:      assetSymbol,
 			NetAPYPercent:    netAPY,
 			TotalAssetsUSD:   tvl,
 			LiquidityUSD:     liquidity,
-			CollateralShares: collateralSharesFromAllocation(0, nil, allocationFromVault(vault)),
+			BackingShares:    collateralSharesFromAllocation(0, allocationFromVault(vault), assetAddress, assetSymbol),
 		})
 	}
 	for _, vault := range vaultV2s {
@@ -809,10 +812,11 @@ func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, 
 		out = append(out, vaultYieldCandidate{
 			Address:          vault.Address,
 			AssetAddress:     assetAddress,
+			AssetSymbol:      assetSymbol,
 			NetAPYPercent:    vault.NetAPY * 100,
 			TotalAssetsUSD:   vault.TotalAssets,
 			LiquidityUSD:     vault.LiquidityUSD,
-			CollateralShares: collateralSharesFromVaultV2(vault),
+			BackingShares:    collateralSharesFromVaultV2(vault, assetAddress, assetSymbol),
 		})
 	}
 	if len(out) == 0 {
@@ -1052,28 +1056,44 @@ func allocationFromVault(vault morphoVault) []marketAllocation {
 	return vault.State.Allocation
 }
 
-func collateralSharesFromVaultV2(vault morphoVaultV2) []collateralShare {
+func collateralSharesFromVaultV2(vault morphoVaultV2, fallbackAddress, fallbackSymbol string) []collateralShare {
 	if vault.LiquidityData == nil {
 		if usd := yieldutil.PositiveFirst(vault.TotalAssets, vault.LiquidityUSD); usd > 0 {
-			return []collateralShare{{USD: usd}}
+			return []collateralShare{{
+				Address: fallbackAddress,
+				Symbol:  fallbackSymbol,
+				USD:     usd,
+			}}
 		}
 		return nil
 	}
 
 	switch vault.LiquidityData.TypeName {
 	case "MarketV1LiquidityData":
+		address := fallbackAddress
 		symbol := ""
 		if vault.LiquidityData.Market != nil && vault.LiquidityData.Market.CollateralAsset != nil {
+			address = vault.LiquidityData.Market.CollateralAsset.Address
 			symbol = vault.LiquidityData.Market.CollateralAsset.Symbol
+		} else if vault.LiquidityData.Market != nil && vault.LiquidityData.Market.LoanAsset != nil {
+			address = vault.LiquidityData.Market.LoanAsset.Address
+			symbol = vault.LiquidityData.Market.LoanAsset.Symbol
+		}
+		if strings.TrimSpace(symbol) == "" {
+			symbol = fallbackSymbol
 		}
 		usd := yieldutil.PositiveFirst(vault.TotalAssets, vault.LiquidityUSD)
 		if usd <= 0 {
 			return nil
 		}
-		return []collateralShare{{Symbol: symbol, USD: usd}}
+		return []collateralShare{{
+			Address: address,
+			Symbol:  symbol,
+			USD:     usd,
+		}}
 	case "MetaMorphoLiquidityData":
 		if vault.LiquidityData.MetaMorpho != nil && vault.LiquidityData.MetaMorpho.State != nil {
-			shares := collateralSharesFromAllocation(vault.TotalAssets, nil, vault.LiquidityData.MetaMorpho.State.Allocation)
+			shares := collateralSharesFromAllocation(vault.TotalAssets, vault.LiquidityData.MetaMorpho.State.Allocation, fallbackAddress, fallbackSymbol)
 			if len(shares) > 0 {
 				return shares
 			}
@@ -1081,12 +1101,17 @@ func collateralSharesFromVaultV2(vault morphoVaultV2) []collateralShare {
 	}
 
 	if usd := yieldutil.PositiveFirst(vault.TotalAssets, vault.LiquidityUSD); usd > 0 {
-		return []collateralShare{{USD: usd}}
+		return []collateralShare{{
+			Address: fallbackAddress,
+			Symbol:  fallbackSymbol,
+			USD:     usd,
+		}}
 	}
 	return nil
 }
 
-func collateralSharesFromAllocation(totalOverride float64, shares []collateralShare, allocation []marketAllocation) []collateralShare {
+func collateralSharesFromAllocation(totalOverride float64, allocation []marketAllocation, fallbackAddress, fallbackSymbol string) []collateralShare {
+	shares := make([]collateralShare, 0, len(allocation))
 	total := 0.0
 	for _, item := range allocation {
 		if item.SupplyAssetsUSD > 0 {
@@ -1101,53 +1126,101 @@ func collateralSharesFromAllocation(totalOverride float64, shares []collateralSh
 		if totalOverride > 0 && total > 0 {
 			usd = totalOverride * item.SupplyAssetsUSD / total
 		}
-		symbol := ""
-		if item.Market != nil && item.Market.CollateralAsset != nil {
-			symbol = item.Market.CollateralAsset.Symbol
+		address := fallbackAddress
+		symbol := fallbackSymbol
+		if item.Market != nil {
+			if item.Market.CollateralAsset != nil {
+				address = item.Market.CollateralAsset.Address
+				symbol = item.Market.CollateralAsset.Symbol
+			} else if item.Market.LoanAsset != nil {
+				address = item.Market.LoanAsset.Address
+				symbol = item.Market.LoanAsset.Symbol
+			}
 		}
-		shares = append(shares, collateralShare{Symbol: symbol, USD: usd})
+		if strings.TrimSpace(address) == "" {
+			address = fallbackAddress
+		}
+		if strings.TrimSpace(symbol) == "" {
+			symbol = fallbackSymbol
+		}
+		shares = append(shares, collateralShare{Address: address, Symbol: symbol, USD: usd})
 	}
 	return shares
 }
 
-var stableCollateralSymbols = map[string]struct{}{
-	"USDC": {},
-	"USDT": {},
-	"DAI":  {},
-	"USDE": {},
-}
-
-func riskFromCollateralShares(shares []collateralShare) (string, []string) {
-	hasNonStable := false
-	hasMissing := false
-	hasKnownStable := false
-
+func backingAssetsFromShares(
+	shares []collateralShare,
+	chainID string,
+	fallbackAddress string,
+	fallbackSymbol string,
+	fallbackAssetID string,
+) []model.YieldBackingAsset {
+	type aggregate struct {
+		Symbol string
+		USD    float64
+	}
+	byAsset := map[string]aggregate{}
+	total := 0.0
 	for _, share := range shares {
 		if share.USD <= 0 {
 			continue
 		}
-		symbol := strings.ToUpper(strings.TrimSpace(share.Symbol))
+		assetID := canonicalAssetIDForChain(chainID, share.Address)
+		symbol := strings.TrimSpace(share.Symbol)
+		if assetID == "" {
+			assetID = canonicalAssetIDForChain(chainID, fallbackAddress)
+		}
+		if assetID == "" {
+			assetID = strings.TrimSpace(fallbackAssetID)
+		}
+		if assetID == "" {
+			continue
+		}
 		if symbol == "" {
-			hasMissing = true
-			continue
+			symbol = strings.TrimSpace(fallbackSymbol)
 		}
-		if _, ok := stableCollateralSymbols[symbol]; ok {
-			hasKnownStable = true
-			continue
+		item := byAsset[assetID]
+		if item.Symbol == "" {
+			item.Symbol = symbol
 		}
-		hasNonStable = true
+		item.USD += share.USD
+		byAsset[assetID] = item
+		total += share.USD
+	}
+	if len(byAsset) == 0 {
+		assetID := canonicalAssetIDForChain(chainID, fallbackAddress)
+		if assetID == "" {
+			assetID = strings.TrimSpace(fallbackAssetID)
+		}
+		if assetID == "" {
+			return nil
+		}
+		return []model.YieldBackingAsset{{
+			AssetID:  assetID,
+			Symbol:   strings.TrimSpace(fallbackSymbol),
+			SharePct: 100,
+		}}
 	}
 
-	switch {
-	case hasNonStable:
-		return "medium", []string{"non-stable collateral"}
-	case hasMissing:
-		return "medium", []string{"missing collateral metadata"}
-	case hasKnownStable:
-		return "low", []string{"stable collateral"}
-	default:
-		return "medium", []string{"missing collateral metadata"}
+	out := make([]model.YieldBackingAsset, 0, len(byAsset))
+	for assetID, item := range byAsset {
+		sharePct := 0.0
+		if total > 0 {
+			sharePct = (item.USD / total) * 100
+		}
+		out = append(out, model.YieldBackingAsset{
+			AssetID:  assetID,
+			Symbol:   strings.TrimSpace(item.Symbol),
+			SharePct: sharePct,
+		})
 	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].SharePct != out[j].SharePct {
+			return out[i].SharePct > out[j].SharePct
+		}
+		return strings.Compare(out[i].AssetID, out[j].AssetID) < 0
+	})
+	return out
 }
 
 func sourceURLForVault(address string) string {

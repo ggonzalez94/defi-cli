@@ -27,6 +27,10 @@ Format:
 
 ### Changed
 - BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) sourced from Morpho vault/vault-v2 data instead of Morpho market IDs.
+- BREAKING: `yield opportunities` removed subjective fields (`risk_level`, `risk_reasons`, `score`) and removed the `--max-risk` flag.
+- BREAKING: `yield opportunities --sort` now supports only objective keys (`apy_total|tvl_usd|liquidity_usd`) and defaults to `apy_total`.
+- `yield opportunities` now returns `backing_assets` with full per-opportunity backing composition.
+- Yield liquidity/TVL sourcing is now provider-native and consistent: Aave (`size.usd`, `borrowInfo.availableLiquidity.usd`), Morpho vaults (`totalAssetsUsd`, vault liquidity fields), and Kamino (`totalSupplyUsd`, `max(totalSupplyUsd-totalBorrowUsd,0)`).
 - BREAKING: Lend and rewards commands now use `--provider` as the selector flag; `--protocol` has been removed.
 - `providers list` now includes TaikoSwap execution capabilities (`swap.plan`, `swap.execute`) alongside quote metadata.
 - `providers list` now includes LiFi bridge execution capabilities (`bridge.plan`, `bridge.execute`).
@@ -70,6 +74,7 @@ Format:
 - Clarified execution builder architecture split (provider-backed route builders for swap/bridge vs internal planners for lend/rewards/approvals) in `AGENTS.md` and execution design docs.
 - Added `lend positions` usage and caveats to `README.md`, `AGENTS.md`, and Mintlify lending command reference.
 - Documented `yield history` usage, flags, and provider caveats across README and Mintlify yield/lending references.
+- Updated yield docs/reference examples to remove risk-based flags and document `backing_assets` plus objective `tvl_usd`/`liquidity_usd` semantics.
 
 ### Security
 - None yet.

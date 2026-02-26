@@ -193,11 +193,6 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		return nil, err
 	}
 
-	maxRisk := yieldutil.RiskOrder(req.MaxRisk)
-	if maxRisk == 0 {
-		maxRisk = yieldutil.RiskOrder("high")
-	}
-
 	out := make([]model.YieldOpportunity, 0, len(reserves))
 	fetchedAt := c.now().UTC().Format(time.RFC3339)
 	for _, item := range reserves {
@@ -217,16 +212,8 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			continue
 		}
 
-		riskLevel, reasons := riskFromSymbol(item.Reserve.LiquidityToken)
-		if yieldutil.RiskOrder(riskLevel) > maxRisk {
-			continue
-		}
-
 		borrowUSD := parseNonNegative(item.Reserve.TotalBorrowUSD)
-		liquidityUSD := tvl - borrowUSD
-		if liquidityUSD <= 0 {
-			liquidityUSD = tvl
-		}
+		liquidityUSD := math.Max(tvl-borrowUSD, 0)
 
 		assetID := reserveAssetID(req.Chain.CAIP2, req.Asset.AssetID, item.Reserve.LiquidityTokenMint)
 		seed := strings.Join([]string{
@@ -252,9 +239,11 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			LiquidityUSD:         liquidityUSD,
 			LockupDays:           0,
 			WithdrawalTerms:      "variable",
-			RiskLevel:            riskLevel,
-			RiskReasons:          reasons,
-			Score:                yieldutil.ScoreOpportunity(apy, tvl, liquidityUSD, riskLevel),
+			BackingAssets: []model.YieldBackingAsset{{
+				AssetID:  assetID,
+				Symbol:   strings.TrimSpace(item.Reserve.LiquidityToken),
+				SharePct: 100,
+			}},
 			SourceURL:            marketURL(item.Market.LendingMarket),
 			FetchedAt:            fetchedAt,
 		})
@@ -651,13 +640,4 @@ func parseNonNegative(v string) float64 {
 func hashOpportunity(seed string) string {
 	sum := sha1.Sum([]byte(seed))
 	return hex.EncodeToString(sum[:])
-}
-
-func riskFromSymbol(symbol string) (string, []string) {
-	switch strings.ToUpper(strings.TrimSpace(symbol)) {
-	case "USDC", "USDT", "DAI", "USDE", "PYUSD":
-		return "low", []string{"stablecoin collateral and borrow profile"}
-	default:
-		return "medium", []string{"non-stable asset volatility"}
-	}
 }

@@ -258,27 +258,31 @@ type SwapQuote struct {
 	FetchedAt       string     `json:"fetched_at"`
 }
 
+type YieldBackingAsset struct {
+	AssetID  string  `json:"asset_id"`
+	Symbol   string  `json:"symbol"`
+	SharePct float64 `json:"share_pct"`
+}
+
 type YieldOpportunity struct {
-	OpportunityID        string   `json:"opportunity_id"`
-	Provider             string   `json:"provider"`
-	Protocol             string   `json:"protocol"`
-	ChainID              string   `json:"chain_id"`
-	AssetID              string   `json:"asset_id"`
-	ProviderNativeID     string   `json:"provider_native_id,omitempty"`
-	ProviderNativeIDKind string   `json:"provider_native_id_kind,omitempty"`
-	Type                 string   `json:"type"`
-	APYBase              float64  `json:"apy_base"`
-	APYReward            float64  `json:"apy_reward"`
-	APYTotal             float64  `json:"apy_total"`
-	TVLUSD               float64  `json:"tvl_usd"`
-	LiquidityUSD         float64  `json:"liquidity_usd"`
-	LockupDays           float64  `json:"lockup_days"`
-	WithdrawalTerms      string   `json:"withdrawal_terms"`
-	RiskLevel            string   `json:"risk_level"`
-	RiskReasons          []string `json:"risk_reasons,omitempty"`
-	Score                float64  `json:"score"`
-	SourceURL            string   `json:"source_url,omitempty"`
-	FetchedAt            string   `json:"fetched_at"`
+	OpportunityID        string              `json:"opportunity_id"`
+	Provider             string              `json:"provider"`
+	Protocol             string              `json:"protocol"`
+	ChainID              string              `json:"chain_id"`
+	AssetID              string              `json:"asset_id"`
+	ProviderNativeID     string              `json:"provider_native_id,omitempty"`
+	ProviderNativeIDKind string              `json:"provider_native_id_kind,omitempty"`
+	Type                 string              `json:"type"`
+	APYBase              float64             `json:"apy_base"`
+	APYReward            float64             `json:"apy_reward"`
+	APYTotal             float64             `json:"apy_total"`
+	TVLUSD               float64             `json:"tvl_usd"`
+	LiquidityUSD         float64             `json:"liquidity_usd"`
+	LockupDays           float64             `json:"lockup_days"`
+	WithdrawalTerms      string              `json:"withdrawal_terms"`
+	BackingAssets        []YieldBackingAsset `json:"backing_assets"`
+	SourceURL            string              `json:"source_url,omitempty"`
+	FetchedAt            string              `json:"fetched_at"`
 }
 
 type YieldHistoryPoint struct {

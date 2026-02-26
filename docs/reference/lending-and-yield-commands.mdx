@@ -50,8 +50,7 @@ defi yield opportunities \
   --asset USDC \
   --providers aave,morpho \
   --min-tvl-usd 1000000 \
-  --max-risk medium \
-  --sort score \
+  --sort liquidity_usd \
   --limit 20 \
   --results-only
 ```
@@ -63,10 +62,14 @@ Flags:
 - `--limit int` (default `20`)
 - `--min-tvl-usd float` (default `0`)
 - `--min-apy float` (default `0`)
-- `--max-risk string` (`low|medium|high|unknown`, default `high`)
 - `--providers string` (`aave,morpho,kamino`)
-- `--sort string` (`score|apy_total|tvl_usd|liquidity_usd`, default `score`)
+- `--sort string` (`apy_total|tvl_usd|liquidity_usd`, default `apy_total`)
 - `--include-incomplete` bool (default `false`)
+
+Output notes:
+
+- `backing_assets` includes the full reported backing composition for each opportunity.
+- `tvl_usd` and `liquidity_usd` are provider-sourced objective metrics (not inferred risk labels).
 
 ## `yield history`
 

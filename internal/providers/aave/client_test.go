@@ -27,18 +27,18 @@ func TestLendMarketsAndYield(t *testing.T) {
 						"address": "0x87870Bca3F3fD6335C3F4ce8392D69350B4fA4E2",
 						"chain": {"chainId": 1, "name": "Ethereum"},
 						"reserves": [
-							{
-								"underlyingToken": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC", "decimals": 6},
-								"aToken": {"address": "0x71Aef7b30728b9BB371578f36c5A1f1502a5723e"},
-								"size": {"usd": "1000000"},
-								"supplyInfo": {"apy": {"value": "0.03"}, "total": {"value": "1000000"}},
-								"borrowInfo": {"apy": {"value": "0.05"}, "total": {"usd": "500000"}, "utilizationRate": {"value": "0.4"}}
-							}
-						]
-					}
-				]
-			}
-		}`))
+								{
+									"underlyingToken": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC", "decimals": 6},
+									"aToken": {"address": "0x71Aef7b30728b9BB371578f36c5A1f1502a5723e"},
+									"size": {"usd": "1000000"},
+									"supplyInfo": {"apy": {"value": "0.03"}, "total": {"value": "1000000"}},
+									"borrowInfo": {"apy": {"value": "0.05"}, "total": {"usd": "500000"}, "utilizationRate": {"value": "0.4"}, "availableLiquidity": {"usd": "600000"}}
+								}
+							]
+						}
+					]
+				}
+			}`))
 	}))
 	defer srv.Close()
 
@@ -64,7 +64,7 @@ func TestLendMarketsAndYield(t *testing.T) {
 		t.Fatalf("expected provider/native id kind metadata, got %+v", markets[0])
 	}
 
-	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "high"})
+	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10})
 	if err != nil {
 		t.Fatalf("YieldOpportunities failed: %v", err)
 	}
@@ -73,6 +73,12 @@ func TestLendMarketsAndYield(t *testing.T) {
 	}
 	if opps[0].ProviderNativeID == "" || opps[0].ProviderNativeIDKind != model.NativeIDKindCompositeMarketAsset {
 		t.Fatalf("expected yield provider native id metadata, got %+v", opps[0])
+	}
+	if opps[0].LiquidityUSD != 600000 {
+		t.Fatalf("expected liquidity 600000 from borrowInfo.availableLiquidity, got %+v", opps[0])
+	}
+	if len(opps[0].BackingAssets) != 1 || opps[0].BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected single backing asset at 100%%, got %+v", opps[0].BackingAssets)
 	}
 }
 

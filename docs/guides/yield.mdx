@@ -18,7 +18,7 @@ defi yield opportunities --chain solana --asset USDC --providers kamino --limit 
 
 `--providers` expects provider names from `defi providers list`.
 
-## Control risk and quality
+## Filter with objective metrics
 
 ```bash
 defi yield opportunities \
@@ -27,11 +27,17 @@ defi yield opportunities \
   --providers aave,morpho \
   --min-tvl-usd 1000000 \
   --min-apy 1 \
-  --max-risk medium \
-  --sort score \
+  --sort liquidity_usd \
   --limit 20 \
   --results-only
 ```
+
+## Key opportunity fields
+
+- `apy_total`: total APY percentage points (`2.3` means `2.3%`).
+- `tvl_usd`: total supplied/managed USD reported by the provider.
+- `liquidity_usd`: currently available withdrawable/borrowable USD from the provider.
+- `backing_assets`: full backing composition list with per-asset `share_pct`.
 
 ## Incomplete opportunities
 
@@ -60,5 +66,6 @@ defi yield history --chain 1 --asset USDC --providers aave --metrics apy_total -
 - APY values are percentage points (`2.3` = `2.3%`).
 - Morpho may produce extreme APY for very small markets; use `--min-tvl-usd`.
 - Kamino yield routes currently support Solana mainnet only.
+- `yield opportunities` no longer includes subjective risk/score fields.
 - `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
 - Aave history is lookback-window based and effectively ends near current time.

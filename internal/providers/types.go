@@ -87,7 +87,6 @@ type YieldRequest struct {
 	Limit             int
 	MinTVLUSD         float64
 	MinAPY            float64
-	MaxRisk           string
 	Providers         []string
 	SortBy            string
 	IncludeIncomplete bool
