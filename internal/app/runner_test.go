@@ -474,6 +474,202 @@ func TestRunnerChainsAssetsAllowsUnknownSymbolFilter(t *testing.T) {
 	}
 }
 
+func TestRunnerLendPositionsCallsProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	aaveProvider := &fakeLendingProvider{
+		name: "aave",
+		positions: []model.LendPosition{
+			{
+				Provider:       "aave",
+				ChainID:        "eip155:1",
+				AccountAddress: "0x000000000000000000000000000000000000dead",
+				PositionType:   "collateral",
+				AssetID:        "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			},
+		},
+	}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"aave": aaveProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "aave",
+		"--chain", "1",
+		"--address", "0x000000000000000000000000000000000000dEaD",
+		"--asset", "USDC",
+		"--type", "collateral",
+		"--limit", "5",
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("lend positions command failed: %v stderr=%s", err, stderr.String())
+	}
+	if aaveProvider.calls != 1 {
+		t.Fatalf("expected provider call once, got %d", aaveProvider.calls)
+	}
+	if aaveProvider.lastReq.PositionType != providers.LendPositionTypeCollateral {
+		t.Fatalf("expected collateral request type, got %s", aaveProvider.lastReq.PositionType)
+	}
+	if !strings.EqualFold(aaveProvider.lastReq.Account, "0x000000000000000000000000000000000000dead") {
+		t.Fatalf("unexpected account passed to provider: %s", aaveProvider.lastReq.Account)
+	}
+	if !strings.EqualFold(aaveProvider.lastReq.Asset.Symbol, "USDC") {
+		t.Fatalf("expected USDC asset filter, got %+v", aaveProvider.lastReq.Asset)
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if env["success"] != true {
+		t.Fatalf("expected success=true, got %v", env["success"])
+	}
+}
+
+func TestRunnerLendPositionsRejectsInvalidType(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	aaveProvider := &fakeLendingProvider{name: "aave"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"aave": aaveProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "aave",
+		"--chain", "1",
+		"--address", "0x000000000000000000000000000000000000dEaD",
+		"--type", "debt",
+	})
+
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected invalid type error, stderr=%s", stderr.String())
+	}
+	if aaveProvider.calls != 0 {
+		t.Fatalf("expected provider not to be called, got %d calls", aaveProvider.calls)
+	}
+}
+
+func TestRunnerLendPositionsRejectsInvalidEVMAddress(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	aaveProvider := &fakeLendingProvider{name: "aave"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"aave": aaveProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "aave",
+		"--chain", "1",
+		"--address", "not-an-address",
+	})
+
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected invalid address error, stderr=%s", stderr.String())
+	}
+	if aaveProvider.calls != 0 {
+		t.Fatalf("expected provider not to be called, got %d calls", aaveProvider.calls)
+	}
+}
+
+func TestRunnerLendPositionsRequiresProviderCapability(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"kamino": &fakeLendingProviderNoPositions{name: "kamino"},
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "kamino",
+		"--chain", "solana",
+		"--address", "6dM4QgP1VnRfx6TVV1t5hBf3ytA5Qn2ATqNnSboP8qz5",
+	})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected unsupported capability error, stderr=%s", stderr.String())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "does not support positions") {
+		t.Fatalf("expected capability error message, got: %v", err)
+	}
+}
+
 func TestRunnerBridgeListRejectsProviderFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1054,6 +1250,61 @@ func (f *fakeSwapProvider) QuoteSwap(_ context.Context, req providers.SwapQuoteR
 		},
 		Route: "test",
 	}, nil
+}
+
+type fakeLendingProvider struct {
+	name      string
+	positions []model.LendPosition
+	err       error
+	calls     int
+	lastReq   providers.LendPositionsRequest
+}
+
+func (f *fakeLendingProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "lending",
+		RequiresKey:  false,
+		Capabilities: []string{"lend.markets", "lend.rates", "lend.positions"},
+	}
+}
+
+func (f *fakeLendingProvider) LendMarkets(context.Context, string, id.Chain, id.Asset) ([]model.LendMarket, error) {
+	return nil, nil
+}
+
+func (f *fakeLendingProvider) LendRates(context.Context, string, id.Chain, id.Asset) ([]model.LendRate, error) {
+	return nil, nil
+}
+
+func (f *fakeLendingProvider) LendPositions(_ context.Context, req providers.LendPositionsRequest) ([]model.LendPosition, error) {
+	f.calls++
+	f.lastReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.positions, nil
+}
+
+type fakeLendingProviderNoPositions struct {
+	name string
+}
+
+func (f *fakeLendingProviderNoPositions) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "lending",
+		RequiresKey:  false,
+		Capabilities: []string{"lend.markets", "lend.rates"},
+	}
+}
+
+func (f *fakeLendingProviderNoPositions) LendMarkets(context.Context, string, id.Chain, id.Asset) ([]model.LendMarket, error) {
+	return nil, nil
+}
+
+func (f *fakeLendingProviderNoPositions) LendRates(context.Context, string, id.Chain, id.Asset) ([]model.LendRate, error) {
+	return nil, nil
 }
 
 func setUnopenableCacheEnv(t *testing.T) {

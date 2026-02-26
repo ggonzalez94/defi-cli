@@ -26,6 +26,28 @@ type LendingProvider interface {
 	LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error)
 }
 
+type LendPositionType string
+
+const (
+	LendPositionTypeAll        LendPositionType = "all"
+	LendPositionTypeSupply     LendPositionType = "supply"
+	LendPositionTypeBorrow     LendPositionType = "borrow"
+	LendPositionTypeCollateral LendPositionType = "collateral"
+)
+
+type LendPositionsRequest struct {
+	Chain        id.Chain
+	Account      string
+	Asset        id.Asset
+	PositionType LendPositionType
+	Limit        int
+}
+
+type LendingPositionsProvider interface {
+	Provider
+	LendPositions(ctx context.Context, req LendPositionsRequest) ([]model.LendPosition, error)
+}
+
 type YieldProvider interface {
 	Provider
 	YieldOpportunities(ctx context.Context, req YieldRequest) ([]model.YieldOpportunity, error)

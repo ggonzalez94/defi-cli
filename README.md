@@ -10,7 +10,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 ## Features
 
-- **Lending** — query markets and rates from Aave, Morpho, and more (with DefiLlama fallback), plus execute Aave lend actions.
+- **Lending** — query markets/rates from Aave/Morpho/Kamino and account positions from Aave/Morpho, plus execute Aave/Morpho lend actions.
 - **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
 - **Bridging** — get cross-chain quotes (Across, LiFi), bridge analytics (volume, chain breakdown), and execute LiFi bridge plans.
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
@@ -91,6 +91,7 @@ defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLA
 defi assets resolve --chain base --symbol USDC --results-only
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi lend rates --provider morpho --chain 1 --asset USDC --results-only
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
 defi yield opportunities --chain base --asset USDC --limit 20 --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
 defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
@@ -273,7 +274,7 @@ providers:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
@@ -299,6 +300,7 @@ providers:
 - `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
 - For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
+- `lend positions --type all` returns disjoint rows by intent: `supply` (non-collateralized supplied balance), `collateral` (posted collateral), and `borrow` (debt).
 - Swap execution currently supports TaikoSwap only.
 - Bridge execution currently supports Across and LiFi.
 - Lend execution supports Aave and Morpho (`--market-id` required for Morpho).

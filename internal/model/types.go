@@ -130,6 +130,22 @@ type LendRate struct {
 	FetchedAt            string  `json:"fetched_at"`
 }
 
+type LendPosition struct {
+	Protocol             string     `json:"protocol"`
+	Provider             string     `json:"provider"`
+	ChainID              string     `json:"chain_id"`
+	AccountAddress       string     `json:"account_address"`
+	PositionType         string     `json:"position_type"`
+	AssetID              string     `json:"asset_id"`
+	ProviderNativeID     string     `json:"provider_native_id,omitempty"`
+	ProviderNativeIDKind string     `json:"provider_native_id_kind,omitempty"`
+	Amount               AmountInfo `json:"amount"`
+	AmountUSD            float64    `json:"amount_usd"`
+	APY                  float64    `json:"apy"`
+	SourceURL            string     `json:"source_url,omitempty"`
+	FetchedAt            string     `json:"fetched_at"`
+}
+
 type AmountInfo struct {
 	AmountBaseUnits string `json:"amount_base_units"`
 	AmountDecimal   string `json:"amount_decimal"`

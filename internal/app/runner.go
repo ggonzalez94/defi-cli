@@ -527,8 +527,83 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
 
+	var positionsProvider, positionsChain, positionsAddress, positionsAsset, positionsType string
+	var positionsLimit int
+	positionsCmd := &cobra.Command{
+		Use:   "positions",
+		Short: "List lending positions for an account address",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			providerName := normalizeLendingProvider(positionsProvider)
+			if providerName == "" {
+				return clierr.New(clierr.CodeUsage, "--provider is required")
+			}
+			chain, err := id.ParseChain(positionsChain)
+			if err != nil {
+				return err
+			}
+			account := strings.TrimSpace(positionsAddress)
+			if account == "" {
+				return clierr.New(clierr.CodeUsage, "--address is required")
+			}
+			if chain.IsEVM() && !common.IsHexAddress(account) {
+				return clierr.New(clierr.CodeUsage, "--address must be a valid EVM hex address")
+			}
+
+			asset, err := parseOptionalChainAsset(chain, positionsAsset)
+			if err != nil {
+				return err
+			}
+			positionType, err := parseLendPositionType(positionsType)
+			if err != nil {
+				return err
+			}
+
+			cacheAccount := account
+			if chain.IsEVM() {
+				cacheAccount = strings.ToLower(account)
+			}
+			req := map[string]any{
+				"provider": providerName,
+				"chain":    chain.CAIP2,
+				"address":  cacheAccount,
+				"asset":    chainAssetFilterCacheValue(asset, positionsAsset),
+				"type":     string(positionType),
+				"limit":    positionsLimit,
+			}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				provider, err := s.selectLendingProvider(providerName)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				positionProvider, ok := provider.(providers.LendingPositionsProvider)
+				if !ok {
+					return nil, nil, nil, false, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("lending provider %s does not support positions", providerName))
+				}
+
+				start := time.Now()
+				data, err := positionProvider.LendPositions(ctx, providers.LendPositionsRequest{
+					Chain:        chain,
+					Account:      account,
+					Asset:        asset,
+					PositionType: positionType,
+					Limit:        positionsLimit,
+				})
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, statuses, nil, false, err
+			})
+		},
+	}
+	positionsCmd.Flags().StringVar(&positionsProvider, "provider", "", "Lending provider (aave, morpho)")
+	positionsCmd.Flags().StringVar(&positionsChain, "chain", "", "Chain identifier")
+	positionsCmd.Flags().StringVar(&positionsAddress, "address", "", "Position owner address")
+	positionsCmd.Flags().StringVar(&positionsAsset, "asset", "", "Optional asset filter (symbol/address/CAIP-19)")
+	positionsCmd.Flags().StringVar(&positionsType, "type", string(providers.LendPositionTypeAll), "Position type filter (all|supply|borrow|collateral)")
+	positionsCmd.Flags().IntVar(&positionsLimit, "limit", 20, "Maximum positions to return")
+
 	root.AddCommand(marketsCmd)
 	root.AddCommand(ratesCmd)
+	root.AddCommand(positionsCmd)
 	s.addLendExecutionSubcommands(root)
 	return root
 }
@@ -1481,6 +1556,21 @@ func normalizeLendingProvider(input string) string {
 	}
 }
 
+func parseLendPositionType(input string) (providers.LendPositionType, error) {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "", string(providers.LendPositionTypeAll):
+		return providers.LendPositionTypeAll, nil
+	case string(providers.LendPositionTypeSupply):
+		return providers.LendPositionTypeSupply, nil
+	case string(providers.LendPositionTypeBorrow):
+		return providers.LendPositionTypeBorrow, nil
+	case string(providers.LendPositionTypeCollateral):
+		return providers.LendPositionTypeCollateral, nil
+	default:
+		return "", clierr.New(clierr.CodeUsage, "--type must be one of: all,supply,borrow,collateral")
+	}
+}
+
 func (s *runtimeState) selectLendingProvider(providerName string) (providers.LendingProvider, error) {
 	primary, ok := s.lendingProviders[providerName]
 	if !ok {
@@ -1613,6 +1703,27 @@ func parseChainAsset(chainArg, assetArg string) (id.Chain, id.Asset, error) {
 		return id.Chain{}, id.Asset{}, err
 	}
 	return chain, asset, nil
+}
+
+func parseOptionalChainAsset(chain id.Chain, assetArg string) (id.Asset, error) {
+	assetArg = strings.TrimSpace(assetArg)
+	if assetArg == "" {
+		return id.Asset{}, nil
+	}
+
+	asset, err := id.ParseAsset(assetArg, chain)
+	if err == nil {
+		return asset, nil
+	}
+
+	if looksLikeAddressOrCAIP(assetArg) || !looksLikeSymbolFilter(assetArg) {
+		return id.Asset{}, err
+	}
+
+	return id.Asset{
+		ChainID: chain.CAIP2,
+		Symbol:  strings.ToUpper(assetArg),
+	}, nil
 }
 
 func parseChainAssetFilter(chain id.Chain, assetArg string) (id.Asset, error) {

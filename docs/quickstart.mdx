@@ -26,9 +26,10 @@ defi assets resolve --chain solana --asset USDC --results-only
 ## 4. Query lending markets and rates
 
 ```bash
-defi lend markets --protocol aave --chain 1 --asset USDC --limit 5 --results-only
-defi lend rates --protocol morpho --chain 1 --asset USDC --limit 5 --results-only
-defi lend markets --protocol kamino --chain solana --asset USDC --limit 5 --results-only
+defi lend markets --provider aave --chain 1 --asset USDC --limit 5 --results-only
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 5 --results-only
+defi lend markets --provider kamino --chain solana --asset USDC --limit 5 --results-only
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 5 --results-only
 ```
 
 ## 5. Rank yield opportunities

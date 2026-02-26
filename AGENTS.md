@@ -20,6 +20,7 @@ go vet ./...
 
 ./defi providers list --results-only
 ./defi lend markets --provider aave --chain 1 --asset USDC --results-only
+./defi lend positions --provider aave --chain 1 --address 0x000000000000000000000000000000000000dEaD --type all --limit 3 --results-only
 ./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
 ```
 
@@ -66,7 +67,9 @@ README.md                         # user-facing usage + caveats
 - Error output always returns a full envelope, even with `--results-only` or `--select`.
 - Config precedence is `flags > env > config file > defaults`.
 - `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
-- Lending routes by `--provider` to direct adapters when available, then may fallback to DefiLlama on selected failures.
+- Lending routes by `--provider` use direct protocol adapters (`aave`, `morpho`, `kamino`).
+- `lend positions` currently supports `--provider aave|morpho`; `kamino` does not expose positions yet.
+- `lend positions --type all` intentionally returns non-overlapping intents (`supply`, `borrow`, `collateral`) for automation-friendly filtering.
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
@@ -108,7 +111,7 @@ README.md                         # user-facing usage + caveats
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show`) bypass cache initialization.
-- For `lend`/`yield`, unresolved asset symbols skip DefiLlama symbol matching and fallback/provider selection where symbol-based matching would be unsafe.
+- For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
 - Mintlify production docs should use the `docs-live` branch; the release workflow force-syncs `docs-live` to each `v*` tag.

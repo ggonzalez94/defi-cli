@@ -6,13 +6,13 @@ description: Full reference for lend and yield command flags and examples.
 ## `lend markets`
 
 ```bash
-defi lend markets --protocol aave --chain 1 --asset USDC --limit 20 --results-only
-defi lend markets --protocol kamino --chain solana --asset USDC --limit 20 --results-only
+defi lend markets --provider aave --chain 1 --asset USDC --limit 20 --results-only
+defi lend markets --provider kamino --chain solana --asset USDC --limit 20 --results-only
 ```
 
 Flags:
 
-- `--protocol string` (`aave`, `morpho`, `kamino`) required
+- `--provider string` (`aave`, `morpho`, `kamino`) required
 - `--chain string` required
 - `--asset string` required
 - `--limit int` (default `20`)
@@ -20,11 +20,27 @@ Flags:
 ## `lend rates`
 
 ```bash
-defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --results-only
-defi lend rates --protocol kamino --chain solana --asset USDC --limit 20 --results-only
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 20 --results-only
+defi lend rates --provider kamino --chain solana --asset USDC --limit 20 --results-only
 ```
 
 Flags are the same as `lend markets`.
+
+## `lend positions`
+
+```bash
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
+defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borrow --asset USDC --results-only
+```
+
+Flags:
+
+- `--provider string` (`aave`, `morpho`) required
+- `--chain string` required
+- `--address string` required
+- `--asset string` optional filter (`symbol`/address/CAIP-19)
+- `--type string` (`all|supply|borrow|collateral`, default `all`)
+- `--limit int` (default `20`)
 
 ## `yield opportunities`
 

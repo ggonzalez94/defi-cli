@@ -41,6 +41,7 @@ func (c *Client) Info() model.ProviderInfo {
 		Capabilities: []string{
 			"lend.markets",
 			"lend.rates",
+			"lend.positions",
 			"yield.opportunities",
 			"lend.plan",
 			"lend.execute",
@@ -65,9 +66,53 @@ const marketsQuery = `query Markets($request: MarketsRequest!) {
   }
 }`
 
+const marketAddressesQuery = `query MarketAddresses($request: MarketsRequest!) {
+  markets(request: $request) {
+    address
+  }
+}`
+
+const positionsQuery = `query Positions($suppliesRequest: UserSuppliesRequest!, $borrowsRequest: UserBorrowsRequest!) {
+  userSupplies(request: $suppliesRequest) {
+    market { address }
+    currency { address symbol decimals }
+    balance { amount { raw decimals value } usd }
+    apy { value }
+    isCollateral
+    canBeCollateral
+  }
+  userBorrows(request: $borrowsRequest) {
+    market { address }
+    currency { address symbol decimals }
+    debt { amount { raw decimals value } usd }
+    apy { value }
+  }
+}`
+
 type marketsResponse struct {
 	Data struct {
 		Markets []aaveMarket `json:"markets"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type marketAddressesResponse struct {
+	Data struct {
+		Markets []struct {
+			Address string `json:"address"`
+		} `json:"markets"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type positionsResponse struct {
+	Data struct {
+		UserSupplies []aaveUserSupply `json:"userSupplies"`
+		UserBorrows  []aaveUserBorrow `json:"userBorrows"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -115,6 +160,52 @@ type aaveReserve struct {
 			Value string `json:"value"`
 		} `json:"utilizationRate"`
 	} `json:"borrowInfo"`
+}
+
+type aaveUserSupply struct {
+	Market struct {
+		Address string `json:"address"`
+	} `json:"market"`
+	Currency struct {
+		Address  string `json:"address"`
+		Symbol   string `json:"symbol"`
+		Decimals int    `json:"decimals"`
+	} `json:"currency"`
+	Balance struct {
+		Amount struct {
+			Raw      string `json:"raw"`
+			Decimals int    `json:"decimals"`
+			Value    string `json:"value"`
+		} `json:"amount"`
+		USD string `json:"usd"`
+	} `json:"balance"`
+	APY struct {
+		Value string `json:"value"`
+	} `json:"apy"`
+	IsCollateral    bool `json:"isCollateral"`
+	CanBeCollateral bool `json:"canBeCollateral"`
+}
+
+type aaveUserBorrow struct {
+	Market struct {
+		Address string `json:"address"`
+	} `json:"market"`
+	Currency struct {
+		Address  string `json:"address"`
+		Symbol   string `json:"symbol"`
+		Decimals int    `json:"decimals"`
+	} `json:"currency"`
+	Debt struct {
+		Amount struct {
+			Raw      string `json:"raw"`
+			Decimals int    `json:"decimals"`
+			Value    string `json:"value"`
+		} `json:"amount"`
+		USD string `json:"usd"`
+	} `json:"debt"`
+	APY struct {
+		Value string `json:"value"`
+	} `json:"apy"`
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
@@ -217,6 +308,135 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 	})
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "no aave lending rates for requested chain/asset")
+	}
+	return out, nil
+}
+
+func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsRequest) ([]model.LendPosition, error) {
+	if !req.Chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
+	}
+	account := normalizeEVMAddress(req.Account)
+	if account == "" {
+		return nil, clierr.New(clierr.CodeUsage, "aave positions requires a valid EVM account address")
+	}
+
+	marketAddresses, err := c.fetchMarketAddresses(ctx, req.Chain)
+	if err != nil {
+		return nil, err
+	}
+	markets := make([]map[string]any, 0, len(marketAddresses))
+	for _, address := range marketAddresses {
+		markets = append(markets, map[string]any{
+			"address": address,
+			"chainId": req.Chain.EVMChainID,
+		})
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"query": positionsQuery,
+		"variables": map[string]any{
+			"suppliesRequest": map[string]any{
+				"markets":         markets,
+				"user":            account,
+				"collateralsOnly": false,
+				"orderBy": map[string]any{
+					"balance": "DESC",
+				},
+			},
+			"borrowsRequest": map[string]any{
+				"markets": markets,
+				"user":    account,
+				"orderBy": map[string]any{
+					"debt": "DESC",
+				},
+			},
+		},
+	})
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave positions query", err)
+	}
+
+	var resp positionsResponse
+	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Errors) > 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	}
+
+	filterType := req.PositionType
+	if filterType == "" {
+		filterType = providers.LendPositionTypeAll
+	}
+	out := make([]model.LendPosition, 0, len(resp.Data.UserSupplies)+len(resp.Data.UserBorrows))
+	for _, supply := range resp.Data.UserSupplies {
+		positionType := providers.LendPositionTypeSupply
+		if supply.IsCollateral {
+			positionType = providers.LendPositionTypeCollateral
+		}
+		if !matchesPositionType(filterType, positionType) {
+			continue
+		}
+		if !matchesPositionAsset(supply.Currency.Address, supply.Currency.Symbol, req.Asset) {
+			continue
+		}
+
+		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, supply.Currency.Address)
+		if assetID == "" {
+			continue
+		}
+		amount := amountInfoFromRaw(supply.Balance.Amount.Raw, supply.Currency.Decimals)
+		out = append(out, model.LendPosition{
+			Protocol:             "aave",
+			Provider:             "aave",
+			ChainID:              req.Chain.CAIP2,
+			AccountAddress:       account,
+			PositionType:         string(positionType),
+			AssetID:              assetID,
+			ProviderNativeID:     providerNativeID("aave", req.Chain.CAIP2, supply.Market.Address, supply.Currency.Address),
+			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+			Amount:               amount,
+			AmountUSD:            parseFloat(supply.Balance.USD),
+			APY:                  parseFloat(supply.APY.Value) * 100,
+			SourceURL:            "https://app.aave.com",
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	for _, borrow := range resp.Data.UserBorrows {
+		if !matchesPositionType(filterType, providers.LendPositionTypeBorrow) {
+			continue
+		}
+		if !matchesPositionAsset(borrow.Currency.Address, borrow.Currency.Symbol, req.Asset) {
+			continue
+		}
+
+		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, borrow.Currency.Address)
+		if assetID == "" {
+			continue
+		}
+		amount := amountInfoFromRaw(borrow.Debt.Amount.Raw, borrow.Currency.Decimals)
+		out = append(out, model.LendPosition{
+			Protocol:             "aave",
+			Provider:             "aave",
+			ChainID:              req.Chain.CAIP2,
+			AccountAddress:       account,
+			PositionType:         string(providers.LendPositionTypeBorrow),
+			AssetID:              assetID,
+			ProviderNativeID:     providerNativeID("aave", req.Chain.CAIP2, borrow.Market.Address, borrow.Currency.Address),
+			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+			Amount:               amount,
+			AmountUSD:            parseFloat(borrow.Debt.USD),
+			APY:                  parseFloat(borrow.APY.Value) * 100,
+			SourceURL:            "https://app.aave.com",
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
+		})
+	}
+
+	sortLendPositions(out)
+	if req.Limit > 0 && len(out) > req.Limit {
+		out = out[:req.Limit]
 	}
 	return out, nil
 }
@@ -324,6 +544,45 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket
 	return resp.Data.Markets, nil
 }
 
+func (c *Client) fetchMarketAddresses(ctx context.Context, chain id.Chain) ([]string, error) {
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
+	}
+	body, err := json.Marshal(map[string]any{
+		"query": marketAddressesQuery,
+		"variables": map[string]any{
+			"request": map[string]any{
+				"chainIds": []int64{chain.EVMChainID},
+			},
+		},
+	})
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave market-address query", err)
+	}
+
+	var resp marketAddressesResponse
+	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Errors) > 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	}
+	if len(resp.Data.Markets) == 0 {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave has no market for requested chain")
+	}
+	out := make([]string, 0, len(resp.Data.Markets))
+	for _, market := range resp.Data.Markets {
+		address := normalizeEVMAddress(market.Address)
+		if address != "" {
+			out = append(out, address)
+		}
+	}
+	if len(out) == 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, "aave market list returned no valid addresses")
+	}
+	return out, nil
+}
+
 func matchesReserveAsset(r aaveReserve, asset id.Asset) bool {
 	assetAddress := strings.TrimSpace(asset.Address)
 	if assetAddress != "" {
@@ -340,6 +599,14 @@ func canonicalAssetID(asset id.Asset, address string) string {
 	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
 }
 
+func canonicalAssetIDForChain(chainID, address string) string {
+	addr := normalizeEVMAddress(address)
+	if chainID == "" || addr == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
+}
+
 func normalizeEVMAddress(address string) string {
 	addr := strings.ToLower(strings.TrimSpace(address))
 	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
@@ -350,6 +617,63 @@ func normalizeEVMAddress(address string) string {
 
 func providerNativeID(provider, chainID, marketAddress, underlyingAddress string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(marketAddress), normalizeEVMAddress(underlyingAddress))
+}
+
+func matchesPositionType(filter, position providers.LendPositionType) bool {
+	if filter == "" || filter == providers.LendPositionTypeAll {
+		return true
+	}
+	return filter == position
+}
+
+func matchesPositionAsset(address, symbol string, asset id.Asset) bool {
+	if strings.TrimSpace(asset.Address) != "" {
+		return strings.EqualFold(strings.TrimSpace(address), strings.TrimSpace(asset.Address))
+	}
+	if strings.TrimSpace(asset.Symbol) != "" {
+		return strings.EqualFold(strings.TrimSpace(symbol), strings.TrimSpace(asset.Symbol))
+	}
+	return true
+}
+
+func amountInfoFromRaw(raw string, decimals int) model.AmountInfo {
+	if decimals < 0 {
+		decimals = 0
+	}
+	base := normalizeBaseUnits(raw)
+	return model.AmountInfo{
+		AmountBaseUnits: base,
+		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
+		Decimals:        decimals,
+	}
+}
+
+func normalizeBaseUnits(v string) string {
+	clean := strings.TrimSpace(v)
+	if clean == "" {
+		return "0"
+	}
+	for _, r := range clean {
+		if r < '0' || r > '9' {
+			return "0"
+		}
+	}
+	return clean
+}
+
+func sortLendPositions(items []model.LendPosition) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].AmountUSD != items[j].AmountUSD {
+			return items[i].AmountUSD > items[j].AmountUSD
+		}
+		if items[i].PositionType != items[j].PositionType {
+			return items[i].PositionType < items[j].PositionType
+		}
+		if items[i].AssetID != items[j].AssetID {
+			return items[i].AssetID < items[j].AssetID
+		}
+		return items[i].ProviderNativeID < items[j].ProviderNativeID
+	})
 }
 
 func parseFloat(v string) float64 {

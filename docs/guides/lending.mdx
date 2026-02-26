@@ -6,27 +6,27 @@ description: Query lending markets and rates across direct protocol adapters.
 ## Markets
 
 ```bash
-defi lend markets --protocol aave --chain 1 --asset USDC --limit 10 --results-only
-defi lend markets --protocol kamino --chain solana --asset USDC --limit 10 --results-only
+defi lend markets --provider aave --chain 1 --asset USDC --limit 10 --results-only
+defi lend markets --provider kamino --chain solana --asset USDC --limit 10 --results-only
 ```
 
 ## Rates
 
 ```bash
-defi lend rates --protocol morpho --chain 1 --asset USDC --limit 10 --results-only
-defi lend rates --protocol kamino --chain solana --asset USDC --limit 10 --results-only
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 10 --results-only
+defi lend rates --provider kamino --chain solana --asset USDC --limit 10 --results-only
 ```
 
 ## Protocol routing
 
-- `--protocol aave` -> Aave adapter
-- `--protocol morpho` -> Morpho adapter
-- `--protocol kamino` -> Kamino adapter (Solana mainnet only)
+- `--provider aave` -> Aave adapter
+- `--provider morpho` -> Morpho adapter
+- `--provider kamino` -> Kamino adapter (Solana mainnet only)
 
 ## Suggested filters and reliability defaults
 
 ```bash
-defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --timeout 12s --retries 2 --max-stale 5m --results-only
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 20 --timeout 12s --retries 2 --max-stale 5m --results-only
 ```
 
 ## Output fields

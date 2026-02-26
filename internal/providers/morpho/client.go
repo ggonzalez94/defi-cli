@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"math/big"
 	"net/http"
 	"sort"
 	"strings"
@@ -40,6 +41,7 @@ func (c *Client) Info() model.ProviderInfo {
 		Capabilities: []string{
 			"lend.markets",
 			"lend.rates",
+			"lend.positions",
 			"yield.opportunities",
 			"lend.plan",
 			"lend.execute",
@@ -60,11 +62,44 @@ const marketsQuery = `query Markets($first:Int,$where:MarketFilters,$orderBy:Mar
   }
 }`
 
+const positionsQuery = `query Positions($first:Int,$where:MarketPositionFilters,$orderBy:MarketPositionOrderBy,$orderDirection:OrderDirection){
+  marketPositions(first:$first, where:$where, orderBy:$orderBy, orderDirection:$orderDirection){
+    items{
+      id
+      market{
+        uniqueKey
+        loanAsset{ address symbol decimals chain{ id network } }
+        collateralAsset{ address symbol decimals }
+        state{ supplyApy borrowApy }
+      }
+      state{
+        supplyAssets
+        supplyAssetsUsd
+        borrowAssets
+        borrowAssetsUsd
+        collateral
+        collateralUsd
+      }
+    }
+  }
+}`
+
 type marketsResponse struct {
 	Data struct {
 		Markets struct {
 			Items []morphoMarket `json:"items"`
 		} `json:"markets"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type positionsResponse struct {
+	Data struct {
+		MarketPositions struct {
+			Items []morphoMarketPosition `json:"items"`
+		} `json:"marketPositions"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -95,6 +130,39 @@ type morphoMarket struct {
 		SupplyAssetsUSD    float64 `json:"supplyAssetsUsd"`
 		LiquidityAssetsUSD float64 `json:"liquidityAssetsUsd"`
 		TotalLiquidityUSD  float64 `json:"totalLiquidityUsd"`
+	} `json:"state"`
+}
+
+type morphoMarketPosition struct {
+	ID     string `json:"id"`
+	Market struct {
+		UniqueKey string `json:"uniqueKey"`
+		LoanAsset struct {
+			Address  string `json:"address"`
+			Symbol   string `json:"symbol"`
+			Decimals int    `json:"decimals"`
+			Chain    struct {
+				ID      int64  `json:"id"`
+				Network string `json:"network"`
+			} `json:"chain"`
+		} `json:"loanAsset"`
+		CollateralAsset *struct {
+			Address  string `json:"address"`
+			Symbol   string `json:"symbol"`
+			Decimals int    `json:"decimals"`
+		} `json:"collateralAsset"`
+		State *struct {
+			SupplyAPY float64 `json:"supplyApy"`
+			BorrowAPY float64 `json:"borrowApy"`
+		} `json:"state"`
+	} `json:"market"`
+	State *struct {
+		SupplyAssets    bigintString `json:"supplyAssets"`
+		SupplyAssetsUSD float64      `json:"supplyAssetsUsd"`
+		BorrowAssets    bigintString `json:"borrowAssets"`
+		BorrowAssetsUSD float64      `json:"borrowAssetsUsd"`
+		Collateral      bigintString `json:"collateral"`
+		CollateralUSD   float64      `json:"collateralUsd"`
 	} `json:"state"`
 }
 
@@ -177,6 +245,143 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 	})
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "no morpho lending rates for requested chain/asset")
+	}
+	return out, nil
+}
+
+func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsRequest) ([]model.LendPosition, error) {
+	if !req.Chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
+	}
+	account := normalizeEVMAddress(req.Account)
+	if account == "" {
+		return nil, clierr.New(clierr.CodeUsage, "morpho positions requires a valid EVM account address")
+	}
+	filterType := req.PositionType
+	if filterType == "" {
+		filterType = providers.LendPositionTypeAll
+	}
+
+	first := req.Limit
+	if first <= 0 {
+		first = 200
+	} else if first < 50 {
+		first = 50
+	}
+	body, err := json.Marshal(map[string]any{
+		"query": positionsQuery,
+		"variables": map[string]any{
+			"first":          first,
+			"orderBy":        "SupplyShares",
+			"orderDirection": "Desc",
+			"where": map[string]any{
+				"userAddress_in": []string{account},
+				"chainId_in":     []int64{req.Chain.EVMChainID},
+				"marketListed":   true,
+			},
+		},
+	})
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho positions query", err)
+	}
+
+	var resp positionsResponse
+	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Errors) > 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+	}
+
+	out := make([]model.LendPosition, 0, len(resp.Data.MarketPositions.Items)*2)
+	for _, item := range resp.Data.MarketPositions.Items {
+		if item.State == nil {
+			continue
+		}
+
+		loanAssetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Market.LoanAsset.Address)
+		if loanAssetID != "" {
+			if matchesPositionType(filterType, providers.LendPositionTypeSupply) &&
+				matchesPositionAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
+				base := item.State.SupplyAssets.normalized()
+				if base != "0" {
+					supplyAPY := 0.0
+					if item.Market.State != nil {
+						supplyAPY = item.Market.State.SupplyAPY * 100
+					}
+					out = append(out, model.LendPosition{
+						Protocol:             "morpho",
+						Provider:             "morpho",
+						ChainID:              req.Chain.CAIP2,
+						AccountAddress:       account,
+						PositionType:         string(providers.LendPositionTypeSupply),
+						AssetID:              loanAssetID,
+						ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
+						ProviderNativeIDKind: model.NativeIDKindMarketID,
+						Amount:               amountInfoFromBase(base, item.Market.LoanAsset.Decimals),
+						AmountUSD:            item.State.SupplyAssetsUSD,
+						APY:                  supplyAPY,
+						SourceURL:            "https://app.morpho.org",
+						FetchedAt:            c.now().UTC().Format(time.RFC3339),
+					})
+				}
+			}
+
+			if matchesPositionType(filterType, providers.LendPositionTypeBorrow) &&
+				matchesPositionAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
+				base := item.State.BorrowAssets.normalized()
+				if base != "0" {
+					borrowAPY := 0.0
+					if item.Market.State != nil {
+						borrowAPY = item.Market.State.BorrowAPY * 100
+					}
+					out = append(out, model.LendPosition{
+						Protocol:             "morpho",
+						Provider:             "morpho",
+						ChainID:              req.Chain.CAIP2,
+						AccountAddress:       account,
+						PositionType:         string(providers.LendPositionTypeBorrow),
+						AssetID:              loanAssetID,
+						ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
+						ProviderNativeIDKind: model.NativeIDKindMarketID,
+						Amount:               amountInfoFromBase(base, item.Market.LoanAsset.Decimals),
+						AmountUSD:            item.State.BorrowAssetsUSD,
+						APY:                  borrowAPY,
+						SourceURL:            "https://app.morpho.org",
+						FetchedAt:            c.now().UTC().Format(time.RFC3339),
+					})
+				}
+			}
+		}
+
+		if item.Market.CollateralAsset != nil &&
+			matchesPositionType(filterType, providers.LendPositionTypeCollateral) &&
+			matchesPositionAsset(item.Market.CollateralAsset.Address, item.Market.CollateralAsset.Symbol, req.Asset) {
+			base := item.State.Collateral.normalized()
+			collateralAssetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Market.CollateralAsset.Address)
+			if base != "0" && collateralAssetID != "" {
+				out = append(out, model.LendPosition{
+					Protocol:             "morpho",
+					Provider:             "morpho",
+					ChainID:              req.Chain.CAIP2,
+					AccountAddress:       account,
+					PositionType:         string(providers.LendPositionTypeCollateral),
+					AssetID:              collateralAssetID,
+					ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
+					ProviderNativeIDKind: model.NativeIDKindMarketID,
+					Amount:               amountInfoFromBase(base, item.Market.CollateralAsset.Decimals),
+					AmountUSD:            item.State.CollateralUSD,
+					APY:                  0,
+					SourceURL:            "https://app.morpho.org",
+					FetchedAt:            c.now().UTC().Format(time.RFC3339),
+				})
+			}
+		}
+	}
+
+	sortLendPositions(out)
+	if req.Limit > 0 && len(out) > req.Limit {
+		out = out[:req.Limit]
 	}
 	return out, nil
 }
@@ -287,6 +492,14 @@ func canonicalAssetID(asset id.Asset, address string) string {
 	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
 }
 
+func canonicalAssetIDForChain(chainID, address string) string {
+	addr := normalizeEVMAddress(address)
+	if chainID == "" || addr == "" {
+		return ""
+	}
+	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
+}
+
 func riskFromCollateral(collateral *struct {
 	Address string `json:"address"`
 	Symbol  string `json:"symbol"`
@@ -307,4 +520,87 @@ func hashOpportunity(provider, chainID, marketID, assetID string) string {
 	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
 	h := sha1.Sum([]byte(seed))
 	return hex.EncodeToString(h[:])
+}
+
+type bigintString string
+
+func (b *bigintString) UnmarshalJSON(data []byte) error {
+	raw := strings.TrimSpace(string(data))
+	if raw == "" || raw == "null" {
+		*b = "0"
+		return nil
+	}
+	if strings.HasPrefix(raw, "\"") {
+		var s string
+		if err := json.Unmarshal(data, &s); err != nil {
+			return err
+		}
+		*b = bigintString(strings.TrimSpace(s))
+		return nil
+	}
+	*b = bigintString(raw)
+	return nil
+}
+
+func (b bigintString) normalized() string {
+	raw := strings.TrimSpace(string(b))
+	if raw == "" {
+		return "0"
+	}
+	n, ok := new(big.Int).SetString(raw, 10)
+	if !ok || n.Sign() <= 0 {
+		return "0"
+	}
+	return n.String()
+}
+
+func normalizeEVMAddress(address string) string {
+	addr := strings.ToLower(strings.TrimSpace(address))
+	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
+		return ""
+	}
+	return addr
+}
+
+func matchesPositionType(filter, position providers.LendPositionType) bool {
+	if filter == "" || filter == providers.LendPositionTypeAll {
+		return true
+	}
+	return filter == position
+}
+
+func matchesPositionAsset(address, symbol string, asset id.Asset) bool {
+	if strings.TrimSpace(asset.Address) != "" {
+		return strings.EqualFold(strings.TrimSpace(address), strings.TrimSpace(asset.Address))
+	}
+	if strings.TrimSpace(asset.Symbol) != "" {
+		return strings.EqualFold(strings.TrimSpace(symbol), strings.TrimSpace(asset.Symbol))
+	}
+	return true
+}
+
+func amountInfoFromBase(base string, decimals int) model.AmountInfo {
+	if decimals < 0 {
+		decimals = 0
+	}
+	return model.AmountInfo{
+		AmountBaseUnits: base,
+		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
+		Decimals:        decimals,
+	}
+}
+
+func sortLendPositions(items []model.LendPosition) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].AmountUSD != items[j].AmountUSD {
+			return items[i].AmountUSD > items[j].AmountUSD
+		}
+		if items[i].PositionType != items[j].PositionType {
+			return items[i].PositionType < items[j].PositionType
+		}
+		if items[i].AssetID != items[j].AssetID {
+			return items[i].AssetID < items[j].AssetID
+		}
+		return items[i].ProviderNativeID < items[j].ProviderNativeID
+	})
 }

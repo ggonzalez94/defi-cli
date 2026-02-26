@@ -22,6 +22,7 @@ Format:
 - Added planner unit tests for approvals, Aave lend/rewards flows, and LiFi bridge action building.
 - Added centralized execution registry data in `internal/registry` for endpoint, contract, and ABI references.
 - Added nightly execution-planning smoke workflow (`nightly-execution-smoke.yml`) and script.
+- Added `lend positions` to query account-level lending positions by address for Aave and Morpho with `--type all|supply|borrow|collateral`.
 
 ### Changed
 - BREAKING: Lend and rewards commands now use `--provider` as the selector flag; `--protocol` has been removed.
@@ -54,6 +55,7 @@ Format:
 - `swap quote` (on-chain providers) and `swap plan`/`swap run` now support `--rpc-url` to override chain default RPCs per invocation.
 - Swap execution planning now validates sender/recipient fields as EVM addresses before route planning.
 - Uniswap `swap quote` now requires a real `--from-address` swapper input instead of using a deterministic placeholder address.
+- `lend positions` now emits non-overlapping type rows for automation: `supply` (non-collateral), `collateral` (posted collateral), and `borrow` (debt).
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
@@ -63,6 +65,7 @@ Format:
 - Updated `AGENTS.md` with expanded execution command coverage and caveats.
 - Updated `docs/act-execution-design.md` implementation status to reflect the shipped Phase 2 surface.
 - Clarified execution builder architecture split (provider-backed route builders for swap/bridge vs internal planners for lend/rewards/approvals) in `AGENTS.md` and execution design docs.
+- Added `lend positions` usage and caveats to `README.md`, `AGENTS.md`, and Mintlify lending command reference.
 
 ### Security
 - None yet.
