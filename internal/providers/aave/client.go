@@ -43,6 +43,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"lend.rates",
 			"lend.positions",
 			"yield.opportunities",
+			"yield.history",
 			"lend.plan",
 			"lend.execute",
 			"rewards.plan",
@@ -89,6 +90,13 @@ const positionsQuery = `query Positions($suppliesRequest: UserSuppliesRequest!, 
   }
 }`
 
+const supplyAPYHistoryQuery = `query SupplyAPYHistory($request: SupplyAPYHistoryRequest!) {
+  supplyAPYHistory(request: $request) {
+    date
+    avgRate { value }
+  }
+}`
+
 type marketsResponse struct {
 	Data struct {
 		Markets []aaveMarket `json:"markets"`
@@ -113,6 +121,20 @@ type positionsResponse struct {
 	Data struct {
 		UserSupplies []aaveUserSupply `json:"userSupplies"`
 		UserBorrows  []aaveUserBorrow `json:"userBorrows"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type supplyAPYHistoryResponse struct {
+	Data struct {
+		SupplyAPYHistory []struct {
+			Date    string `json:"date"`
+			AvgRate struct {
+				Value string `json:"value"`
+			} `json:"avgRate"`
+		} `json:"supplyAPYHistory"`
 	} `json:"data"`
 	Errors []struct {
 		Message string `json:"message"`
@@ -515,6 +537,107 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 	return out[:req.Limit], nil
 }
 
+func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
+	if !strings.EqualFold(strings.TrimSpace(req.Opportunity.Provider), "aave") {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave history supports only aave opportunities")
+	}
+	if !req.StartTime.Before(req.EndTime) {
+		return nil, clierr.New(clierr.CodeUsage, "history start time must be before end time")
+	}
+	metricSet := make(map[providers.YieldHistoryMetric]struct{}, len(req.Metrics))
+	for _, metric := range req.Metrics {
+		metricSet[metric] = struct{}{}
+	}
+	for metric := range metricSet {
+		if metric != providers.YieldHistoryMetricAPYTotal {
+			return nil, clierr.New(clierr.CodeUnsupported, "aave history supports only metric=apy_total")
+		}
+	}
+
+	chain, err := id.ParseChain(req.Opportunity.ChainID)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeUsage, "parse aave opportunity chain", err)
+	}
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
+	}
+
+	marketAddress, underlyingAddress, err := parseOpportunityNativeID(req.Opportunity)
+	if err != nil {
+		return nil, err
+	}
+	window, err := historyWindow(req.StartTime, req.EndTime, c.now().UTC())
+	if err != nil {
+		return nil, err
+	}
+
+	body, err := json.Marshal(map[string]any{
+		"query": supplyAPYHistoryQuery,
+		"variables": map[string]any{
+			"request": map[string]any{
+				"market":          marketAddress,
+				"underlyingToken": underlyingAddress,
+				"window":          window,
+				"chainId":         chain.EVMChainID,
+			},
+		},
+	})
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave history query", err)
+	}
+
+	var resp supplyAPYHistoryResponse
+	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		return nil, err
+	}
+	if len(resp.Errors) > 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	}
+
+	points := make([]model.YieldHistoryPoint, 0, len(resp.Data.SupplyAPYHistory))
+	for _, sample := range resp.Data.SupplyAPYHistory {
+		ts, ok := parseAPITime(sample.Date)
+		if !ok {
+			continue
+		}
+		if ts.Before(req.StartTime) || ts.After(req.EndTime) {
+			continue
+		}
+		points = append(points, model.YieldHistoryPoint{
+			Timestamp: ts.UTC().Format(time.RFC3339),
+			Value:     parseFloat(sample.AvgRate.Value) * 100,
+		})
+	}
+	if req.Interval == providers.YieldHistoryIntervalDay {
+		points = averagePointsByDay(points)
+	} else {
+		sortHistoryPoints(points)
+	}
+	if len(points) == 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, "no aave historical points for requested range")
+	}
+
+	series := []model.YieldHistorySeries{
+		{
+			OpportunityID:        req.Opportunity.OpportunityID,
+			Provider:             "aave",
+			Protocol:             req.Opportunity.Protocol,
+			ChainID:              req.Opportunity.ChainID,
+			AssetID:              req.Opportunity.AssetID,
+			ProviderNativeID:     req.Opportunity.ProviderNativeID,
+			ProviderNativeIDKind: req.Opportunity.ProviderNativeIDKind,
+			Metric:               string(providers.YieldHistoryMetricAPYTotal),
+			Interval:             string(req.Interval),
+			StartTime:            req.StartTime.UTC().Format(time.RFC3339),
+			EndTime:              req.EndTime.UTC().Format(time.RFC3339),
+			Points:               points,
+			SourceURL:            req.Opportunity.SourceURL,
+			FetchedAt:            c.now().UTC().Format(time.RFC3339),
+		},
+	}
+	return series, nil
+}
+
 func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket, error) {
 	if !chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
@@ -617,6 +740,111 @@ func normalizeEVMAddress(address string) string {
 
 func providerNativeID(provider, chainID, marketAddress, underlyingAddress string) string {
 	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(marketAddress), normalizeEVMAddress(underlyingAddress))
+}
+
+func parseOpportunityNativeID(op model.YieldOpportunity) (string, string, error) {
+	nativeID := strings.TrimSpace(op.ProviderNativeID)
+	if nativeID == "" {
+		return "", "", clierr.New(clierr.CodeUsage, "aave opportunity missing provider_native_id")
+	}
+	prefix := fmt.Sprintf("aave:%s:", strings.TrimSpace(op.ChainID))
+	if !strings.HasPrefix(strings.ToLower(nativeID), strings.ToLower(prefix)) {
+		return "", "", clierr.New(clierr.CodeUsage, "invalid aave provider_native_id format")
+	}
+	suffix := nativeID[len(prefix):]
+	parts := strings.SplitN(suffix, ":", 2)
+	if len(parts) != 2 {
+		return "", "", clierr.New(clierr.CodeUsage, "invalid aave provider_native_id format")
+	}
+	marketAddress := normalizeEVMAddress(parts[0])
+	underlyingAddress := normalizeEVMAddress(parts[1])
+	if marketAddress == "" || underlyingAddress == "" {
+		return "", "", clierr.New(clierr.CodeUsage, "invalid aave provider_native_id addresses")
+	}
+	return marketAddress, underlyingAddress, nil
+}
+
+func historyWindow(start, end, now time.Time) (string, error) {
+	if end.Before(now.Add(-2 * time.Hour)) {
+		return "", clierr.New(clierr.CodeUnsupported, "aave history supports lookback windows ending near now")
+	}
+	span := end.Sub(start)
+	switch {
+	case span <= 24*time.Hour:
+		return "LAST_DAY", nil
+	case span <= 7*24*time.Hour:
+		return "LAST_WEEK", nil
+	case span <= 31*24*time.Hour:
+		return "LAST_MONTH", nil
+	case span <= 183*24*time.Hour:
+		return "LAST_SIX_MONTHS", nil
+	case span <= 366*24*time.Hour:
+		return "LAST_YEAR", nil
+	default:
+		return "", clierr.New(clierr.CodeUnsupported, "aave history supports windows up to 1 year")
+	}
+}
+
+func parseAPITime(v string) (time.Time, bool) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	ts, err := time.Parse(time.RFC3339, raw)
+	if err == nil {
+		return ts.UTC(), true
+	}
+	ts, err = time.Parse(time.RFC3339Nano, raw)
+	if err == nil {
+		return ts.UTC(), true
+	}
+	return time.Time{}, false
+}
+
+func sortHistoryPoints(points []model.YieldHistoryPoint) {
+	sort.Slice(points, func(i, j int) bool {
+		return strings.Compare(points[i].Timestamp, points[j].Timestamp) < 0
+	})
+}
+
+func averagePointsByDay(points []model.YieldHistoryPoint) []model.YieldHistoryPoint {
+	if len(points) == 0 {
+		return nil
+	}
+	sortHistoryPoints(points)
+	type bucket struct {
+		sum   float64
+		count int
+	}
+	byDay := map[string]bucket{}
+	for _, point := range points {
+		ts, err := time.Parse(time.RFC3339, point.Timestamp)
+		if err != nil {
+			continue
+		}
+		day := ts.UTC().Format("2006-01-02")
+		entry := byDay[day]
+		entry.sum += point.Value
+		entry.count++
+		byDay[day] = entry
+	}
+	days := make([]string, 0, len(byDay))
+	for day := range byDay {
+		days = append(days, day)
+	}
+	sort.Strings(days)
+	out := make([]model.YieldHistoryPoint, 0, len(days))
+	for _, day := range days {
+		entry := byDay[day]
+		if entry.count == 0 {
+			continue
+		}
+		out = append(out, model.YieldHistoryPoint{
+			Timestamp: day + "T00:00:00Z",
+			Value:     entry.sum / float64(entry.count),
+		})
+	}
+	return out
 }
 
 func matchesPositionType(filter, position providers.LendPositionType) bool {

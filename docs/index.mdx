@@ -36,7 +36,7 @@ defi providers list --results-only
     "name": "kamino",
     "type": "lending+yield",
     "requires_key": false,
-    "capabilities": ["lend.markets", "lend.rates", "yield.opportunities"]
+    "capabilities": ["lend.markets", "lend.rates", "yield.opportunities", "yield.history"]
   },
   {
     "name": "jupiter",
@@ -65,7 +65,7 @@ Bungee quotes are keyless by default. Dedicated backend mode requires both `DEFI
 
 ## Lending and yield routing
 
-`lend markets`, `lend rates`, and `yield opportunities` use direct protocol adapters:
+`lend markets`, `lend rates`, `yield opportunities`, and `yield history` use direct protocol adapters:
 
 - `aave`
 - `morpho`

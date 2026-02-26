@@ -2,6 +2,7 @@ package providers
 
 import (
 	"context"
+	"time"
 
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/id"
@@ -51,6 +52,33 @@ type LendingPositionsProvider interface {
 type YieldProvider interface {
 	Provider
 	YieldOpportunities(ctx context.Context, req YieldRequest) ([]model.YieldOpportunity, error)
+}
+
+type YieldHistoryMetric string
+
+const (
+	YieldHistoryMetricAPYTotal YieldHistoryMetric = "apy_total"
+	YieldHistoryMetricTVLUSD   YieldHistoryMetric = "tvl_usd"
+)
+
+type YieldHistoryInterval string
+
+const (
+	YieldHistoryIntervalHour YieldHistoryInterval = "hour"
+	YieldHistoryIntervalDay  YieldHistoryInterval = "day"
+)
+
+type YieldHistoryRequest struct {
+	Opportunity model.YieldOpportunity
+	StartTime   time.Time
+	EndTime     time.Time
+	Interval    YieldHistoryInterval
+	Metrics     []YieldHistoryMetric
+}
+
+type YieldHistoryProvider interface {
+	Provider
+	YieldHistory(ctx context.Context, req YieldHistoryRequest) ([]model.YieldHistorySeries, error)
 }
 
 type YieldRequest struct {

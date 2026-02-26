@@ -370,3 +370,141 @@ func TestLendPositionsTypeSplit(t *testing.T) {
 		t.Fatalf("expected supply+borrow rows for USDC filter, got %+v", usdcOnly)
 	}
 }
+
+func TestYieldHistoryFromVault(t *testing.T) {
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	start := fixedNow.Add(-48 * time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		query := string(body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(query, "query VaultHistory(") {
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaultByAddress": {
+						"address": "0x1111111111111111111111111111111111111111",
+						"historicalState": {
+							"netApy": [
+								{"x": 1771981200, "y": 0.03},
+								{"x": 1772067600, "y": 0.031}
+							],
+							"totalAssetsUsd": [
+								{"x": 1771981200, "y": 1000000},
+								{"x": 1772067600, "y": 1100000}
+							]
+						}
+					}
+				}
+			}`))
+			return
+		}
+		t.Fatalf("unexpected query: %s", query)
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	client.now = func() time.Time { return fixedNow }
+
+	series, err := client.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-1",
+			Provider:             "morpho",
+			Protocol:             "morpho",
+			ChainID:              "eip155:1",
+			AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			ProviderNativeID:     "0x1111111111111111111111111111111111111111",
+			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
+		},
+		StartTime: start,
+		EndTime:   fixedNow,
+		Interval:  providers.YieldHistoryIntervalDay,
+		Metrics: []providers.YieldHistoryMetric{
+			providers.YieldHistoryMetricAPYTotal,
+			providers.YieldHistoryMetricTVLUSD,
+		},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 2 {
+		t.Fatalf("expected 2 series, got %+v", series)
+	}
+	byMetric := map[string]model.YieldHistorySeries{}
+	for _, item := range series {
+		byMetric[item.Metric] = item
+	}
+	apy := byMetric[string(providers.YieldHistoryMetricAPYTotal)]
+	if len(apy.Points) != 2 {
+		t.Fatalf("unexpected apy points: %+v", apy.Points)
+	}
+	if apy.Points[0].Value != 3 {
+		t.Fatalf("expected apy value 3, got %+v", apy.Points[0])
+	}
+	tvl := byMetric[string(providers.YieldHistoryMetricTVLUSD)]
+	if len(tvl.Points) != 2 || tvl.Points[0].Value != 1000000 {
+		t.Fatalf("unexpected tvl points: %+v", tvl.Points)
+	}
+}
+
+func TestYieldHistoryFallsBackToVaultV2(t *testing.T) {
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	start := fixedNow.Add(-48 * time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		query := string(body)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(query, "query VaultHistory("):
+			_, _ = w.Write([]byte(`{"data":{"vaultByAddress":null},"errors":[{"message":"No results matching given parameters"}]}`))
+		case strings.Contains(query, "query VaultV2History("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaultV2ByAddress": {
+						"address": "0x2222222222222222222222222222222222222222",
+						"historicalState": {
+							"avgNetApy": [
+								{"x": 1771981200, "y": 0.04}
+							],
+							"totalAssetsUsd": [
+								{"x": 1771981200, "y": 2000000}
+							]
+						}
+					}
+				}
+			}`))
+		default:
+			t.Fatalf("unexpected query: %s", query)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	client.now = func() time.Time { return fixedNow }
+
+	series, err := client.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-2",
+			Provider:             "morpho",
+			Protocol:             "morpho",
+			ChainID:              "eip155:1",
+			AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			ProviderNativeID:     "0x2222222222222222222222222222222222222222",
+			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
+		},
+		StartTime: start,
+		EndTime:   fixedNow,
+		Interval:  providers.YieldHistoryIntervalDay,
+		Metrics:   []providers.YieldHistoryMetric{providers.YieldHistoryMetricAPYTotal},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 1 || len(series[0].Points) != 1 {
+		t.Fatalf("unexpected series: %+v", series)
+	}
+	if series[0].Points[0].Value != 4 {
+		t.Fatalf("expected v2 apy value 4, got %+v", series[0].Points[0])
+	}
+}

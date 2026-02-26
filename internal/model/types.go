@@ -280,3 +280,25 @@ type YieldOpportunity struct {
 	SourceURL            string   `json:"source_url,omitempty"`
 	FetchedAt            string   `json:"fetched_at"`
 }
+
+type YieldHistoryPoint struct {
+	Timestamp string  `json:"timestamp"`
+	Value     float64 `json:"value"`
+}
+
+type YieldHistorySeries struct {
+	OpportunityID        string              `json:"opportunity_id"`
+	Provider             string              `json:"provider"`
+	Protocol             string              `json:"protocol"`
+	ChainID              string              `json:"chain_id"`
+	AssetID              string              `json:"asset_id"`
+	ProviderNativeID     string              `json:"provider_native_id,omitempty"`
+	ProviderNativeIDKind string              `json:"provider_native_id_kind,omitempty"`
+	Metric               string              `json:"metric"`
+	Interval             string              `json:"interval"`
+	StartTime            string              `json:"start_time"`
+	EndTime              string              `json:"end_time"`
+	Points               []YieldHistoryPoint `json:"points"`
+	SourceURL            string              `json:"source_url,omitempty"`
+	FetchedAt            string              `json:"fetched_at"`
+}

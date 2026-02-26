@@ -11,7 +11,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 ## Features
 
 - **Lending** — query markets/rates from Aave/Morpho/Kamino and account positions from Aave/Morpho, plus execute Aave/Morpho lend actions.
-- **Yield** — compare opportunities across protocols and chains, filter by TVL and APY.
+- **Yield** — compare opportunities and query historical yield/TVL series across Aave, Morpho, and Kamino.
 - **Bridging** — get cross-chain quotes (Across, LiFi), bridge analytics (volume, chain breakdown), and execute LiFi bridge plans.
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
 - **Approvals & rewards** — create and execute ERC-20 approvals, Aave rewards claims, and compound flows.
@@ -94,6 +94,7 @@ defi lend rates --provider morpho --chain 1 --asset USDC --results-only
 defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
 defi yield opportunities --chain base --asset USDC --limit 20 --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
+defi yield history --chain 1 --asset USDC --providers aave,morpho --metrics apy_total,tvl_usd --interval day --window 7d --limit 1 --results-only
 defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
@@ -110,7 +111,7 @@ defi swap status --action-id <action_id> --results-only
 defi actions list --results-only
 ```
 
-`yield opportunities --providers` accepts provider names from `defi providers list` (e.g. `defillama,aave,morpho`).
+`yield opportunities --providers` and `yield history --providers` accept provider names from `defi providers list` (for example `aave,morpho,kamino`).
 
 Bridge quote examples:
 
@@ -274,7 +275,7 @@ providers:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield`: `60s`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield history`: `5m`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
@@ -285,6 +286,8 @@ providers:
 ## Caveats
 
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
+- `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
+- Aave historical windows are lookback-based and effectively end near current time; use `--window` for Aave-friendly history requests.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.

@@ -43,6 +43,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"lend.rates",
 			"lend.positions",
 			"yield.opportunities",
+			"yield.history",
 			"lend.plan",
 			"lend.execute",
 		},
@@ -140,6 +141,26 @@ const vaultV2sYieldQuery = `query VaultV2s($first:Int,$skip:Int,$where:VaultV2sF
   }
 }`
 
+const vaultHistoryQuery = `query VaultHistory($address:String!,$chainId:Int!,$start:Int!,$end:Int!,$interval:TimeseriesInterval!){
+  vaultByAddress(address:$address, chainId:$chainId){
+    address
+    historicalState{
+      netApy(options:{startTimestamp:$start, endTimestamp:$end, interval:$interval}){ x y }
+      totalAssetsUsd(options:{startTimestamp:$start, endTimestamp:$end, interval:$interval}){ x y }
+    }
+  }
+}`
+
+const vaultV2HistoryQuery = `query VaultV2History($address:String!,$chainId:Int!,$start:Int!,$end:Int!,$interval:TimeseriesInterval!){
+  vaultV2ByAddress(address:$address, chainId:$chainId){
+    address
+    historicalState{
+      avgNetApy(options:{startTimestamp:$start, endTimestamp:$end, interval:$interval}){ x y }
+      totalAssetsUsd(options:{startTimestamp:$start, endTimestamp:$end, interval:$interval}){ x y }
+    }
+  }
+}`
+
 const (
 	yieldVaultPageSize = 200
 	yieldVaultMaxPages = 20
@@ -187,6 +208,41 @@ type vaultV2sResponse struct {
 	Errors []struct {
 		Message string `json:"message"`
 	} `json:"errors"`
+}
+
+type vaultHistoryResponse struct {
+	Data struct {
+		VaultByAddress *struct {
+			Address         string `json:"address"`
+			HistoricalState *struct {
+				NetAPY []morphoFloatDataPoint `json:"netApy"`
+				TVLUSD []morphoFloatDataPoint `json:"totalAssetsUsd"`
+			} `json:"historicalState"`
+		} `json:"vaultByAddress"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type vaultV2HistoryResponse struct {
+	Data struct {
+		VaultV2ByAddress *struct {
+			Address         string `json:"address"`
+			HistoricalState *struct {
+				AvgNetAPY []morphoFloatDataPoint `json:"avgNetApy"`
+				TVLUSD    []morphoFloatDataPoint `json:"totalAssetsUsd"`
+			} `json:"historicalState"`
+		} `json:"vaultV2ByAddress"`
+	} `json:"data"`
+	Errors []struct {
+		Message string `json:"message"`
+	} `json:"errors"`
+}
+
+type morphoFloatDataPoint struct {
+	X float64  `json:"x"`
+	Y *float64 `json:"y"`
 }
 
 type morphoMarket struct {
@@ -603,6 +659,99 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 	return out[:req.Limit], nil
 }
 
+func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
+	if !strings.EqualFold(strings.TrimSpace(req.Opportunity.Provider), "morpho") {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho history supports only morpho opportunities")
+	}
+	if !req.StartTime.Before(req.EndTime) {
+		return nil, clierr.New(clierr.CodeUsage, "history start time must be before end time")
+	}
+
+	chain, err := id.ParseChain(req.Opportunity.ChainID)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeUsage, "parse morpho opportunity chain", err)
+	}
+	if !chain.IsEVM() {
+		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
+	}
+	vaultAddress := normalizeEVMAddress(req.Opportunity.ProviderNativeID)
+	if vaultAddress == "" {
+		return nil, clierr.New(clierr.CodeUsage, "morpho opportunity requires a vault address provider_native_id")
+	}
+
+	interval, err := morphoTimeseriesInterval(req.Interval)
+	if err != nil {
+		return nil, err
+	}
+	start := int(req.StartTime.UTC().Unix())
+	end := int(req.EndTime.UTC().Unix())
+
+	metricSet := make(map[providers.YieldHistoryMetric]struct{}, len(req.Metrics))
+	for _, metric := range req.Metrics {
+		metricSet[metric] = struct{}{}
+	}
+	for metric := range metricSet {
+		switch metric {
+		case providers.YieldHistoryMetricAPYTotal, providers.YieldHistoryMetricTVLUSD:
+		default:
+			return nil, clierr.New(clierr.CodeUnsupported, "morpho history supports metrics apy_total,tvl_usd")
+		}
+	}
+
+	apys, tvl, sourceURL, err := c.fetchVaultHistory(ctx, vaultAddress, chain.EVMChainID, start, end, interval)
+	if err != nil {
+		return nil, err
+	}
+
+	series := make([]model.YieldHistorySeries, 0, len(metricSet))
+	if _, ok := metricSet[providers.YieldHistoryMetricAPYTotal]; ok {
+		points := convertMorphoPoints(apys, true)
+		if len(points) > 0 {
+			series = append(series, model.YieldHistorySeries{
+				OpportunityID:        req.Opportunity.OpportunityID,
+				Provider:             "morpho",
+				Protocol:             req.Opportunity.Protocol,
+				ChainID:              req.Opportunity.ChainID,
+				AssetID:              req.Opportunity.AssetID,
+				ProviderNativeID:     req.Opportunity.ProviderNativeID,
+				ProviderNativeIDKind: req.Opportunity.ProviderNativeIDKind,
+				Metric:               string(providers.YieldHistoryMetricAPYTotal),
+				Interval:             string(req.Interval),
+				StartTime:            req.StartTime.UTC().Format(time.RFC3339),
+				EndTime:              req.EndTime.UTC().Format(time.RFC3339),
+				Points:               points,
+				SourceURL:            sourceURL,
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	if _, ok := metricSet[providers.YieldHistoryMetricTVLUSD]; ok {
+		points := convertMorphoPoints(tvl, false)
+		if len(points) > 0 {
+			series = append(series, model.YieldHistorySeries{
+				OpportunityID:        req.Opportunity.OpportunityID,
+				Provider:             "morpho",
+				Protocol:             req.Opportunity.Protocol,
+				ChainID:              req.Opportunity.ChainID,
+				AssetID:              req.Opportunity.AssetID,
+				ProviderNativeID:     req.Opportunity.ProviderNativeID,
+				ProviderNativeIDKind: req.Opportunity.ProviderNativeIDKind,
+				Metric:               string(providers.YieldHistoryMetricTVLUSD),
+				Interval:             string(req.Interval),
+				StartTime:            req.StartTime.UTC().Format(time.RFC3339),
+				EndTime:              req.EndTime.UTC().Format(time.RFC3339),
+				Points:               points,
+				SourceURL:            sourceURL,
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	if len(series) == 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, "no morpho historical points for requested range")
+	}
+	return series, nil
+}
+
 func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, asset id.Asset) ([]vaultYieldCandidate, error) {
 	if !chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
@@ -784,6 +933,106 @@ func (c *Client) fetchVaultV2s(ctx context.Context, chain id.Chain) ([]morphoVau
 	}
 
 	return out, nil
+}
+
+func (c *Client) fetchVaultHistory(
+	ctx context.Context,
+	address string,
+	chainID int64,
+	start int,
+	end int,
+	interval string,
+) ([]morphoFloatDataPoint, []morphoFloatDataPoint, string, error) {
+	body, err := json.Marshal(map[string]any{
+		"query": vaultHistoryQuery,
+		"variables": map[string]any{
+			"address":  address,
+			"chainId":  chainID,
+			"start":    start,
+			"end":      end,
+			"interval": interval,
+		},
+	})
+	if err != nil {
+		return nil, nil, "", clierr.Wrap(clierr.CodeInternal, "marshal morpho vault history query", err)
+	}
+
+	var resp vaultHistoryResponse
+	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		return nil, nil, "", err
+	}
+	if len(resp.Errors) > 0 {
+		if !isMorphoNoResultsError(resp.Errors[0].Message) {
+			return nil, nil, "", clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+		}
+	}
+	if resp.Data.VaultByAddress != nil && resp.Data.VaultByAddress.HistoricalState != nil {
+		return resp.Data.VaultByAddress.HistoricalState.NetAPY, resp.Data.VaultByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
+	}
+
+	body, err = json.Marshal(map[string]any{
+		"query": vaultV2HistoryQuery,
+		"variables": map[string]any{
+			"address":  address,
+			"chainId":  chainID,
+			"start":    start,
+			"end":      end,
+			"interval": interval,
+		},
+	})
+	if err != nil {
+		return nil, nil, "", clierr.Wrap(clierr.CodeInternal, "marshal morpho vault-v2 history query", err)
+	}
+
+	var respV2 vaultV2HistoryResponse
+	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &respV2); err != nil {
+		return nil, nil, "", err
+	}
+	if len(respV2.Errors) > 0 {
+		return nil, nil, "", clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", respV2.Errors[0].Message))
+	}
+	if respV2.Data.VaultV2ByAddress == nil || respV2.Data.VaultV2ByAddress.HistoricalState == nil {
+		return nil, nil, "", clierr.New(clierr.CodeUnavailable, "morpho returned no vault history for requested opportunity")
+	}
+	return respV2.Data.VaultV2ByAddress.HistoricalState.AvgNetAPY, respV2.Data.VaultV2ByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
+}
+
+func isMorphoNoResultsError(message string) bool {
+	msg := strings.ToLower(strings.TrimSpace(message))
+	return strings.Contains(msg, "no results matching given parameters")
+}
+
+func morphoTimeseriesInterval(interval providers.YieldHistoryInterval) (string, error) {
+	switch interval {
+	case providers.YieldHistoryIntervalHour:
+		return "HOUR", nil
+	case providers.YieldHistoryIntervalDay:
+		return "DAY", nil
+	default:
+		return "", clierr.New(clierr.CodeUsage, "morpho history interval must be hour or day")
+	}
+}
+
+func convertMorphoPoints(points []morphoFloatDataPoint, percent bool) []model.YieldHistoryPoint {
+	out := make([]model.YieldHistoryPoint, 0, len(points))
+	for _, point := range points {
+		if point.Y == nil {
+			continue
+		}
+		ts := time.Unix(int64(point.X), 0).UTC()
+		val := *point.Y
+		if percent {
+			val *= 100
+		}
+		out = append(out, model.YieldHistoryPoint{
+			Timestamp: ts.Format(time.RFC3339),
+			Value:     val,
+		})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return strings.Compare(out[i].Timestamp, out[j].Timestamp) < 0
+	})
+	return out
 }
 
 func matchesVaultAsset(vaultAssetAddress, vaultAssetSymbol string, asset id.Asset) bool {

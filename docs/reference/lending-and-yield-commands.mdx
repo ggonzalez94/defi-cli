@@ -68,6 +68,33 @@ Flags:
 - `--sort string` (`score|apy_total|tvl_usd|liquidity_usd`, default `score`)
 - `--include-incomplete` bool (default `false`)
 
+## `yield history`
+
+```bash
+defi yield history \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --metrics apy_total,tvl_usd \
+  --interval day \
+  --window 7d \
+  --limit 1 \
+  --results-only
+```
+
+Flags:
+
+- `--chain string` required
+- `--asset string` required
+- `--providers string` (`aave,morpho,kamino`)
+- `--metrics string` (`apy_total,tvl_usd`, default `apy_total`)
+- `--interval string` (`hour|day`, default `day`)
+- `--window string` lookback duration (for example `24h`, `7d`, `30d`)
+- `--from string` optional RFC3339 start time (`--window` is ignored when set)
+- `--to string` optional RFC3339 end time (default `now`)
+- `--opportunity-ids string` optional CSV filter from `yield opportunities`
+- `--limit int` max opportunities per provider (default `20`)
+
 ## Provider-selection note
 
 `--providers` accepts provider names, not protocol categories.

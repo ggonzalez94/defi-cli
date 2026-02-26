@@ -41,8 +41,24 @@ defi yield opportunities --chain 1 --asset USDC --include-incomplete --results-o
 
 When enabled, warnings may indicate missing APY/TVL and combined-provider counts.
 
+## Historical series
+
+```bash
+defi yield history --chain 1 --asset USDC --providers aave,morpho --metrics apy_total --interval day --window 7d --limit 1 --results-only
+defi yield history --chain 1 --asset USDC --providers morpho --metrics apy_total,tvl_usd --interval day --window 30d --limit 1 --results-only
+defi yield history --chain solana --asset USDC --providers kamino --metrics apy_total,tvl_usd --interval day --window 7d --limit 1 --results-only
+```
+
+Optional time filters:
+
+```bash
+defi yield history --chain 1 --asset USDC --providers aave --metrics apy_total --from 2026-02-20T00:00:00Z --to 2026-02-26T00:00:00Z --interval hour --limit 1 --results-only
+```
+
 ## Important caveats
 
 - APY values are percentage points (`2.3` = `2.3%`).
 - Morpho may produce extreme APY for very small markets; use `--min-tvl-usd`.
 - Kamino yield routes currently support Solana mainnet only.
+- `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
+- Aave history is lookback-window based and effectively ends near current time.

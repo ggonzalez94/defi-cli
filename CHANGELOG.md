@@ -23,6 +23,7 @@ Format:
 - Added centralized execution registry data in `internal/registry` for endpoint, contract, and ABI references.
 - Added nightly execution-planning smoke workflow (`nightly-execution-smoke.yml`) and script.
 - Added `lend positions` to query account-level lending positions by address for Aave and Morpho with `--type all|supply|borrow|collateral`.
+- Added `yield history` to query historical yield-provider series with `--metrics apy_total,tvl_usd`, `--interval hour|day`, `--window`/`--from`/`--to`, and optional `--opportunity-ids`.
 
 ### Changed
 - BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) sourced from Morpho vault/vault-v2 data instead of Morpho market IDs.
@@ -57,6 +58,7 @@ Format:
 - Swap execution planning now validates sender/recipient fields as EVM addresses before route planning.
 - Uniswap `swap quote` now requires a real `--from-address` swapper input instead of using a deterministic placeholder address.
 - `lend positions` now emits non-overlapping type rows for automation: `supply` (non-collateral), `collateral` (posted collateral), and `borrow` (debt).
+- `providers list` for Aave/Morpho/Kamino now advertises `yield.history` capability metadata.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
@@ -67,6 +69,7 @@ Format:
 - Updated `docs/act-execution-design.md` implementation status to reflect the shipped Phase 2 surface.
 - Clarified execution builder architecture split (provider-backed route builders for swap/bridge vs internal planners for lend/rewards/approvals) in `AGENTS.md` and execution design docs.
 - Added `lend positions` usage and caveats to `README.md`, `AGENTS.md`, and Mintlify lending command reference.
+- Documented `yield history` usage, flags, and provider caveats across README and Mintlify yield/lending references.
 
 ### Security
 - None yet.

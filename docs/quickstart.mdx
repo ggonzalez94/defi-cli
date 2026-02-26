@@ -38,6 +38,7 @@ defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --l
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
 defi yield opportunities --chain solana --asset USDC --providers kamino --limit 10 --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --min-tvl-usd 1000000 --limit 10 --results-only
+defi yield history --chain 1 --asset USDC --providers aave,morpho --metrics apy_total,tvl_usd --interval day --window 7d --limit 1 --results-only
 ```
 
 `--providers` expects provider names from `providers list` (`aave,morpho,kamino`), not protocol categories.

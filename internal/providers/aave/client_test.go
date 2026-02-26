@@ -2,6 +2,7 @@ package aave
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -213,5 +214,89 @@ func TestLendPositionsTypeSplit(t *testing.T) {
 	}
 	if len(collateralOnly) != 1 || collateralOnly[0].PositionType != string(providers.LendPositionTypeCollateral) {
 		t.Fatalf("expected collateral-only row, got %+v", collateralOnly)
+	}
+}
+
+func TestYieldHistoryAPY(t *testing.T) {
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	start := fixedNow.Add(-6 * time.Hour)
+	market := "0x1111111111111111111111111111111111111111"
+	underlying := "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), "SupplyAPYHistory") {
+			t.Fatalf("expected SupplyAPYHistory query, got %s", string(body))
+		}
+		if !strings.Contains(string(body), "\"window\":\"LAST_DAY\"") {
+			t.Fatalf("expected LAST_DAY window, got %s", string(body))
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(fmt.Sprintf(`{
+			"data": {
+				"supplyAPYHistory": [
+					{"date": %q, "avgRate": {"value": "0.02"}},
+					{"date": %q, "avgRate": {"value": "0.018"}}
+				]
+			}
+		}`, fixedNow.Add(-5*time.Hour).Format(time.RFC3339), fixedNow.Add(-3*time.Hour).Format(time.RFC3339))))
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	client.now = func() time.Time { return fixedNow }
+
+	series, err := client.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-1",
+			Provider:             "aave",
+			Protocol:             "aave",
+			ChainID:              "eip155:1",
+			AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			ProviderNativeID:     "aave:eip155:1:" + market + ":" + underlying,
+			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+			SourceURL:            "https://app.aave.com",
+		},
+		StartTime: start,
+		EndTime:   fixedNow,
+		Interval:  providers.YieldHistoryIntervalHour,
+		Metrics:   []providers.YieldHistoryMetric{providers.YieldHistoryMetricAPYTotal},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 1 {
+		t.Fatalf("expected one series, got %+v", series)
+	}
+	if series[0].Metric != string(providers.YieldHistoryMetricAPYTotal) {
+		t.Fatalf("unexpected metric: %+v", series[0])
+	}
+	if len(series[0].Points) != 2 {
+		t.Fatalf("expected two points, got %+v", series[0].Points)
+	}
+	if series[0].Points[0].Value != 2 {
+		t.Fatalf("expected first point value 2, got %+v", series[0].Points[0])
+	}
+}
+
+func TestYieldHistoryRejectsUnsupportedMetric(t *testing.T) {
+	client := New(httpx.New(2*time.Second, 0))
+	client.now = func() time.Time { return time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC) }
+
+	_, err := client.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			Provider:         "aave",
+			Protocol:         "aave",
+			ChainID:          "eip155:1",
+			ProviderNativeID: "aave:eip155:1:0x1111111111111111111111111111111111111111:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+		},
+		StartTime: client.now().UTC().Add(-time.Hour),
+		EndTime:   client.now().UTC(),
+		Interval:  providers.YieldHistoryIntervalHour,
+		Metrics:   []providers.YieldHistoryMetric{providers.YieldHistoryMetricTVLUSD},
+	})
+	if err == nil {
+		t.Fatal("expected unsupported metric error")
 	}
 }

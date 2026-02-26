@@ -105,6 +105,151 @@ func TestSelectYieldProvidersExplicitFilterBypassesChainDefaults(t *testing.T) {
 	}
 }
 
+func TestParseYieldHistoryMetricsDedupesAndValidates(t *testing.T) {
+	metrics, err := parseYieldHistoryMetrics("apy_total,tvl_usd,apy_total")
+	if err != nil {
+		t.Fatalf("parseYieldHistoryMetrics failed: %v", err)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %+v", metrics)
+	}
+	if metrics[0] != providers.YieldHistoryMetricAPYTotal || metrics[1] != providers.YieldHistoryMetricTVLUSD {
+		t.Fatalf("unexpected metric order: %+v", metrics)
+	}
+
+	if _, err := parseYieldHistoryMetrics("foo"); err == nil {
+		t.Fatal("expected invalid metric error")
+	}
+}
+
+func TestYieldHistoryCommandCallsProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	fakeProvider := &fakeYieldHistoryProvider{
+		name: "aave",
+		opportunities: []model.YieldOpportunity{
+			{
+				OpportunityID:        "opp-1",
+				Provider:             "aave",
+				Protocol:             "aave",
+				ChainID:              "eip155:1",
+				AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+				ProviderNativeID:     "aave:eip155:1:0x1111111111111111111111111111111111111111:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+				SourceURL:            "https://app.aave.com",
+			},
+		},
+		series: []model.YieldHistorySeries{
+			{
+				OpportunityID: "opp-1",
+				Provider:      "aave",
+				Metric:        "apy_total",
+				Interval:      "hour",
+				Points: []model.YieldHistoryPoint{
+					{Timestamp: "2026-02-26T19:00:00Z", Value: 3.1},
+				},
+			},
+		},
+	}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    func() time.Time { return fixedNow },
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			ResultsOnly:  true,
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		yieldProviders: map[string]providers.YieldProvider{
+			"aave": fakeProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newYieldCommand())
+	root.SetArgs([]string{
+		"yield", "history",
+		"--chain", "1",
+		"--asset", "USDC",
+		"--providers", "aave",
+		"--metrics", "apy_total",
+		"--interval", "hour",
+		"--window", "24h",
+		"--limit", "1",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("yield history command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if fakeProvider.historyCalls != 1 {
+		t.Fatalf("expected one history call, got %d", fakeProvider.historyCalls)
+	}
+	if fakeProvider.lastHistoryReq.Interval != providers.YieldHistoryIntervalHour {
+		t.Fatalf("expected hour interval, got %+v", fakeProvider.lastHistoryReq.Interval)
+	}
+	if got := fakeProvider.lastHistoryReq.EndTime.UTC(); !got.Equal(fixedNow) {
+		t.Fatalf("expected end time %s, got %s", fixedNow, got)
+	}
+	if got := fakeProvider.lastHistoryReq.StartTime.UTC(); !got.Equal(fixedNow.Add(-24 * time.Hour)) {
+		t.Fatalf("expected start time %s, got %s", fixedNow.Add(-24*time.Hour), got)
+	}
+
+	var out []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed parsing output json: %v output=%s", err, stdout.String())
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected one series row, got %+v", out)
+	}
+	if out[0]["metric"] != "apy_total" {
+		t.Fatalf("expected metric apy_total, got %+v", out[0])
+	}
+}
+
+func TestYieldHistoryCommandFailsWhenProviderHasNoHistorySupport(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		yieldProviders: map[string]providers.YieldProvider{
+			"aave": &fakeYieldProviderNoHistory{name: "aave"},
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newYieldCommand())
+	root.SetArgs([]string{
+		"yield", "history",
+		"--chain", "1",
+		"--asset", "USDC",
+		"--providers", "aave",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected yield history to fail without history provider support; stderr=%s", stderr.String())
+	}
+}
+
 func TestParseChainAssetFilterAllowsUnknownSymbol(t *testing.T) {
 	chain, err := id.ParseChain("ethereum")
 	if err != nil {
@@ -1304,6 +1449,61 @@ func (f *fakeLendingProviderNoPositions) LendMarkets(context.Context, string, id
 }
 
 func (f *fakeLendingProviderNoPositions) LendRates(context.Context, string, id.Chain, id.Asset) ([]model.LendRate, error) {
+	return nil, nil
+}
+
+type fakeYieldHistoryProvider struct {
+	name           string
+	opportunities  []model.YieldOpportunity
+	series         []model.YieldHistorySeries
+	err            error
+	calls          int
+	historyCalls   int
+	lastYieldReq   providers.YieldRequest
+	lastHistoryReq providers.YieldHistoryRequest
+}
+
+func (f *fakeYieldHistoryProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "yield",
+		RequiresKey:  false,
+		Capabilities: []string{"yield.opportunities", "yield.history"},
+	}
+}
+
+func (f *fakeYieldHistoryProvider) YieldOpportunities(_ context.Context, req providers.YieldRequest) ([]model.YieldOpportunity, error) {
+	f.calls++
+	f.lastYieldReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.opportunities, nil
+}
+
+func (f *fakeYieldHistoryProvider) YieldHistory(_ context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
+	f.historyCalls++
+	f.lastHistoryReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.series, nil
+}
+
+type fakeYieldProviderNoHistory struct {
+	name string
+}
+
+func (f *fakeYieldProviderNoHistory) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "yield",
+		RequiresKey:  false,
+		Capabilities: []string{"yield.opportunities"},
+	}
+}
+
+func (f *fakeYieldProviderNoHistory) YieldOpportunities(context.Context, providers.YieldRequest) ([]model.YieldOpportunity, error) {
 	return nil, nil
 }
 

@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -1271,28 +1272,29 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 
 func (s *runtimeState) newYieldCommand() *cobra.Command {
 	root := &cobra.Command{Use: "yield", Short: "Yield opportunity commands"}
-	var chainArg, assetArg, providersArg, sortArg, maxRisk string
-	var limit int
-	var minTVL, minAPY float64
-	var includeIncomplete bool
-	cmd := &cobra.Command{
+
+	var opportunitiesChainArg, opportunitiesAssetArg, opportunitiesProvidersArg, opportunitiesSortArg, opportunitiesMaxRisk string
+	var opportunitiesLimit int
+	var opportunitiesMinTVL, opportunitiesMinAPY float64
+	var opportunitiesIncludeIncomplete bool
+	opportunitiesCmd := &cobra.Command{
 		Use:   "opportunities",
 		Short: "Rank yield opportunities",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			chain, asset, err := parseChainAsset(chainArg, assetArg)
+			chain, asset, err := parseChainAsset(opportunitiesChainArg, opportunitiesAssetArg)
 			if err != nil {
 				return err
 			}
 			req := providers.YieldRequest{
 				Chain:             chain,
 				Asset:             asset,
-				Limit:             limit,
-				MinTVLUSD:         minTVL,
-				MinAPY:            minAPY,
-				MaxRisk:           maxRisk,
-				Providers:         splitCSV(providersArg),
-				SortBy:            sortArg,
-				IncludeIncomplete: includeIncomplete,
+				Limit:             opportunitiesLimit,
+				MinTVLUSD:         opportunitiesMinTVL,
+				MinAPY:            opportunitiesMinAPY,
+				MaxRisk:           opportunitiesMaxRisk,
+				Providers:         splitCSV(opportunitiesProvidersArg),
+				SortBy:            opportunitiesSortArg,
+				IncludeIncomplete: opportunitiesIncludeIncomplete,
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
 				"chain":              req.Chain.CAIP2,
@@ -1334,7 +1336,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 					combined = append(combined, items...)
 				}
 
-				if includeIncomplete {
+				if opportunitiesIncludeIncomplete {
 					warnings = append(warnings, "include_incomplete enabled: opportunities with missing APY/TVL may be present")
 				}
 
@@ -1350,25 +1352,192 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				if req.Limit > 0 && len(combined) > req.Limit {
 					combined = combined[:req.Limit]
 				}
-				if includeIncomplete {
+				if opportunitiesIncludeIncomplete {
 					warnings = append(warnings, fmt.Sprintf("returned %d combined opportunities across %d provider(s)", len(combined), len(selectedProviders)))
 				}
 				return combined, statuses, warnings, partial, nil
 			})
 		},
 	}
-	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
-	cmd.Flags().StringVar(&assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	cmd.Flags().IntVar(&limit, "limit", 20, "Maximum opportunities to return")
-	cmd.Flags().Float64Var(&minTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
-	cmd.Flags().StringVar(&maxRisk, "max-risk", "high", "Maximum risk level (low|medium|high|unknown)")
-	cmd.Flags().Float64Var(&minAPY, "min-apy", 0, "Minimum total APY percent")
-	cmd.Flags().StringVar(&providersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
-	cmd.Flags().StringVar(&sortArg, "sort", "score", "Sort key (score|apy_total|tvl_usd|liquidity_usd)")
-	cmd.Flags().BoolVar(&includeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
-	_ = cmd.MarkFlagRequired("chain")
-	_ = cmd.MarkFlagRequired("asset")
-	root.AddCommand(cmd)
+	opportunitiesCmd.Flags().StringVar(&opportunitiesChainArg, "chain", "", "Chain identifier")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesAssetArg, "asset", "", "Asset symbol/address/CAIP-19")
+	opportunitiesCmd.Flags().IntVar(&opportunitiesLimit, "limit", 20, "Maximum opportunities to return")
+	opportunitiesCmd.Flags().Float64Var(&opportunitiesMinTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesMaxRisk, "max-risk", "high", "Maximum risk level (low|medium|high|unknown)")
+	opportunitiesCmd.Flags().Float64Var(&opportunitiesMinAPY, "min-apy", 0, "Minimum total APY percent")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesSortArg, "sort", "score", "Sort key (score|apy_total|tvl_usd|liquidity_usd)")
+	opportunitiesCmd.Flags().BoolVar(&opportunitiesIncludeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
+	_ = opportunitiesCmd.MarkFlagRequired("chain")
+	_ = opportunitiesCmd.MarkFlagRequired("asset")
+	root.AddCommand(opportunitiesCmd)
+
+	var historyChainArg, historyAssetArg, historyProvidersArg, historyMetricsArg string
+	var historyIntervalArg, historyWindowArg, historyFromArg, historyToArg, historyOpportunityIDsArg string
+	var historyLimit int
+	historyCmd := &cobra.Command{
+		Use:   "history",
+		Short: "Get yield history for provider opportunities",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, asset, err := parseChainAsset(historyChainArg, historyAssetArg)
+			if err != nil {
+				return err
+			}
+			metrics, err := parseYieldHistoryMetrics(historyMetricsArg)
+			if err != nil {
+				return err
+			}
+			interval, err := parseYieldHistoryInterval(historyIntervalArg)
+			if err != nil {
+				return err
+			}
+			startTime, endTime, err := resolveYieldHistoryRange(historyFromArg, historyToArg, historyWindowArg, s.runner.now().UTC())
+			if err != nil {
+				return err
+			}
+			opportunityIDs := splitCSV(historyOpportunityIDsArg)
+			opportunityIDSet := make(map[string]struct{}, len(opportunityIDs))
+			for _, item := range opportunityIDs {
+				opportunityIDSet[item] = struct{}{}
+			}
+			providerFilter := splitCSV(historyProvidersArg)
+
+			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
+				"chain":             chain.CAIP2,
+				"asset":             asset.AssetID,
+				"providers":         providerFilter,
+				"metrics":           metrics,
+				"interval":          interval,
+				"start_time":        startTime.UTC().Format(time.RFC3339),
+				"end_time":          endTime.UTC().Format(time.RFC3339),
+				"opportunity_ids":   opportunityIDs,
+				"opportunity_limit": historyLimit,
+			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				selectedProviders, err := s.selectYieldProviders(providerFilter, chain)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+
+				statuses := make([]model.ProviderStatus, 0, len(selectedProviders))
+				warnings := []string{}
+				combined := make([]model.YieldHistorySeries, 0)
+				partial := false
+				var firstErr error
+
+				for _, providerName := range selectedProviders {
+					provider := s.yieldProviders[providerName]
+					historyProvider, ok := provider.(providers.YieldHistoryProvider)
+					providerStart := time.Now()
+					if !ok {
+						providerErr := clierr.New(clierr.CodeUnsupported, fmt.Sprintf("yield provider %s does not support history", providerName))
+						statuses = append(statuses, model.ProviderStatus{Name: provider.Info().Name, Status: statusFromErr(providerErr), LatencyMS: time.Since(providerStart).Milliseconds()})
+						warnings = append(warnings, fmt.Sprintf("provider %s does not support yield history", provider.Info().Name))
+						partial = true
+						if firstErr == nil {
+							firstErr = providerErr
+						}
+						continue
+					}
+
+					discoveryReq := providers.YieldRequest{
+						Chain:             chain,
+						Asset:             asset,
+						Limit:             historyLimit,
+						MinTVLUSD:         0,
+						MinAPY:            0,
+						MaxRisk:           "high",
+						SortBy:            "score",
+						IncludeIncomplete: true,
+					}
+					if len(opportunityIDSet) > 0 {
+						discoveryReq.Limit = 0
+					}
+					opportunities, providerErr := provider.YieldOpportunities(ctx, discoveryReq)
+					if providerErr != nil {
+						statuses = append(statuses, model.ProviderStatus{Name: provider.Info().Name, Status: statusFromErr(providerErr), LatencyMS: time.Since(providerStart).Milliseconds()})
+						warnings = append(warnings, fmt.Sprintf("provider %s failed during opportunity lookup: %v", provider.Info().Name, providerErr))
+						partial = true
+						if firstErr == nil {
+							firstErr = providerErr
+						}
+						continue
+					}
+					if len(opportunityIDSet) > 0 {
+						opportunities = filterYieldOpportunitiesByID(opportunities, opportunityIDSet)
+					}
+					if historyLimit > 0 && len(opportunities) > historyLimit {
+						opportunities = opportunities[:historyLimit]
+					}
+					if len(opportunities) == 0 {
+						providerErr = clierr.New(clierr.CodeUnavailable, fmt.Sprintf("provider %s returned no matching opportunities", providerName))
+						statuses = append(statuses, model.ProviderStatus{Name: provider.Info().Name, Status: statusFromErr(providerErr), LatencyMS: time.Since(providerStart).Milliseconds()})
+						warnings = append(warnings, fmt.Sprintf("provider %s returned no matching opportunities", provider.Info().Name))
+						partial = true
+						if firstErr == nil {
+							firstErr = providerErr
+						}
+						continue
+					}
+
+					providerSeries := make([]model.YieldHistorySeries, 0, len(opportunities)*len(metrics))
+					var providerHistoryErr error
+					for _, opportunity := range opportunities {
+						series, err := historyProvider.YieldHistory(ctx, providers.YieldHistoryRequest{
+							Opportunity: opportunity,
+							StartTime:   startTime,
+							EndTime:     endTime,
+							Interval:    interval,
+							Metrics:     metrics,
+						})
+						if err != nil {
+							partial = true
+							warnings = append(warnings, fmt.Sprintf("provider %s failed history for opportunity %s: %v", provider.Info().Name, opportunity.OpportunityID, err))
+							if providerHistoryErr == nil {
+								providerHistoryErr = err
+							}
+							continue
+						}
+						providerSeries = append(providerSeries, series...)
+					}
+
+					statusErr := providerHistoryErr
+					if len(providerSeries) == 0 && statusErr == nil {
+						statusErr = clierr.New(clierr.CodeUnavailable, fmt.Sprintf("provider %s returned no historical points", providerName))
+					}
+					statuses = append(statuses, model.ProviderStatus{Name: provider.Info().Name, Status: statusFromErr(statusErr), LatencyMS: time.Since(providerStart).Milliseconds()})
+					if statusErr != nil && firstErr == nil {
+						firstErr = statusErr
+					}
+					combined = append(combined, providerSeries...)
+				}
+
+				if len(combined) == 0 {
+					if firstErr != nil {
+						return nil, statuses, warnings, partial, firstErr
+					}
+					return nil, statuses, warnings, partial, clierr.New(clierr.CodeUnavailable, "no yield history returned by selected providers")
+				}
+
+				sortYieldHistorySeries(combined)
+				return combined, statuses, warnings, partial, nil
+			})
+		},
+	}
+	historyCmd.Flags().StringVar(&historyChainArg, "chain", "", "Chain identifier")
+	historyCmd.Flags().StringVar(&historyAssetArg, "asset", "", "Asset symbol/address/CAIP-19")
+	historyCmd.Flags().StringVar(&historyProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
+	historyCmd.Flags().StringVar(&historyMetricsArg, "metrics", "apy_total", "History metrics (apy_total,tvl_usd)")
+	historyCmd.Flags().StringVar(&historyIntervalArg, "interval", "day", "Point interval (hour|day)")
+	historyCmd.Flags().StringVar(&historyWindowArg, "window", "7d", "Lookback window (for example 24h,7d,30d)")
+	historyCmd.Flags().StringVar(&historyFromArg, "from", "", "Start time (RFC3339). Overrides --window when set")
+	historyCmd.Flags().StringVar(&historyToArg, "to", "", "End time (RFC3339). Defaults to now")
+	historyCmd.Flags().StringVar(&historyOpportunityIDsArg, "opportunity-ids", "", "Optional comma-separated opportunity IDs from yield opportunities")
+	historyCmd.Flags().IntVar(&historyLimit, "limit", 20, "Maximum opportunities per provider to fetch history for")
+	_ = historyCmd.MarkFlagRequired("chain")
+	_ = historyCmd.MarkFlagRequired("asset")
+	root.AddCommand(historyCmd)
+
 	return root
 }
 
@@ -1671,6 +1840,160 @@ func sortYieldOpportunities(items []model.YieldOpportunity, sortBy string) {
 		}
 		return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
 	})
+}
+
+func filterYieldOpportunitiesByID(items []model.YieldOpportunity, ids map[string]struct{}) []model.YieldOpportunity {
+	if len(ids) == 0 {
+		return items
+	}
+	out := make([]model.YieldOpportunity, 0, len(items))
+	for _, item := range items {
+		if _, ok := ids[strings.ToLower(strings.TrimSpace(item.OpportunityID))]; ok {
+			out = append(out, item)
+		}
+	}
+	return out
+}
+
+func sortYieldHistorySeries(items []model.YieldHistorySeries) {
+	for i := range items {
+		sort.Slice(items[i].Points, func(a, b int) bool {
+			return strings.Compare(items[i].Points[a].Timestamp, items[i].Points[b].Timestamp) < 0
+		})
+	}
+	sort.Slice(items, func(i, j int) bool {
+		a, b := items[i], items[j]
+		if a.Provider != b.Provider {
+			return a.Provider < b.Provider
+		}
+		if a.OpportunityID != b.OpportunityID {
+			return a.OpportunityID < b.OpportunityID
+		}
+		if a.Metric != b.Metric {
+			return a.Metric < b.Metric
+		}
+		if a.Interval != b.Interval {
+			return a.Interval < b.Interval
+		}
+		return strings.Compare(a.StartTime, b.StartTime) < 0
+	})
+}
+
+func parseYieldHistoryMetrics(input string) ([]providers.YieldHistoryMetric, error) {
+	parts := splitCSV(input)
+	if len(parts) == 0 {
+		parts = []string{string(providers.YieldHistoryMetricAPYTotal)}
+	}
+	out := make([]providers.YieldHistoryMetric, 0, len(parts))
+	seen := map[providers.YieldHistoryMetric]struct{}{}
+	for _, part := range parts {
+		var metric providers.YieldHistoryMetric
+		switch strings.ToLower(strings.TrimSpace(part)) {
+		case string(providers.YieldHistoryMetricAPYTotal):
+			metric = providers.YieldHistoryMetricAPYTotal
+		case string(providers.YieldHistoryMetricTVLUSD):
+			metric = providers.YieldHistoryMetricTVLUSD
+		default:
+			return nil, clierr.New(clierr.CodeUsage, "--metrics must be one or more of: apy_total,tvl_usd")
+		}
+		if _, ok := seen[metric]; ok {
+			continue
+		}
+		seen[metric] = struct{}{}
+		out = append(out, metric)
+	}
+	return out, nil
+}
+
+func parseYieldHistoryInterval(input string) (providers.YieldHistoryInterval, error) {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "", "day", "daily", "1d":
+		return providers.YieldHistoryIntervalDay, nil
+	case "hour", "hourly", "1h":
+		return providers.YieldHistoryIntervalHour, nil
+	default:
+		return "", clierr.New(clierr.CodeUsage, "--interval must be one of: hour,day")
+	}
+}
+
+func resolveYieldHistoryRange(fromArg, toArg, windowArg string, now time.Time) (time.Time, time.Time, error) {
+	endTime := now.UTC()
+	if strings.TrimSpace(toArg) != "" {
+		parsed, err := parseRFC3339(toArg)
+		if err != nil {
+			return time.Time{}, time.Time{}, clierr.Wrap(clierr.CodeUsage, "parse --to", err)
+		}
+		endTime = parsed.UTC()
+	}
+	if endTime.After(now.Add(5 * time.Minute)) {
+		return time.Time{}, time.Time{}, clierr.New(clierr.CodeUsage, "--to cannot be in the future")
+	}
+
+	var startTime time.Time
+	if strings.TrimSpace(fromArg) != "" {
+		parsed, err := parseRFC3339(fromArg)
+		if err != nil {
+			return time.Time{}, time.Time{}, clierr.Wrap(clierr.CodeUsage, "parse --from", err)
+		}
+		startTime = parsed.UTC()
+	} else {
+		window, err := parseLookbackWindow(windowArg)
+		if err != nil {
+			return time.Time{}, time.Time{}, clierr.Wrap(clierr.CodeUsage, "parse --window", err)
+		}
+		startTime = endTime.Add(-window)
+	}
+
+	if !startTime.Before(endTime) {
+		return time.Time{}, time.Time{}, clierr.New(clierr.CodeUsage, "history range must have --from before --to")
+	}
+	if endTime.Sub(startTime) > 366*24*time.Hour {
+		return time.Time{}, time.Time{}, clierr.New(clierr.CodeUsage, "history range cannot exceed 366d")
+	}
+	return startTime, endTime, nil
+}
+
+func parseRFC3339(raw string) (time.Time, error) {
+	value := strings.TrimSpace(raw)
+	if value == "" {
+		return time.Time{}, fmt.Errorf("empty timestamp")
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err == nil {
+		return ts, nil
+	}
+	ts, err = time.Parse(time.RFC3339Nano, value)
+	if err == nil {
+		return ts, nil
+	}
+	return time.Time{}, fmt.Errorf("expected RFC3339 timestamp")
+}
+
+func parseLookbackWindow(raw string) (time.Duration, error) {
+	value := strings.ToLower(strings.TrimSpace(raw))
+	if value == "" {
+		value = "7d"
+	}
+	switch {
+	case strings.HasSuffix(value, "d"):
+		n, err := strconv.Atoi(strings.TrimSuffix(value, "d"))
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid day window")
+		}
+		return time.Duration(n) * 24 * time.Hour, nil
+	case strings.HasSuffix(value, "w"):
+		n, err := strconv.Atoi(strings.TrimSuffix(value, "w"))
+		if err != nil || n <= 0 {
+			return 0, fmt.Errorf("invalid week window")
+		}
+		return time.Duration(n) * 7 * 24 * time.Hour, nil
+	default:
+		d, err := time.ParseDuration(value)
+		if err != nil || d <= 0 {
+			return 0, fmt.Errorf("invalid duration window")
+		}
+		return d, nil
+	}
 }
 
 func applyLendMarketLimit(items []model.LendMarket, limit int) []model.LendMarket {

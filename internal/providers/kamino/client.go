@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"math"
 	"net/http"
+	"net/url"
 	"sort"
 	"strconv"
 	"strings"
@@ -46,6 +47,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"lend.markets",
 			"lend.rates",
 			"yield.opportunities",
+			"yield.history",
 		},
 	}
 }
@@ -70,6 +72,16 @@ type reserveMetric struct {
 type reserveWithMarket struct {
 	Market  marketInfo
 	Reserve reserveMetric
+}
+
+type reserveMetricsHistoryResponse struct {
+	Reserve string                      `json:"reserve"`
+	History []reserveMetricsHistoryItem `json:"history"`
+}
+
+type reserveMetricsHistoryItem struct {
+	Timestamp string         `json:"timestamp"`
+	Metrics   map[string]any `json:"metrics"`
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
@@ -258,6 +270,138 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 	return out[:req.Limit], nil
 }
 
+func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
+	if !strings.EqualFold(strings.TrimSpace(req.Opportunity.Provider), "kamino") {
+		return nil, clierr.New(clierr.CodeUnsupported, "kamino history supports only kamino opportunities")
+	}
+	if !req.StartTime.Before(req.EndTime) {
+		return nil, clierr.New(clierr.CodeUsage, "history start time must be before end time")
+	}
+
+	chain, err := id.ParseChain(req.Opportunity.ChainID)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeUsage, "parse kamino opportunity chain", err)
+	}
+	if !chain.IsSolana() || chain.CAIP2 != solanaMainnetCAIP2 {
+		return nil, clierr.New(clierr.CodeUnsupported, "kamino history supports only Solana mainnet")
+	}
+
+	reserve := strings.TrimSpace(req.Opportunity.ProviderNativeID)
+	if reserve == "" {
+		return nil, clierr.New(clierr.CodeUsage, "kamino opportunity requires provider_native_id reserve")
+	}
+
+	market := marketFromSourceURL(req.Opportunity.SourceURL)
+	if market == "" {
+		market, err = c.resolveMarketForReserve(ctx, chain, reserve)
+		if err != nil {
+			return nil, err
+		}
+	}
+	frequency, err := kaminoHistoryFrequency(req.Interval)
+	if err != nil {
+		return nil, err
+	}
+
+	history, err := c.fetchReserveMetricsHistory(ctx, market, reserve, req.StartTime, req.EndTime, frequency)
+	if err != nil {
+		return nil, err
+	}
+	if len(history.History) == 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, "no kamino historical points for requested range")
+	}
+
+	metricSet := make(map[providers.YieldHistoryMetric]struct{}, len(req.Metrics))
+	for _, metric := range req.Metrics {
+		metricSet[metric] = struct{}{}
+	}
+	for metric := range metricSet {
+		switch metric {
+		case providers.YieldHistoryMetricAPYTotal, providers.YieldHistoryMetricTVLUSD:
+		default:
+			return nil, clierr.New(clierr.CodeUnsupported, "kamino history supports metrics apy_total,tvl_usd")
+		}
+	}
+
+	series := make([]model.YieldHistorySeries, 0, len(metricSet))
+	if _, ok := metricSet[providers.YieldHistoryMetricAPYTotal]; ok {
+		points := make([]model.YieldHistoryPoint, 0, len(history.History))
+		for _, sample := range history.History {
+			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(sample.Timestamp))
+			if err != nil {
+				continue
+			}
+			value, ok := parseHistoryMetric(sample.Metrics, "supplyInterestAPY")
+			if !ok {
+				continue
+			}
+			points = append(points, model.YieldHistoryPoint{
+				Timestamp: ts.UTC().Format(time.RFC3339),
+				Value:     value * 100,
+			})
+		}
+		sortHistoryPoints(points)
+		if len(points) > 0 {
+			series = append(series, model.YieldHistorySeries{
+				OpportunityID:        req.Opportunity.OpportunityID,
+				Provider:             "kamino",
+				Protocol:             req.Opportunity.Protocol,
+				ChainID:              req.Opportunity.ChainID,
+				AssetID:              req.Opportunity.AssetID,
+				ProviderNativeID:     req.Opportunity.ProviderNativeID,
+				ProviderNativeIDKind: req.Opportunity.ProviderNativeIDKind,
+				Metric:               string(providers.YieldHistoryMetricAPYTotal),
+				Interval:             string(req.Interval),
+				StartTime:            req.StartTime.UTC().Format(time.RFC3339),
+				EndTime:              req.EndTime.UTC().Format(time.RFC3339),
+				Points:               points,
+				SourceURL:            req.Opportunity.SourceURL,
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	if _, ok := metricSet[providers.YieldHistoryMetricTVLUSD]; ok {
+		points := make([]model.YieldHistoryPoint, 0, len(history.History))
+		for _, sample := range history.History {
+			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(sample.Timestamp))
+			if err != nil {
+				continue
+			}
+			value, ok := parseHistoryMetric(sample.Metrics, "depositTvl")
+			if !ok {
+				continue
+			}
+			points = append(points, model.YieldHistoryPoint{
+				Timestamp: ts.UTC().Format(time.RFC3339),
+				Value:     value,
+			})
+		}
+		sortHistoryPoints(points)
+		if len(points) > 0 {
+			series = append(series, model.YieldHistorySeries{
+				OpportunityID:        req.Opportunity.OpportunityID,
+				Provider:             "kamino",
+				Protocol:             req.Opportunity.Protocol,
+				ChainID:              req.Opportunity.ChainID,
+				AssetID:              req.Opportunity.AssetID,
+				ProviderNativeID:     req.Opportunity.ProviderNativeID,
+				ProviderNativeIDKind: req.Opportunity.ProviderNativeIDKind,
+				Metric:               string(providers.YieldHistoryMetricTVLUSD),
+				Interval:             string(req.Interval),
+				StartTime:            req.StartTime.UTC().Format(time.RFC3339),
+				EndTime:              req.EndTime.UTC().Format(time.RFC3339),
+				Points:               points,
+				SourceURL:            req.Opportunity.SourceURL,
+				FetchedAt:            c.now().UTC().Format(time.RFC3339),
+			})
+		}
+	}
+	if len(series) == 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, "no kamino historical points for requested range")
+	}
+	return series, nil
+}
+
 func (c *Client) fetchReserves(ctx context.Context, chain id.Chain) ([]reserveWithMarket, error) {
 	if !chain.IsSolana() {
 		return nil, clierr.New(clierr.CodeUnsupported, "kamino supports only Solana chains")
@@ -369,6 +513,110 @@ func (c *Client) fetchMarketReserves(ctx context.Context, marketPubkey string) (
 		return nil, err
 	}
 	return reserves, nil
+}
+
+func (c *Client) fetchReserveMetricsHistory(
+	ctx context.Context,
+	marketPubkey string,
+	reserve string,
+	start time.Time,
+	end time.Time,
+	frequency string,
+) (reserveMetricsHistoryResponse, error) {
+	endpoint := fmt.Sprintf(
+		"%s/kamino-market/%s/reserves/%s/metrics/history?env=mainnet-beta&start=%s&end=%s&frequency=%s",
+		strings.TrimRight(c.baseURL, "/"),
+		strings.TrimSpace(marketPubkey),
+		strings.TrimSpace(reserve),
+		url.QueryEscape(start.UTC().Format(time.RFC3339)),
+		url.QueryEscape(end.UTC().Format(time.RFC3339)),
+		url.QueryEscape(strings.TrimSpace(frequency)),
+	)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return reserveMetricsHistoryResponse{}, clierr.Wrap(clierr.CodeInternal, "build kamino reserve history request", err)
+	}
+	var resp reserveMetricsHistoryResponse
+	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+		return reserveMetricsHistoryResponse{}, err
+	}
+	return resp, nil
+}
+
+func (c *Client) resolveMarketForReserve(ctx context.Context, chain id.Chain, reserve string) (string, error) {
+	reserve = strings.TrimSpace(reserve)
+	if reserve == "" {
+		return "", clierr.New(clierr.CodeUsage, "reserve id is required")
+	}
+	reserves, err := c.fetchReserves(ctx, chain)
+	if err != nil {
+		return "", err
+	}
+	for _, item := range reserves {
+		if strings.EqualFold(strings.TrimSpace(item.Reserve.Reserve), reserve) {
+			return strings.TrimSpace(item.Market.LendingMarket), nil
+		}
+	}
+	return "", clierr.New(clierr.CodeUnavailable, "kamino market not found for reserve")
+}
+
+func marketFromSourceURL(source string) string {
+	raw := strings.TrimSpace(source)
+	if raw == "" {
+		return ""
+	}
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	parts := strings.Split(strings.Trim(strings.TrimSpace(parsed.Path), "/"), "/")
+	if len(parts) < 2 || !strings.EqualFold(parts[0], "lending") {
+		return ""
+	}
+	return strings.TrimSpace(parts[1])
+}
+
+func kaminoHistoryFrequency(interval providers.YieldHistoryInterval) (string, error) {
+	switch interval {
+	case providers.YieldHistoryIntervalHour:
+		return "hour", nil
+	case providers.YieldHistoryIntervalDay:
+		return "day", nil
+	default:
+		return "", clierr.New(clierr.CodeUsage, "kamino history interval must be hour or day")
+	}
+}
+
+func parseHistoryMetric(metrics map[string]any, key string) (float64, bool) {
+	value, ok := metrics[strings.TrimSpace(key)]
+	if !ok {
+		return 0, false
+	}
+	switch v := value.(type) {
+	case float64:
+		if math.IsNaN(v) || math.IsInf(v, 0) {
+			return 0, false
+		}
+		return v, true
+	case int:
+		return float64(v), true
+	case int64:
+		return float64(v), true
+	case string:
+		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
+		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
+			return 0, false
+		}
+		return f, true
+	default:
+		return 0, false
+	}
+}
+
+func sortHistoryPoints(points []model.YieldHistoryPoint) {
+	sort.Slice(points, func(i, j int) bool {
+		return strings.Compare(points[i].Timestamp, points[j].Timestamp) < 0
+	})
 }
 
 func reserveAssetID(chainID, fallbackAssetID, mint string) string {
