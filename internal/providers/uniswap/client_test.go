@@ -14,6 +14,8 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
+const testSwapper = "0x000000000000000000000000000000000000dEaD"
+
 func TestQuoteSwapIncludesRequiredSwapper(t *testing.T) {
 	chain, _ := id.ParseChain("ethereum")
 	assetIn, _ := id.ParseAsset("USDC", chain)
@@ -66,6 +68,7 @@ func TestQuoteSwapIncludesRequiredSwapper(t *testing.T) {
 		ToAsset:         assetOut,
 		AmountBaseUnits: "1000000",
 		AmountDecimal:   "1",
+		Swapper:         testSwapper,
 	})
 	if err != nil {
 		t.Fatalf("QuoteSwap failed: %v", err)
@@ -83,8 +86,8 @@ func TestQuoteSwapIncludesRequiredSwapper(t *testing.T) {
 	if got.Type != "EXACT_INPUT" {
 		t.Fatalf("unexpected swap type in payload: %s", got.Type)
 	}
-	if got.Swapper != quoteOnlySwapper {
-		t.Fatalf("expected swapper=%s, got %s", quoteOnlySwapper, got.Swapper)
+	if got.Swapper != testSwapper {
+		t.Fatalf("expected swapper=%s, got %s", testSwapper, got.Swapper)
 	}
 	if got.AutoSlippage != "DEFAULT" {
 		t.Fatalf("expected autoSlippage=DEFAULT, got %s", got.AutoSlippage)
@@ -143,6 +146,7 @@ func TestQuoteSwapUsesManualSlippageOverride(t *testing.T) {
 		AmountBaseUnits: "1000000",
 		AmountDecimal:   "1",
 		SlippagePct:     &slippage,
+		Swapper:         testSwapper,
 	})
 	if err != nil {
 		t.Fatalf("QuoteSwap failed: %v", err)
@@ -203,6 +207,7 @@ func TestQuoteSwapSupportsExactOutput(t *testing.T) {
 		AmountBaseUnits: "1000000000000000000",
 		AmountDecimal:   "1",
 		TradeType:       providers.SwapTradeTypeExactOutput,
+		Swapper:         testSwapper,
 	})
 	if err != nil {
 		t.Fatalf("QuoteSwap failed: %v", err)
@@ -261,6 +266,7 @@ func TestQuoteSwapExactOutputFallsBackInputDecimalsWhenMissing(t *testing.T) {
 		AmountBaseUnits: "1000000000000000000",
 		AmountDecimal:   "1",
 		TradeType:       providers.SwapTradeTypeExactOutput,
+		Swapper:         testSwapper,
 	})
 	if err != nil {
 		t.Fatalf("QuoteSwap failed: %v", err)
@@ -284,6 +290,23 @@ func TestQuoteSwapRequiresAPIKey(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("expected missing API key error")
+	}
+}
+
+func TestQuoteSwapRequiresSwapper(t *testing.T) {
+	chain, _ := id.ParseChain("ethereum")
+	assetIn, _ := id.ParseAsset("USDC", chain)
+	assetOut, _ := id.ParseAsset("DAI", chain)
+	c := New(httpx.New(1*time.Second, 0), "test-key")
+	_, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       assetIn,
+		ToAsset:         assetOut,
+		AmountBaseUnits: "1000000",
+		AmountDecimal:   "1",
+	})
+	if err == nil {
+		t.Fatal("expected missing swapper error")
 	}
 }
 

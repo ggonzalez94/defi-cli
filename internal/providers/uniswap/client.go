@@ -17,9 +17,6 @@ import (
 
 const defaultBase = "https://trade-api.gateway.uniswap.org"
 
-// quoteOnlySwapper is a deterministic placeholder for quote retrieval flows.
-const quoteOnlySwapper = "0x0000000000000000000000000000000000000001"
-
 type Client struct {
 	http    *httpx.Client
 	baseURL string
@@ -81,6 +78,10 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	default:
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "uniswap swap type must be exact-input or exact-output")
 	}
+	swapper := strings.TrimSpace(req.Swapper)
+	if swapper == "" {
+		return model.SwapQuote{}, clierr.New(clierr.CodeUsage, "uniswap swap quotes require a swapper address")
+	}
 
 	payload := map[string]any{
 		"tokenInChainId":  req.Chain.EVMChainID,
@@ -89,7 +90,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		"tokenOut":        req.ToAsset.Address,
 		"amount":          req.AmountBaseUnits,
 		"type":            uniswapTradeType(tradeType),
-		"swapper":         quoteOnlySwapper,
+		"swapper":         swapper,
 	}
 	if req.SlippagePct != nil {
 		payload["slippageTolerance"] = *req.SlippagePct

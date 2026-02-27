@@ -105,6 +105,151 @@ func TestSelectYieldProvidersExplicitFilterBypassesChainDefaults(t *testing.T) {
 	}
 }
 
+func TestParseYieldHistoryMetricsDedupesAndValidates(t *testing.T) {
+	metrics, err := parseYieldHistoryMetrics("apy_total,tvl_usd,apy_total")
+	if err != nil {
+		t.Fatalf("parseYieldHistoryMetrics failed: %v", err)
+	}
+	if len(metrics) != 2 {
+		t.Fatalf("expected 2 metrics, got %+v", metrics)
+	}
+	if metrics[0] != providers.YieldHistoryMetricAPYTotal || metrics[1] != providers.YieldHistoryMetricTVLUSD {
+		t.Fatalf("unexpected metric order: %+v", metrics)
+	}
+
+	if _, err := parseYieldHistoryMetrics("foo"); err == nil {
+		t.Fatal("expected invalid metric error")
+	}
+}
+
+func TestYieldHistoryCommandCallsProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	fakeProvider := &fakeYieldHistoryProvider{
+		name: "aave",
+		opportunities: []model.YieldOpportunity{
+			{
+				OpportunityID:        "opp-1",
+				Provider:             "aave",
+				Protocol:             "aave",
+				ChainID:              "eip155:1",
+				AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+				ProviderNativeID:     "aave:eip155:1:0x1111111111111111111111111111111111111111:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
+				SourceURL:            "https://app.aave.com",
+			},
+		},
+		series: []model.YieldHistorySeries{
+			{
+				OpportunityID: "opp-1",
+				Provider:      "aave",
+				Metric:        "apy_total",
+				Interval:      "hour",
+				Points: []model.YieldHistoryPoint{
+					{Timestamp: "2026-02-26T19:00:00Z", Value: 3.1},
+				},
+			},
+		},
+	}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    func() time.Time { return fixedNow },
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			ResultsOnly:  true,
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		yieldProviders: map[string]providers.YieldProvider{
+			"aave": fakeProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newYieldCommand())
+	root.SetArgs([]string{
+		"yield", "history",
+		"--chain", "1",
+		"--asset", "USDC",
+		"--providers", "aave",
+		"--metrics", "apy_total",
+		"--interval", "hour",
+		"--window", "24h",
+		"--limit", "1",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("yield history command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if fakeProvider.historyCalls != 1 {
+		t.Fatalf("expected one history call, got %d", fakeProvider.historyCalls)
+	}
+	if fakeProvider.lastHistoryReq.Interval != providers.YieldHistoryIntervalHour {
+		t.Fatalf("expected hour interval, got %+v", fakeProvider.lastHistoryReq.Interval)
+	}
+	if got := fakeProvider.lastHistoryReq.EndTime.UTC(); !got.Equal(fixedNow) {
+		t.Fatalf("expected end time %s, got %s", fixedNow, got)
+	}
+	if got := fakeProvider.lastHistoryReq.StartTime.UTC(); !got.Equal(fixedNow.Add(-24 * time.Hour)) {
+		t.Fatalf("expected start time %s, got %s", fixedNow.Add(-24*time.Hour), got)
+	}
+
+	var out []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed parsing output json: %v output=%s", err, stdout.String())
+	}
+	if len(out) != 1 {
+		t.Fatalf("expected one series row, got %+v", out)
+	}
+	if out[0]["metric"] != "apy_total" {
+		t.Fatalf("expected metric apy_total, got %+v", out[0])
+	}
+}
+
+func TestYieldHistoryCommandFailsWhenProviderHasNoHistorySupport(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		yieldProviders: map[string]providers.YieldProvider{
+			"aave": &fakeYieldProviderNoHistory{name: "aave"},
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newYieldCommand())
+	root.SetArgs([]string{
+		"yield", "history",
+		"--chain", "1",
+		"--asset", "USDC",
+		"--providers", "aave",
+	})
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected yield history to fail without history provider support; stderr=%s", stderr.String())
+	}
+}
+
 func TestParseChainAssetFilterAllowsUnknownSymbol(t *testing.T) {
 	chain, err := id.ParseChain("ethereum")
 	if err != nil {
@@ -474,6 +619,202 @@ func TestRunnerChainsAssetsAllowsUnknownSymbolFilter(t *testing.T) {
 	}
 }
 
+func TestRunnerLendPositionsCallsProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	aaveProvider := &fakeLendingProvider{
+		name: "aave",
+		positions: []model.LendPosition{
+			{
+				Provider:       "aave",
+				ChainID:        "eip155:1",
+				AccountAddress: "0x000000000000000000000000000000000000dead",
+				PositionType:   "collateral",
+				AssetID:        "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			},
+		},
+	}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"aave": aaveProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "aave",
+		"--chain", "1",
+		"--address", "0x000000000000000000000000000000000000dEaD",
+		"--asset", "USDC",
+		"--type", "collateral",
+		"--limit", "5",
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("lend positions command failed: %v stderr=%s", err, stderr.String())
+	}
+	if aaveProvider.calls != 1 {
+		t.Fatalf("expected provider call once, got %d", aaveProvider.calls)
+	}
+	if aaveProvider.lastReq.PositionType != providers.LendPositionTypeCollateral {
+		t.Fatalf("expected collateral request type, got %s", aaveProvider.lastReq.PositionType)
+	}
+	if !strings.EqualFold(aaveProvider.lastReq.Account, "0x000000000000000000000000000000000000dead") {
+		t.Fatalf("unexpected account passed to provider: %s", aaveProvider.lastReq.Account)
+	}
+	if !strings.EqualFold(aaveProvider.lastReq.Asset.Symbol, "USDC") {
+		t.Fatalf("expected USDC asset filter, got %+v", aaveProvider.lastReq.Asset)
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if env["success"] != true {
+		t.Fatalf("expected success=true, got %v", env["success"])
+	}
+}
+
+func TestRunnerLendPositionsRejectsInvalidType(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	aaveProvider := &fakeLendingProvider{name: "aave"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"aave": aaveProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "aave",
+		"--chain", "1",
+		"--address", "0x000000000000000000000000000000000000dEaD",
+		"--type", "debt",
+	})
+
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected invalid type error, stderr=%s", stderr.String())
+	}
+	if aaveProvider.calls != 0 {
+		t.Fatalf("expected provider not to be called, got %d calls", aaveProvider.calls)
+	}
+}
+
+func TestRunnerLendPositionsRejectsInvalidEVMAddress(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	aaveProvider := &fakeLendingProvider{name: "aave"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"aave": aaveProvider,
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "aave",
+		"--chain", "1",
+		"--address", "not-an-address",
+	})
+
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected invalid address error, stderr=%s", stderr.String())
+	}
+	if aaveProvider.calls != 0 {
+		t.Fatalf("expected provider not to be called, got %d calls", aaveProvider.calls)
+	}
+}
+
+func TestRunnerLendPositionsRequiresProviderCapability(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		lendingProviders: map[string]providers.LendingProvider{
+			"kamino": &fakeLendingProviderNoPositions{name: "kamino"},
+		},
+	}
+
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newLendCommand())
+	root.SetArgs([]string{
+		"lend", "positions",
+		"--provider", "kamino",
+		"--chain", "solana",
+		"--address", "6dM4QgP1VnRfx6TVV1t5hBf3ytA5Qn2ATqNnSboP8qz5",
+	})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected unsupported capability error, stderr=%s", stderr.String())
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "does not support positions") {
+		t.Fatalf("expected capability error message, got: %v", err)
+	}
+}
+
 func TestRunnerBridgeListRejectsProviderFlag(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -524,7 +865,7 @@ func TestRunnerBridgeDetailsRequiresBridgeFlag(t *testing.T) {
 	}
 }
 
-func TestSwapDefaultsToJupiterForSolana(t *testing.T) {
+func TestSwapQuoteWithJupiterForSolana(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	oneinch := &fakeSwapProvider{name: "1inch"}
@@ -553,6 +894,7 @@ func TestSwapDefaultsToJupiterForSolana(t *testing.T) {
 	root.AddCommand(state.newSwapCommand())
 	root.SetArgs([]string{
 		"swap", "quote",
+		"--provider", "jupiter",
 		"--chain", "solana",
 		"--from-asset", "USDC",
 		"--to-asset", "USDT",
@@ -569,7 +911,7 @@ func TestSwapDefaultsToJupiterForSolana(t *testing.T) {
 	}
 }
 
-func TestSwapDefaultsToOneInchForEVM(t *testing.T) {
+func TestSwapQuoteWithOneInchForEVM(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	oneinch := &fakeSwapProvider{name: "1inch"}
@@ -598,6 +940,7 @@ func TestSwapDefaultsToOneInchForEVM(t *testing.T) {
 	root.AddCommand(state.newSwapCommand())
 	root.SetArgs([]string{
 		"swap", "quote",
+		"--provider", "1inch",
 		"--chain", "base",
 		"--from-asset", "USDC",
 		"--to-asset", "DAI",
@@ -646,6 +989,7 @@ func TestSwapSlippageOverridePassedToProvider(t *testing.T) {
 		"--from-asset", "USDC",
 		"--to-asset", "DAI",
 		"--amount", "1000000",
+		"--from-address", "0x000000000000000000000000000000000000dEaD",
 		"--slippage-pct", "1.25",
 	})
 	if err := root.Execute(); err != nil {
@@ -657,6 +1001,9 @@ func TestSwapSlippageOverridePassedToProvider(t *testing.T) {
 	}
 	if *uniswap.lastReq.SlippagePct != 1.25 {
 		t.Fatalf("expected slippage=1.25, got %v", *uniswap.lastReq.SlippagePct)
+	}
+	if uniswap.lastReq.Swapper != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected swapper to be forwarded, got %s", uniswap.lastReq.Swapper)
 	}
 }
 
@@ -692,6 +1039,7 @@ func TestSwapSlippageOverrideValidation(t *testing.T) {
 		"--from-asset", "USDC",
 		"--to-asset", "DAI",
 		"--amount", "1000000",
+		"--from-address", "0x000000000000000000000000000000000000dEaD",
 		"--slippage-pct", "0",
 	})
 	if err := root.Execute(); err == nil {
@@ -735,6 +1083,7 @@ func TestSwapExactOutputPassedToProvider(t *testing.T) {
 		"--to-asset", "DAI",
 		"--type", "exact-output",
 		"--amount-out", "1000000000000000000",
+		"--from-address", "0x000000000000000000000000000000000000dEaD",
 	})
 	if err := root.Execute(); err != nil {
 		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
@@ -749,9 +1098,12 @@ func TestSwapExactOutputPassedToProvider(t *testing.T) {
 	if uniswap.lastReq.AmountDecimal != "1" {
 		t.Fatalf("unexpected amount decimal: %s", uniswap.lastReq.AmountDecimal)
 	}
+	if uniswap.lastReq.Swapper != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected swapper to be forwarded, got %s", uniswap.lastReq.Swapper)
+	}
 }
 
-func TestSwapExactOutputDefaultsToUniswapOnEVM(t *testing.T) {
+func TestSwapExactOutputRequiresExplicitProvider(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
 	oneinch := &fakeSwapProvider{name: "1inch"}
@@ -786,18 +1138,15 @@ func TestSwapExactOutputDefaultsToUniswapOnEVM(t *testing.T) {
 		"--type", "exact-output",
 		"--amount-out", "1000000000000000000",
 	})
-	if err := root.Execute(); err != nil {
-		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	if err := root.Execute(); err == nil {
+		t.Fatalf("expected provider requirement error, stderr=%s", stderr.String())
 	}
 
 	if oneinch.calls != 0 {
 		t.Fatalf("expected 1inch not to be called, got %d calls", oneinch.calls)
 	}
-	if uniswap.calls != 1 {
-		t.Fatalf("expected uniswap to be called once, got %d calls", uniswap.calls)
-	}
-	if uniswap.lastReq.TradeType != providers.SwapTradeTypeExactOutput {
-		t.Fatalf("expected trade type exact-output, got %s", uniswap.lastReq.TradeType)
+	if uniswap.calls != 0 {
+		t.Fatalf("expected uniswap not to be called, got %d calls", uniswap.calls)
 	}
 }
 
@@ -835,7 +1184,7 @@ func TestSwapExactOutputWithoutProviderRejectedOnSolana(t *testing.T) {
 		"--amount-out", "1000000",
 	})
 	if err := root.Execute(); err == nil {
-		t.Fatalf("expected unsupported error, stderr=%s", stderr.String())
+		t.Fatalf("expected provider requirement error, stderr=%s", stderr.String())
 	}
 	if jupiter.calls != 0 {
 		t.Fatalf("expected jupiter not to be called, got %d calls", jupiter.calls)
@@ -874,6 +1223,7 @@ func TestSwapExactOutputRequiresOutputAmount(t *testing.T) {
 		"--from-asset", "USDC",
 		"--to-asset", "DAI",
 		"--type", "exact-output",
+		"--from-address", "0x000000000000000000000000000000000000dEaD",
 	})
 	if err := root.Execute(); err == nil {
 		t.Fatalf("expected validation error, stderr=%s", stderr.String())
@@ -916,6 +1266,7 @@ func TestSwapTypeValidation(t *testing.T) {
 		"--to-asset", "DAI",
 		"--type", "limit-order",
 		"--amount", "1000000",
+		"--from-address", "0x000000000000000000000000000000000000dEaD",
 	})
 	if err := root.Execute(); err == nil {
 		t.Fatalf("expected validation error, stderr=%s", stderr.String())
@@ -1044,6 +1395,116 @@ func (f *fakeSwapProvider) QuoteSwap(_ context.Context, req providers.SwapQuoteR
 		},
 		Route: "test",
 	}, nil
+}
+
+type fakeLendingProvider struct {
+	name      string
+	positions []model.LendPosition
+	err       error
+	calls     int
+	lastReq   providers.LendPositionsRequest
+}
+
+func (f *fakeLendingProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "lending",
+		RequiresKey:  false,
+		Capabilities: []string{"lend.markets", "lend.rates", "lend.positions"},
+	}
+}
+
+func (f *fakeLendingProvider) LendMarkets(context.Context, string, id.Chain, id.Asset) ([]model.LendMarket, error) {
+	return nil, nil
+}
+
+func (f *fakeLendingProvider) LendRates(context.Context, string, id.Chain, id.Asset) ([]model.LendRate, error) {
+	return nil, nil
+}
+
+func (f *fakeLendingProvider) LendPositions(_ context.Context, req providers.LendPositionsRequest) ([]model.LendPosition, error) {
+	f.calls++
+	f.lastReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.positions, nil
+}
+
+type fakeLendingProviderNoPositions struct {
+	name string
+}
+
+func (f *fakeLendingProviderNoPositions) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "lending",
+		RequiresKey:  false,
+		Capabilities: []string{"lend.markets", "lend.rates"},
+	}
+}
+
+func (f *fakeLendingProviderNoPositions) LendMarkets(context.Context, string, id.Chain, id.Asset) ([]model.LendMarket, error) {
+	return nil, nil
+}
+
+func (f *fakeLendingProviderNoPositions) LendRates(context.Context, string, id.Chain, id.Asset) ([]model.LendRate, error) {
+	return nil, nil
+}
+
+type fakeYieldHistoryProvider struct {
+	name           string
+	opportunities  []model.YieldOpportunity
+	series         []model.YieldHistorySeries
+	err            error
+	calls          int
+	historyCalls   int
+	lastYieldReq   providers.YieldRequest
+	lastHistoryReq providers.YieldHistoryRequest
+}
+
+func (f *fakeYieldHistoryProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "yield",
+		RequiresKey:  false,
+		Capabilities: []string{"yield.opportunities", "yield.history"},
+	}
+}
+
+func (f *fakeYieldHistoryProvider) YieldOpportunities(_ context.Context, req providers.YieldRequest) ([]model.YieldOpportunity, error) {
+	f.calls++
+	f.lastYieldReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.opportunities, nil
+}
+
+func (f *fakeYieldHistoryProvider) YieldHistory(_ context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
+	f.historyCalls++
+	f.lastHistoryReq = req
+	if f.err != nil {
+		return nil, f.err
+	}
+	return f.series, nil
+}
+
+type fakeYieldProviderNoHistory struct {
+	name string
+}
+
+func (f *fakeYieldProviderNoHistory) Info() model.ProviderInfo {
+	return model.ProviderInfo{
+		Name:         f.name,
+		Type:         "yield",
+		RequiresKey:  false,
+		Capabilities: []string{"yield.opportunities"},
+	}
+}
+
+func (f *fakeYieldProviderNoHistory) YieldOpportunities(context.Context, providers.YieldRequest) ([]model.YieldOpportunity, error) {
+	return nil, nil
 }
 
 func setUnopenableCacheEnv(t *testing.T) {

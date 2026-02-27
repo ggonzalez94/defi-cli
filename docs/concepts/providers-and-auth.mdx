@@ -37,8 +37,10 @@ If either is missing, bungee quotes use public backend.
 
 ## Routing and fallback
 
-- Lending routes by `--protocol` (`aave`, `morpho`, `kamino`) using direct adapters only.
+- Lending routes by `--provider` (`aave`, `morpho`, `kamino`) using direct adapters only.
+- `lend positions` currently supports `--provider aave|morpho`.
 - `yield opportunities` aggregates direct providers and accepts `--providers aave,morpho,kamino`.
+- `yield history` uses the same direct providers and accepts `--providers aave,morpho,kamino`.
 - `swap quote` defaults by chain family: `1inch` for EVM chains, `jupiter` for Solana.
 - Provider/chain-family mismatches fail fast with `unsupported` errors (for example `--provider jupiter` on EVM chains).
 

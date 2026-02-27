@@ -19,10 +19,9 @@ go test -race ./...
 go vet ./...
 
 ./defi providers list --results-only
-./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+./defi lend markets --provider aave --chain 1 --asset USDC --results-only
+./defi lend positions --provider aave --chain 1 --address 0x000000000000000000000000000000000000dEaD --type all --limit 3 --results-only
 ./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
-./defi lend markets --protocol kamino --chain solana --asset USDC --results-only
-./defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
 
 ## Folder structure
@@ -34,11 +33,13 @@ cmd/
 internal/
   app/runner.go                   # command wiring, provider routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/ kamino/         # direct GraphQL/REST lending + yield
-    defillama/                    # chain/protocol market data + bridge analytics
-    across/ lifi/ bungee/         # bridge quotes
-    oneinch/ uniswap/ jupiter/ fibrous/ bungee/  # swap quotes
+    aave/ morpho/                 # direct GraphQL lending + yield
+    defillama/                    # market/yield normalization + fallback + bridge analytics
+    across/ lifi/                 # bridge quotes + lifi execution planning
+    oneinch/ uniswap/ taikoswap/  # swap quotes + uniswap-v3-compatible execution planning (taikoswap today)
     types.go                      # provider interfaces
+  execution/                      # action persistence + planner helpers + signer abstraction + tx execution
+  registry/                       # canonical execution endpoints/contracts/ABI fragments + default chain RPC map
   config/                         # defaults + file/env/flags precedence
   cache/                          # sqlite cache + file lock
   id/                             # CAIP parsing + amount normalization
@@ -50,6 +51,7 @@ internal/
   httpx/                          # shared HTTP client/retry behavior
 
 .github/workflows/ci.yml          # CI (test/vet/build)
+.github/workflows/nightly-execution-smoke.yml # nightly execution planning drift checks
 .github/workflows/release.yml     # tagged release pipeline (GoReleaser)
 scripts/install.sh                # macOS/Linux installer from GitHub Releases
 .goreleaser.yml                   # cross-platform release artifact config
@@ -64,29 +66,52 @@ README.md                         # user-facing usage + caveats
 
 - Error output always returns a full envelope, even with `--results-only` or `--select`.
 - Config precedence is `flags > env > config file > defaults`.
-- `yield --providers` expects provider names (`aave,morpho,kamino`), not protocol categories.
-- Lending routes by `--protocol` to direct adapters only (`aave`, `morpho`, `kamino`).
+- `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
+- Lending routes by `--provider` use direct protocol adapters (`aave`, `morpho`, `kamino`).
+- `lend positions` currently supports `--provider aave|morpho`; `kamino` does not expose positions yet.
+- `lend positions --type all` intentionally returns non-overlapping intents (`supply`, `borrow`, `collateral`) for automation-friendly filtering.
 - Most commands do not require provider API keys.
-- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`). `swap quote --provider jupiter` supports `DEFI_JUPITER_API_KEY` optionally (higher limits). `swap quote --provider fibrous` is keyless. Bungee Auto-mode quotes (`bridge quote --provider bungee`, `swap quote --provider bungee`) are keyless by default; optional dedicated-backend mode requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
+- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
+- Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
+- TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
+- `swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `lend`, `rewards`); `submit`/`status` use stored action step RPC URLs.
+- Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.
+- Metadata ownership is split by intent:
+  - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
+  - `internal/providers/*/client.go`: provider quote/read API base URLs.
+  - `internal/id/id.go`: bootstrap token symbol/address registry for deterministic asset parsing.
+- Execution commands currently available:
+  - `swap plan|run|submit|status`
+  - `bridge plan|run|submit|status` (Across, LiFi)
+  - `approvals plan|run|submit|status`
+  - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave, Morpho)
+  - `rewards claim|compound plan|run|submit|status` (Aave)
+  - `actions list|show|estimate`
+- Execution builder architecture is intentionally split:
+  - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
+  - `lend`/`rewards`/`approvals` action construction uses internal planners for deterministic contract-call composition.
+- All execution `run` / `submit` commands can broadcast transactions.
+- Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts into larger approvals when required.
+- Bridge execution pre-sign checks validate provider settlement metadata/endpoints by default; `--unsafe-provider-tx` bypasses these guardrails.
+- LiFi bridge quote/plan/run support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
+- Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
+- Aave execution has default pool-address-provider coverage for chain IDs `1`, `10`, `137`, `8453`, `42161`, and `43114`; override with `--pool-address` / `--pool-address-provider` otherwise.
+- Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
-- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
 - Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap only (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
-- Uniswap quote calls use a deterministic placeholder `swapper` for quote-only mode (`0x000...001`) and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
+- Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
-- `lend`/`yield` rows expose retrieval-first ID metadata: `provider`, `provider_native_id`, and `provider_native_id_kind`; IDs are provider-scoped and not guaranteed to be on-chain addresses.
-- Bridge quotes now include `fee_breakdown` with provider-reported components (`lp_fee`, `relayer_fee`, `gas_fee`) and amount-delta consistency checks.
-- Kamino direct routes currently support Solana mainnet only.
-- Solana devnet/testnet aliases and custom Solana CAIP-2 references are intentionally unsupported; use Solana mainnet only.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
-- Cache locking uses sqlite WAL + busy timeout + lock/backoff retries to reduce `database is locked` contention under parallel runs.
-- Cache initialization is best-effort; if cache path init fails (permissions/path issues), commands continue with cache disabled.
-- Across may omit native USD fee fields for some routes; when missing and the input asset is a known stable token, `estimated_fee_usd` falls back to a token-denominated approximation while exact token-unit fees remain in `fee_breakdown`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show|estimate`) bypass cache initialization.
+- For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
 - Mintlify production docs should use the `docs-live` branch; the release workflow force-syncs `docs-live` to each `v*` tag.
@@ -126,10 +151,9 @@ README.md                         # user-facing usage + caveats
 - Keep `CHANGELOG.md` in a simple release-notes format with `## [Unreleased]` at the top.
 - Add user-facing changes under `Unreleased` using sections in this order: `Added`, `Changed`, `Fixed`, `Docs`, `Security`.
 - Keep entries concise and action-oriented (what changed for users, not internal refactors unless user impact exists).
-- Record only the net user-facing outcome in `Unreleased`; omit intermediate implementation steps and fixes for regressions that never shipped in a release.
-- Do not add changelog entries for README-only or `AGENTS.md`-only edits.
 - On release, move `Unreleased` items into `## [vX.Y.Z] - YYYY-MM-DD` and update compare links at the bottom.
 - If a section has no updates while editing, use `- None yet.` to keep structure stable.
+- Keep README/AGENTS focused on current behavior; track version-to-version deltas in CHANGELOG/release notes instead of adding temporary in-progress migration notes.
 
 ## Maintenance note
 

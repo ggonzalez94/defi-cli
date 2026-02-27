@@ -40,6 +40,8 @@ type Settings struct {
 	CacheEnabled    bool
 	CachePath       string
 	CacheLockPath   string
+	ActionStorePath string
+	ActionLockPath  string
 	DefiLlamaAPIKey string
 	UniswapAPIKey   string
 	OneInchAPIKey   string
@@ -59,6 +61,10 @@ type fileConfig struct {
 		Path     string `yaml:"path"`
 		LockPath string `yaml:"lock_path"`
 	} `yaml:"cache"`
+	Execution struct {
+		ActionsPath     string `yaml:"actions_path"`
+		ActionsLockPath string `yaml:"actions_lock_path"`
+	} `yaml:"execution"`
 	Providers struct {
 		DefiLlama struct {
 			APIKey    string `yaml:"api_key"`
@@ -127,14 +133,17 @@ func defaultSettings() (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
+	cacheDir := filepath.Dir(cachePath)
 	return Settings{
-		OutputMode:    "json",
-		Timeout:       10 * time.Second,
-		Retries:       2,
-		MaxStale:      5 * time.Minute,
-		CacheEnabled:  true,
-		CachePath:     cachePath,
-		CacheLockPath: lockPath,
+		OutputMode:      "json",
+		Timeout:         10 * time.Second,
+		Retries:         2,
+		MaxStale:        5 * time.Minute,
+		CacheEnabled:    true,
+		CachePath:       cachePath,
+		CacheLockPath:   lockPath,
+		ActionStorePath: filepath.Join(cacheDir, "actions.db"),
+		ActionLockPath:  filepath.Join(cacheDir, "actions.lock"),
 	}, nil
 }
 
@@ -211,6 +220,12 @@ func applyFileConfig(path string, settings *Settings) error {
 	}
 	if cfg.Cache.LockPath != "" {
 		settings.CacheLockPath = cfg.Cache.LockPath
+	}
+	if cfg.Execution.ActionsPath != "" {
+		settings.ActionStorePath = cfg.Execution.ActionsPath
+	}
+	if cfg.Execution.ActionsLockPath != "" {
+		settings.ActionLockPath = cfg.Execution.ActionsLockPath
 	}
 	if cfg.Providers.Uniswap.APIKey != "" {
 		settings.UniswapAPIKey = cfg.Providers.Uniswap.APIKey
@@ -291,6 +306,12 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_CACHE_LOCK_PATH"); v != "" {
 		settings.CacheLockPath = v
+	}
+	if v := os.Getenv("DEFI_ACTIONS_PATH"); v != "" {
+		settings.ActionStorePath = v
+	}
+	if v := os.Getenv("DEFI_ACTIONS_LOCK_PATH"); v != "" {
+		settings.ActionLockPath = v
 	}
 	if v := os.Getenv("DEFI_UNISWAP_API_KEY"); v != "" {
 		settings.UniswapAPIKey = v

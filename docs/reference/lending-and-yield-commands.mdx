@@ -6,13 +6,13 @@ description: Full reference for lend and yield command flags and examples.
 ## `lend markets`
 
 ```bash
-defi lend markets --protocol aave --chain 1 --asset USDC --limit 20 --results-only
-defi lend markets --protocol kamino --chain solana --asset USDC --limit 20 --results-only
+defi lend markets --provider aave --chain 1 --asset USDC --limit 20 --results-only
+defi lend markets --provider kamino --chain solana --asset USDC --limit 20 --results-only
 ```
 
 Flags:
 
-- `--protocol string` (`aave`, `morpho`, `kamino`) required
+- `--provider string` (`aave`, `morpho`, `kamino`) required
 - `--chain string` required
 - `--asset string` required
 - `--limit int` (default `20`)
@@ -20,11 +20,27 @@ Flags:
 ## `lend rates`
 
 ```bash
-defi lend rates --protocol morpho --chain 1 --asset USDC --limit 20 --results-only
-defi lend rates --protocol kamino --chain solana --asset USDC --limit 20 --results-only
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 20 --results-only
+defi lend rates --provider kamino --chain solana --asset USDC --limit 20 --results-only
 ```
 
 Flags are the same as `lend markets`.
+
+## `lend positions`
+
+```bash
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
+defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borrow --asset USDC --results-only
+```
+
+Flags:
+
+- `--provider string` (`aave`, `morpho`) required
+- `--chain string` required
+- `--address string` required
+- `--asset string` optional filter (`symbol`/address/CAIP-19)
+- `--type string` (`all|supply|borrow|collateral`, default `all`)
+- `--limit int` (default `20`)
 
 ## `yield opportunities`
 
@@ -34,8 +50,7 @@ defi yield opportunities \
   --asset USDC \
   --providers aave,morpho \
   --min-tvl-usd 1000000 \
-  --max-risk medium \
-  --sort score \
+  --sort liquidity_usd \
   --limit 20 \
   --results-only
 ```
@@ -47,10 +62,41 @@ Flags:
 - `--limit int` (default `20`)
 - `--min-tvl-usd float` (default `0`)
 - `--min-apy float` (default `0`)
-- `--max-risk string` (`low|medium|high|unknown`, default `high`)
 - `--providers string` (`aave,morpho,kamino`)
-- `--sort string` (`score|apy_total|tvl_usd|liquidity_usd`, default `score`)
+- `--sort string` (`apy_total|tvl_usd|liquidity_usd`, default `apy_total`)
 - `--include-incomplete` bool (default `false`)
+
+Output notes:
+
+- `backing_assets` includes the full reported backing composition for each opportunity.
+- `tvl_usd` and `liquidity_usd` are provider-sourced objective metrics (not inferred risk labels).
+
+## `yield history`
+
+```bash
+defi yield history \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --metrics apy_total,tvl_usd \
+  --interval day \
+  --window 7d \
+  --limit 1 \
+  --results-only
+```
+
+Flags:
+
+- `--chain string` required
+- `--asset string` required
+- `--providers string` (`aave,morpho,kamino`)
+- `--metrics string` (`apy_total,tvl_usd`, default `apy_total`)
+- `--interval string` (`hour|day`, default `day`)
+- `--window string` lookback duration (for example `24h`, `7d`, `30d`)
+- `--from string` optional RFC3339 start time (`--window` is ignored when set)
+- `--to string` optional RFC3339 end time (default `now`)
+- `--opportunity-ids string` optional CSV filter from `yield opportunities`
+- `--limit int` max opportunities per provider (default `20`)
 
 ## Provider-selection note
 

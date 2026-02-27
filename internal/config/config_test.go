@@ -55,6 +55,21 @@ func TestLoadDefiLlamaAPIKeyFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadExecutionPathsFromEnv(t *testing.T) {
+	t.Setenv("DEFI_ACTIONS_PATH", "/tmp/defi-actions.db")
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", "/tmp/defi-actions.lock")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.ActionStorePath != "/tmp/defi-actions.db" {
+		t.Fatalf("expected action store path from env, got %q", settings.ActionStorePath)
+	}
+	if settings.ActionLockPath != "/tmp/defi-actions.lock" {
+		t.Fatalf("expected action lock path from env, got %q", settings.ActionLockPath)
+	}
+}
+
 func TestLoadJupiterAPIKeyFromEnv(t *testing.T) {
 	t.Setenv("DEFI_JUPITER_API_KEY", "jup-key")
 	settings, err := Load(GlobalFlags{})

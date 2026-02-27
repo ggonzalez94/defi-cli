@@ -96,6 +96,9 @@ var chainBySlug = map[string]Chain{
 	"taiko":         {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 	"taiko alethia": {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
 	"taiko-alethia": {Name: "Taiko", Slug: "taiko", CAIP2: "eip155:167000", EVMChainID: 167000},
+	"taiko hoodi":   {Name: "Taiko Hoodi", Slug: "taiko-hoodi", CAIP2: "eip155:167013", EVMChainID: 167013},
+	"taiko-hoodi":   {Name: "Taiko Hoodi", Slug: "taiko-hoodi", CAIP2: "eip155:167013", EVMChainID: 167013},
+	"hoodi":         {Name: "Taiko Hoodi", Slug: "taiko-hoodi", CAIP2: "eip155:167013", EVMChainID: 167013},
 	"solana":        {Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2},
 	"solana-mainnet": {
 		Name: "Solana", Slug: "solana", CAIP2: solanaMainnetCAIP2,
@@ -127,6 +130,7 @@ var chainByID = map[int64]Chain{
 	80094:  chainBySlug["berachain"],
 	81457:  chainBySlug["blast"],
 	167000: chainBySlug["taiko"],
+	167013: chainBySlug["taiko-hoodi"],
 	534352: chainBySlug["scroll"],
 }
 
@@ -401,6 +405,11 @@ var tokenRegistry = map[string][]Token{
 		{Symbol: "USDC", Address: "0x07d83526730c7438048d55a4fc0b850e2aab6f0b", Decimals: 6},
 		{Symbol: "USDT", Address: "0x2def195713cf4a606b49d07e520e22c17899a736", Decimals: 6},
 		{Symbol: "WETH", Address: "0xa51894664a773981c6c112c43ce576f315d5b1b6", Decimals: 18},
+	},
+	"eip155:167013": {
+		{Symbol: "USDC", Address: "0x18d5bb147f3d05d5f6c5e60caf1daeedbf5155b6", Decimals: 6},
+		{Symbol: "USDT", Address: "0xeb4e8eb83d6ffba2ce0d8f62ace60648d1ece116", Decimals: 6},
+		{Symbol: "WETH", Address: "0x3b39685b5495359c892ddd1057b5712f49976835", Decimals: 18},
 	},
 	"eip155:534352": {
 		{Symbol: "CAKE", Address: "0x1b896893dfc86bb67cf57767298b9073d2c1ba2c", Decimals: 18},

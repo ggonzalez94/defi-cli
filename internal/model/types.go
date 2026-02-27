@@ -7,6 +7,7 @@ const EnvelopeVersion = "v1"
 const (
 	NativeIDKindCompositeMarketAsset = "composite_market_asset"
 	NativeIDKindMarketID             = "market_id"
+	NativeIDKindVaultAddress         = "vault_address"
 	NativeIDKindPoolID               = "pool_id"
 )
 
@@ -130,6 +131,22 @@ type LendRate struct {
 	FetchedAt            string  `json:"fetched_at"`
 }
 
+type LendPosition struct {
+	Protocol             string     `json:"protocol"`
+	Provider             string     `json:"provider"`
+	ChainID              string     `json:"chain_id"`
+	AccountAddress       string     `json:"account_address"`
+	PositionType         string     `json:"position_type"`
+	AssetID              string     `json:"asset_id"`
+	ProviderNativeID     string     `json:"provider_native_id,omitempty"`
+	ProviderNativeIDKind string     `json:"provider_native_id_kind,omitempty"`
+	Amount               AmountInfo `json:"amount"`
+	AmountUSD            float64    `json:"amount_usd"`
+	APY                  float64    `json:"apy"`
+	SourceURL            string     `json:"source_url,omitempty"`
+	FetchedAt            string     `json:"fetched_at"`
+}
+
 type AmountInfo struct {
 	AmountBaseUnits string `json:"amount_base_units"`
 	AmountDecimal   string `json:"amount_decimal"`
@@ -209,19 +226,21 @@ type BridgeDetails struct {
 }
 
 type BridgeQuote struct {
-	Provider        string              `json:"provider"`
-	FromChainID     string              `json:"from_chain_id"`
-	ToChainID       string              `json:"to_chain_id"`
-	FromAssetID     string              `json:"from_asset_id"`
-	ToAssetID       string              `json:"to_asset_id"`
-	InputAmount     AmountInfo          `json:"input_amount"`
-	EstimatedOut    AmountInfo          `json:"estimated_out"`
-	EstimatedFeeUSD float64             `json:"estimated_fee_usd"`
-	FeeBreakdown    *BridgeFeeBreakdown `json:"fee_breakdown,omitempty"`
-	EstimatedTimeS  int64               `json:"estimated_time_s"`
-	Route           string              `json:"route"`
-	SourceURL       string              `json:"source_url,omitempty"`
-	FetchedAt       string              `json:"fetched_at"`
+	Provider                   string              `json:"provider"`
+	FromChainID                string              `json:"from_chain_id"`
+	ToChainID                  string              `json:"to_chain_id"`
+	FromAssetID                string              `json:"from_asset_id"`
+	ToAssetID                  string              `json:"to_asset_id"`
+	InputAmount                AmountInfo          `json:"input_amount"`
+	FromAmountForGas           string              `json:"from_amount_for_gas,omitempty"`
+	EstimatedDestinationNative *AmountInfo         `json:"estimated_destination_native,omitempty"`
+	EstimatedOut               AmountInfo          `json:"estimated_out"`
+	EstimatedFeeUSD            float64             `json:"estimated_fee_usd"`
+	FeeBreakdown               *BridgeFeeBreakdown `json:"fee_breakdown,omitempty"`
+	EstimatedTimeS             int64               `json:"estimated_time_s"`
+	Route                      string              `json:"route"`
+	SourceURL                  string              `json:"source_url,omitempty"`
+	FetchedAt                  string              `json:"fetched_at"`
 }
 
 type SwapQuote struct {
@@ -239,25 +258,51 @@ type SwapQuote struct {
 	FetchedAt       string     `json:"fetched_at"`
 }
 
+type YieldBackingAsset struct {
+	AssetID  string  `json:"asset_id"`
+	Symbol   string  `json:"symbol"`
+	SharePct float64 `json:"share_pct"`
+}
+
 type YieldOpportunity struct {
-	OpportunityID        string   `json:"opportunity_id"`
-	Provider             string   `json:"provider"`
-	Protocol             string   `json:"protocol"`
-	ChainID              string   `json:"chain_id"`
-	AssetID              string   `json:"asset_id"`
-	ProviderNativeID     string   `json:"provider_native_id,omitempty"`
-	ProviderNativeIDKind string   `json:"provider_native_id_kind,omitempty"`
-	Type                 string   `json:"type"`
-	APYBase              float64  `json:"apy_base"`
-	APYReward            float64  `json:"apy_reward"`
-	APYTotal             float64  `json:"apy_total"`
-	TVLUSD               float64  `json:"tvl_usd"`
-	LiquidityUSD         float64  `json:"liquidity_usd"`
-	LockupDays           float64  `json:"lockup_days"`
-	WithdrawalTerms      string   `json:"withdrawal_terms"`
-	RiskLevel            string   `json:"risk_level"`
-	RiskReasons          []string `json:"risk_reasons,omitempty"`
-	Score                float64  `json:"score"`
-	SourceURL            string   `json:"source_url,omitempty"`
-	FetchedAt            string   `json:"fetched_at"`
+	OpportunityID        string              `json:"opportunity_id"`
+	Provider             string              `json:"provider"`
+	Protocol             string              `json:"protocol"`
+	ChainID              string              `json:"chain_id"`
+	AssetID              string              `json:"asset_id"`
+	ProviderNativeID     string              `json:"provider_native_id,omitempty"`
+	ProviderNativeIDKind string              `json:"provider_native_id_kind,omitempty"`
+	Type                 string              `json:"type"`
+	APYBase              float64             `json:"apy_base"`
+	APYReward            float64             `json:"apy_reward"`
+	APYTotal             float64             `json:"apy_total"`
+	TVLUSD               float64             `json:"tvl_usd"`
+	LiquidityUSD         float64             `json:"liquidity_usd"`
+	LockupDays           float64             `json:"lockup_days"`
+	WithdrawalTerms      string              `json:"withdrawal_terms"`
+	BackingAssets        []YieldBackingAsset `json:"backing_assets"`
+	SourceURL            string              `json:"source_url,omitempty"`
+	FetchedAt            string              `json:"fetched_at"`
+}
+
+type YieldHistoryPoint struct {
+	Timestamp string  `json:"timestamp"`
+	Value     float64 `json:"value"`
+}
+
+type YieldHistorySeries struct {
+	OpportunityID        string              `json:"opportunity_id"`
+	Provider             string              `json:"provider"`
+	Protocol             string              `json:"protocol"`
+	ChainID              string              `json:"chain_id"`
+	AssetID              string              `json:"asset_id"`
+	ProviderNativeID     string              `json:"provider_native_id,omitempty"`
+	ProviderNativeIDKind string              `json:"provider_native_id_kind,omitempty"`
+	Metric               string              `json:"metric"`
+	Interval             string              `json:"interval"`
+	StartTime            string              `json:"start_time"`
+	EndTime              string              `json:"end_time"`
+	Points               []YieldHistoryPoint `json:"points"`
+	SourceURL            string              `json:"source_url,omitempty"`
+	FetchedAt            string              `json:"fetched_at"`
 }

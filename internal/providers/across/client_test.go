@@ -168,6 +168,68 @@ func TestQuoteBridgeRejectsNonEVMChains(t *testing.T) {
 	}
 }
 
+func TestBuildBridgeAction(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/swap/approval":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{
+				"approvalTxns": [{
+					"chainId": 1,
+					"to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+					"data": "0x095ea7b3",
+					"value": "0"
+				}],
+				"swapTx": {
+					"chainId": 1,
+					"to": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+					"data": "0xad5425c6",
+					"value": "0x0"
+				},
+				"minOutputAmount": "990000",
+				"expectedOutputAmount": "995000",
+				"expectedFillTime": 5
+			}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0))
+	c.baseURL = srv.URL
+	fromChain, _ := id.ParseChain("ethereum")
+	toChain, _ := id.ParseChain("base")
+	fromAsset, _ := id.ParseAsset("USDC", fromChain)
+	toAsset, _ := id.ParseAsset("USDC", toChain)
+
+	action, err := c.BuildBridgeAction(context.Background(), providers.BridgeQuoteRequest{
+		FromChain:       fromChain,
+		ToChain:         toChain,
+		FromAsset:       fromAsset,
+		ToAsset:         toAsset,
+		AmountBaseUnits: "1000000",
+		AmountDecimal:   "1",
+	}, providers.BridgeExecutionOptions{
+		Sender:      "0x00000000000000000000000000000000000000AA",
+		Recipient:   "0x00000000000000000000000000000000000000BB",
+		SlippageBps: 50,
+		Simulate:    true,
+	})
+	if err != nil {
+		t.Fatalf("BuildBridgeAction failed: %v", err)
+	}
+	if action.Provider != "across" {
+		t.Fatalf("unexpected provider: %s", action.Provider)
+	}
+	if len(action.Steps) != 2 {
+		t.Fatalf("expected approval + bridge steps, got %d", len(action.Steps))
+	}
+	if action.Steps[1].ExpectedOutputs["settlement_provider"] != "across" {
+		t.Fatalf("expected across settlement provider, got %q", action.Steps[1].ExpectedOutputs["settlement_provider"])
+	}
+}
+
 func TestApproximateStableUSDExcludesEURS(t *testing.T) {
 	if isLikelyStableSymbol("EURS") {
 		t.Fatal("EURS should not be treated as USD-pegged")

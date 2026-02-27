@@ -129,19 +129,14 @@ func TestChainsAssetsFiltersByAsset(t *testing.T) {
 	}
 }
 
-func TestYieldScoreAndSortDeterministic(t *testing.T) {
+func TestYieldSortDeterministic(t *testing.T) {
 	opps := []model.YieldOpportunity{
-		{OpportunityID: "b", Score: 50, APYTotal: 10, TVLUSD: 100},
-		{OpportunityID: "a", Score: 50, APYTotal: 10, TVLUSD: 100},
+		{OpportunityID: "b", APYTotal: 10, TVLUSD: 100, LiquidityUSD: 50},
+		{OpportunityID: "a", APYTotal: 10, TVLUSD: 100, LiquidityUSD: 50},
 	}
-	yieldutil.Sort(opps, "score")
+	yieldutil.Sort(opps, "apy_total")
 	if opps[0].OpportunityID != "a" {
 		t.Fatalf("expected lexicographic tie-break, got %+v", opps)
-	}
-
-	score := yieldutil.ScoreOpportunity(20, 1_000_000, 700_000, "low")
-	if score <= 0 || score > 100 {
-		t.Fatalf("score out of range: %f", score)
 	}
 }
 

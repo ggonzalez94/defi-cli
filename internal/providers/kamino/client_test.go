@@ -152,8 +152,7 @@ func TestYieldOpportunitiesFiltersByAPYAndTVL(t *testing.T) {
 		Limit:     10,
 		MinTVLUSD: 50000,
 		MinAPY:    1,
-		MaxRisk:   "high",
-		SortBy:    "score",
+		SortBy:    "apy_total",
 	})
 	if err != nil {
 		t.Fatalf("YieldOpportunities failed: %v", err)
@@ -169,6 +168,12 @@ func TestYieldOpportunitiesFiltersByAPYAndTVL(t *testing.T) {
 	}
 	if opps[0].APYTotal != 4 {
 		t.Fatalf("expected APY total 4, got %+v", opps[0])
+	}
+	if opps[0].LiquidityUSD != 600000 {
+		t.Fatalf("expected liquidity_usd = totalSupplyUsd-totalBorrowUsd (600000), got %+v", opps[0])
+	}
+	if len(opps[0].BackingAssets) != 1 || opps[0].BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected single backing asset at 100%%, got %+v", opps[0].BackingAssets)
 	}
 }
 
@@ -242,5 +247,129 @@ func TestLendMarketsFailsWhenAnyMarketReserveFetchFails(t *testing.T) {
 	_, err := c.LendMarkets(context.Background(), "kamino", chain, asset)
 	if err == nil {
 		t.Fatal("expected reserve fetch failure to fail command")
+	}
+}
+
+func TestYieldHistoryFromSourceMarket(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/kamino-market/market-primary/reserves/reserve-1/metrics/history", func(w http.ResponseWriter, r *http.Request) {
+		if got := r.URL.Query().Get("frequency"); got != "hour" {
+			t.Fatalf("expected frequency=hour, got %q", got)
+		}
+		_, _ = w.Write([]byte(`{
+			"reserve":"reserve-1",
+			"history":[
+				{
+					"timestamp":"2026-02-25T00:00:00Z",
+					"metrics":{"supplyInterestAPY":0.03,"depositTvl":"1000000"}
+				},
+				{
+					"timestamp":"2026-02-25T01:00:00Z",
+					"metrics":{"supplyInterestAPY":0.031,"depositTvl":"1100000"}
+				}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0))
+	c.baseURL = srv.URL
+	c.now = func() time.Time { return time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC) }
+
+	series, err := c.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-1",
+			Provider:             "kamino",
+			Protocol:             "kamino",
+			ChainID:              "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+			AssetID:              "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+			ProviderNativeID:     "reserve-1",
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+			SourceURL:            "https://app.kamino.finance/lending/market-primary",
+		},
+		StartTime: time.Date(2026, 2, 25, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 2, 25, 2, 0, 0, 0, time.UTC),
+		Interval:  providers.YieldHistoryIntervalHour,
+		Metrics: []providers.YieldHistoryMetric{
+			providers.YieldHistoryMetricAPYTotal,
+			providers.YieldHistoryMetricTVLUSD,
+		},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 2 {
+		t.Fatalf("expected two series, got %+v", series)
+	}
+	byMetric := map[string]model.YieldHistorySeries{}
+	for _, item := range series {
+		byMetric[item.Metric] = item
+	}
+	apy := byMetric[string(providers.YieldHistoryMetricAPYTotal)]
+	if len(apy.Points) != 2 || apy.Points[0].Value != 3 {
+		t.Fatalf("unexpected apy points: %+v", apy.Points)
+	}
+	tvl := byMetric[string(providers.YieldHistoryMetricTVLUSD)]
+	if len(tvl.Points) != 2 || tvl.Points[1].Value != 1100000 {
+		t.Fatalf("unexpected tvl points: %+v", tvl.Points)
+	}
+}
+
+func TestYieldHistoryResolvesMarketFromReserve(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/v2/kamino-market", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"lendingMarket":"market-primary","name":"Main Market","isPrimary":true,"isCurated":false}
+		]`))
+	})
+	mux.HandleFunc("/kamino-market/market-primary/reserves/metrics", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{
+				"reserve":"reserve-1",
+				"liquidityToken":"USDC",
+				"liquidityTokenMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+				"borrowApy":"0.03",
+				"supplyApy":"0.04",
+				"totalSupplyUsd":"1000000",
+				"totalBorrowUsd":"400000"
+			}
+		]`))
+	})
+	mux.HandleFunc("/kamino-market/market-primary/reserves/reserve-1/metrics/history", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"reserve":"reserve-1",
+			"history":[
+				{"timestamp":"2026-02-25T00:00:00Z","metrics":{"supplyInterestAPY":0.03,"depositTvl":"1000000"}}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0))
+	c.baseURL = srv.URL
+	c.now = func() time.Time { return time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC) }
+
+	series, err := c.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-1",
+			Provider:             "kamino",
+			Protocol:             "kamino",
+			ChainID:              "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+			AssetID:              "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp/token:EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+			ProviderNativeID:     "reserve-1",
+			ProviderNativeIDKind: model.NativeIDKindPoolID,
+		},
+		StartTime: time.Date(2026, 2, 25, 0, 0, 0, 0, time.UTC),
+		EndTime:   time.Date(2026, 2, 25, 2, 0, 0, 0, time.UTC),
+		Interval:  providers.YieldHistoryIntervalDay,
+		Metrics:   []providers.YieldHistoryMetric{providers.YieldHistoryMetricAPYTotal},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 1 || len(series[0].Points) != 1 {
+		t.Fatalf("unexpected series: %+v", series)
 	}
 }

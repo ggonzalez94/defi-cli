@@ -2,8 +2,10 @@ package morpho
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -15,11 +17,16 @@ import (
 
 func TestLendRatesAndYield(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{
-			"data": {
-				"markets": {
-					"items": [
+		query := string(body)
+
+		switch {
+		case strings.Contains(query, "query Markets("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"markets": {
+						"items": [
 						{
 							"id": "4f598145-0188-44dc-9e18-38a2817020a1",
 							"uniqueKey": "m1",
@@ -29,9 +36,79 @@ func TestLendRatesAndYield(t *testing.T) {
 							"state": {"supplyApy": 0.02, "borrowApy": 0.03, "utilization": 0.5, "supplyAssetsUsd": 2000000, "liquidityAssetsUsd": 1000000, "totalLiquidityUsd": 1200000}
 						}
 					]
+					}
 				}
-			}
-		}`))
+			}`))
+		case strings.Contains(query, "query Vaults("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaults": {
+						"items": [
+							{
+								"address": "0x1111111111111111111111111111111111111111",
+								"name": "Morpho USDC Vault",
+								"symbol": "vUSDC",
+								"asset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"},
+								"state": {
+									"netApy": 0.05,
+									"totalAssetsUsd": 1000000,
+									"allocation": [
+										{
+											"supplyAssetsUsd": 1000000,
+											"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH"}}
+										}
+									]
+								},
+								"liquidity": {"usd": 500000}
+							}
+						]
+					}
+				}
+			}`))
+		case strings.Contains(query, "query VaultV2s("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaultV2s": {
+						"items": [
+							{
+								"address": "0x2222222222222222222222222222222222222222",
+								"name": "Morpho USDC V2 Vault",
+								"symbol": "v2USDC",
+								"asset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"},
+								"netApy": 0.03,
+								"totalAssetsUsd": 2000000,
+								"liquidityUsd": 1500000,
+								"liquidityData": {
+									"__typename": "MetaMorphoLiquidityData",
+									"metaMorpho": {
+										"state": {
+											"allocation": [
+												{
+													"supplyAssetsUsd": 2000000,
+													"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x6b175474e89094c44da98b954eedeac495271d0f", "symbol": "DAI"}}
+												}
+											]
+										}
+									}
+								}
+							},
+							{
+								"address": "0x3333333333333333333333333333333333333333",
+								"name": "Morpho USDT V2 Vault",
+								"symbol": "v2USDT",
+								"asset": {"address": "0xdac17f958d2ee523a2206206994597c13d831ec7", "symbol": "USDT"},
+								"netApy": 0.09,
+								"totalAssetsUsd": 3000000,
+								"liquidityUsd": 2500000,
+								"liquidityData": {"__typename": "MetaMorphoLiquidityData"}
+							}
+						]
+					}
+				}
+			}`))
+		default:
+			_, _ = w.Write([]byte(`{"errors":[{"message":"unexpected query"}]}`))
+		}
 	}))
 	defer srv.Close()
 
@@ -57,17 +134,385 @@ func TestLendRatesAndYield(t *testing.T) {
 		t.Fatalf("expected morpho provider id metadata, got %+v", rates[0])
 	}
 
-	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10, MaxRisk: "high"})
+	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{Chain: chain, Asset: asset, Limit: 10})
 	if err != nil {
 		t.Fatalf("YieldOpportunities failed: %v", err)
 	}
-	if len(opps) != 1 || opps[0].Provider != "morpho" {
+	if len(opps) != 2 {
 		t.Fatalf("unexpected opportunities: %+v", opps)
 	}
-	if opps[0].ProviderNativeID != "m1" {
-		t.Fatalf("expected provider native id on yield opportunity, got %+v", opps[0])
+
+	byID := map[string]model.YieldOpportunity{}
+	for _, opp := range opps {
+		if opp.Provider != "morpho" {
+			t.Fatalf("expected morpho provider, got %+v", opp)
+		}
+		byID[opp.ProviderNativeID] = opp
 	}
-	if opps[0].ProviderNativeIDKind != model.NativeIDKindMarketID {
-		t.Fatalf("expected market_id kind on yield opportunity, got %+v", opps[0])
+
+	vaultOne, ok := byID["0x1111111111111111111111111111111111111111"]
+	if !ok {
+		t.Fatalf("expected first vault id in output, got %+v", byID)
+	}
+	if vaultOne.ProviderNativeIDKind != model.NativeIDKindVaultAddress {
+		t.Fatalf("expected vault_address kind on first vault, got %+v", vaultOne)
+	}
+	if vaultOne.LiquidityUSD != 500000 {
+		t.Fatalf("expected first vault liquidity to come from vault liquidity USD, got %+v", vaultOne)
+	}
+	if len(vaultOne.BackingAssets) != 1 || vaultOne.BackingAssets[0].Symbol != "WETH" || vaultOne.BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected first vault backing assets to expose full WETH share, got %+v", vaultOne.BackingAssets)
+	}
+
+	vaultTwo, ok := byID["0x2222222222222222222222222222222222222222"]
+	if !ok {
+		t.Fatalf("expected second vault id in output, got %+v", byID)
+	}
+	if vaultTwo.ProviderNativeIDKind != model.NativeIDKindVaultAddress {
+		t.Fatalf("expected vault_address kind on second vault, got %+v", vaultTwo)
+	}
+	if vaultTwo.LiquidityUSD != 1500000 {
+		t.Fatalf("expected second vault liquidity to come from vaultV2 liquidityUsd, got %+v", vaultTwo)
+	}
+	if len(vaultTwo.BackingAssets) != 1 || vaultTwo.BackingAssets[0].Symbol != "DAI" || vaultTwo.BackingAssets[0].SharePct != 100 {
+		t.Fatalf("expected second vault backing assets to expose full DAI share, got %+v", vaultTwo.BackingAssets)
+	}
+	if _, ok := byID["0x3333333333333333333333333333333333333333"]; ok {
+		t.Fatalf("expected USDT vault to be filtered out for USDC request, got %+v", byID)
+	}
+}
+
+func TestYieldOpportunitiesVaultSortAndLimit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+		query := string(body)
+		switch {
+		case strings.Contains(query, "query Vaults("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaults": {
+						"items": [
+							{
+								"address": "0x1111111111111111111111111111111111111111",
+								"name": "Morpho USDC Vault",
+								"symbol": "vUSDC",
+								"asset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"},
+								"state": {
+									"netApy": 0.06,
+									"totalAssetsUsd": 1000000,
+									"allocation": [
+										{
+											"supplyAssetsUsd": 1000000,
+											"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH"}}
+										}
+									]
+								},
+								"liquidity": {"usd": 700000}
+							}
+						]
+					}
+				}
+			}`))
+		case strings.Contains(query, "query VaultV2s("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaultV2s": {
+						"items": [
+							{
+								"address": "0x2222222222222222222222222222222222222222",
+								"name": "Morpho USDC V2 Vault",
+								"symbol": "v2USDC",
+								"asset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"},
+								"netApy": 0.03,
+								"totalAssetsUsd": 2000000,
+								"liquidityUsd": 1800000,
+								"liquidityData": {
+									"__typename": "MetaMorphoLiquidityData",
+									"metaMorpho": {
+										"state": {
+											"allocation": [
+												{
+													"supplyAssetsUsd": 2000000,
+													"market": {"loanAsset": {"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48", "symbol": "USDC"}, "collateralAsset": {"address": "0x6b175474e89094c44da98b954eedeac495271d0f", "symbol": "DAI"}}
+												}
+											]
+										}
+									}
+								}
+							}
+						]
+					}
+				}
+			}`))
+		default:
+			_, _ = w.Write([]byte(`{"data":{"markets":{"items":[]}}}`))
+		}
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	chain, _ := id.ParseChain("ethereum")
+	asset, _ := id.ParseAsset("USDC", chain)
+
+	opps, err := client.YieldOpportunities(context.Background(), providers.YieldRequest{
+		Chain:  chain,
+		Asset:  asset,
+		Limit:  1,
+		SortBy: "tvl_usd",
+	})
+	if err != nil {
+		t.Fatalf("YieldOpportunities failed: %v", err)
+	}
+	if len(opps) != 1 {
+		t.Fatalf("expected one opportunity after limit, got %+v", opps)
+	}
+	if opps[0].ProviderNativeID != "0x2222222222222222222222222222222222222222" {
+		t.Fatalf("expected highest-tvl vault first, got %+v", opps[0])
+	}
+}
+
+func TestLendPositionsTypeSplit(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		w.Header().Set("Content-Type", "application/json")
+
+		if !strings.Contains(string(body), "marketPositions") {
+			_, _ = w.Write([]byte(`{"errors":[{"message":"unexpected query"}]}`))
+			return
+		}
+
+		_, _ = w.Write([]byte(`{
+			"data": {
+				"marketPositions": {
+					"items": [
+						{
+							"id": "position-1",
+							"market": {
+								"uniqueKey": "market-1",
+								"loanAsset": {
+									"address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+									"symbol": "USDC",
+									"decimals": 6,
+									"chain": {"id": 1, "network": "ethereum"}
+								},
+								"collateralAsset": {
+									"address": "0x4200000000000000000000000000000000000006",
+									"symbol": "WETH",
+									"decimals": 18
+								},
+								"state": {"supplyApy": 0.02, "borrowApy": 0.03}
+							},
+							"state": {
+								"supplyAssets": "1500000",
+								"supplyAssetsUsd": 1.5,
+								"borrowAssets": "500000",
+								"borrowAssetsUsd": 0.5,
+								"collateral": "1000000000000000000",
+								"collateralUsd": 2000
+							}
+						}
+					]
+				}
+			}
+		}`))
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	chain, _ := id.ParseChain("ethereum")
+	account := "0x000000000000000000000000000000000000dEaD"
+
+	all, err := client.LendPositions(context.Background(), providers.LendPositionsRequest{
+		Chain:        chain,
+		Account:      account,
+		PositionType: providers.LendPositionTypeAll,
+	})
+	if err != nil {
+		t.Fatalf("LendPositions(all) failed: %v", err)
+	}
+	if len(all) != 3 {
+		t.Fatalf("expected 3 distinct positions, got %d", len(all))
+	}
+	counts := map[string]int{}
+	for _, item := range all {
+		counts[item.PositionType]++
+	}
+	if counts[string(providers.LendPositionTypeSupply)] != 1 {
+		t.Fatalf("expected one supply row, got %+v", counts)
+	}
+	if counts[string(providers.LendPositionTypeBorrow)] != 1 {
+		t.Fatalf("expected one borrow row, got %+v", counts)
+	}
+	if counts[string(providers.LendPositionTypeCollateral)] != 1 {
+		t.Fatalf("expected one collateral row, got %+v", counts)
+	}
+
+	supplyOnly, err := client.LendPositions(context.Background(), providers.LendPositionsRequest{
+		Chain:        chain,
+		Account:      account,
+		PositionType: providers.LendPositionTypeSupply,
+	})
+	if err != nil {
+		t.Fatalf("LendPositions(supply) failed: %v", err)
+	}
+	if len(supplyOnly) != 1 || supplyOnly[0].PositionType != string(providers.LendPositionTypeSupply) {
+		t.Fatalf("expected supply-only row, got %+v", supplyOnly)
+	}
+
+	usdcOnly, err := client.LendPositions(context.Background(), providers.LendPositionsRequest{
+		Chain:        chain,
+		Account:      account,
+		PositionType: providers.LendPositionTypeAll,
+		Asset: id.Asset{
+			ChainID: chain.CAIP2,
+			Symbol:  "USDC",
+		},
+	})
+	if err != nil {
+		t.Fatalf("LendPositions(asset=USDC) failed: %v", err)
+	}
+	if len(usdcOnly) != 2 {
+		t.Fatalf("expected supply+borrow rows for USDC filter, got %+v", usdcOnly)
+	}
+}
+
+func TestYieldHistoryFromVault(t *testing.T) {
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	start := fixedNow.Add(-48 * time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		query := string(body)
+		w.Header().Set("Content-Type", "application/json")
+		if strings.Contains(query, "query VaultHistory(") {
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaultByAddress": {
+						"address": "0x1111111111111111111111111111111111111111",
+						"historicalState": {
+							"netApy": [
+								{"x": 1771981200, "y": 0.03},
+								{"x": 1772067600, "y": 0.031}
+							],
+							"totalAssetsUsd": [
+								{"x": 1771981200, "y": 1000000},
+								{"x": 1772067600, "y": 1100000}
+							]
+						}
+					}
+				}
+			}`))
+			return
+		}
+		t.Fatalf("unexpected query: %s", query)
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	client.now = func() time.Time { return fixedNow }
+
+	series, err := client.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-1",
+			Provider:             "morpho",
+			Protocol:             "morpho",
+			ChainID:              "eip155:1",
+			AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			ProviderNativeID:     "0x1111111111111111111111111111111111111111",
+			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
+		},
+		StartTime: start,
+		EndTime:   fixedNow,
+		Interval:  providers.YieldHistoryIntervalDay,
+		Metrics: []providers.YieldHistoryMetric{
+			providers.YieldHistoryMetricAPYTotal,
+			providers.YieldHistoryMetricTVLUSD,
+		},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 2 {
+		t.Fatalf("expected 2 series, got %+v", series)
+	}
+	byMetric := map[string]model.YieldHistorySeries{}
+	for _, item := range series {
+		byMetric[item.Metric] = item
+	}
+	apy := byMetric[string(providers.YieldHistoryMetricAPYTotal)]
+	if len(apy.Points) != 2 {
+		t.Fatalf("unexpected apy points: %+v", apy.Points)
+	}
+	if apy.Points[0].Value != 3 {
+		t.Fatalf("expected apy value 3, got %+v", apy.Points[0])
+	}
+	tvl := byMetric[string(providers.YieldHistoryMetricTVLUSD)]
+	if len(tvl.Points) != 2 || tvl.Points[0].Value != 1000000 {
+		t.Fatalf("unexpected tvl points: %+v", tvl.Points)
+	}
+}
+
+func TestYieldHistoryFallsBackToVaultV2(t *testing.T) {
+	fixedNow := time.Date(2026, 2, 26, 20, 0, 0, 0, time.UTC)
+	start := fixedNow.Add(-48 * time.Hour)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		query := string(body)
+		w.Header().Set("Content-Type", "application/json")
+		switch {
+		case strings.Contains(query, "query VaultHistory("):
+			_, _ = w.Write([]byte(`{"data":{"vaultByAddress":null},"errors":[{"message":"No results matching given parameters"}]}`))
+		case strings.Contains(query, "query VaultV2History("):
+			_, _ = w.Write([]byte(`{
+				"data": {
+					"vaultV2ByAddress": {
+						"address": "0x2222222222222222222222222222222222222222",
+						"historicalState": {
+							"avgNetApy": [
+								{"x": 1771981200, "y": 0.04}
+							],
+							"totalAssetsUsd": [
+								{"x": 1771981200, "y": 2000000}
+							]
+						}
+					}
+				}
+			}`))
+		default:
+			t.Fatalf("unexpected query: %s", query)
+		}
+	}))
+	defer srv.Close()
+
+	client := New(httpx.New(2*time.Second, 0))
+	client.endpoint = srv.URL
+	client.now = func() time.Time { return fixedNow }
+
+	series, err := client.YieldHistory(context.Background(), providers.YieldHistoryRequest{
+		Opportunity: model.YieldOpportunity{
+			OpportunityID:        "opp-2",
+			Provider:             "morpho",
+			Protocol:             "morpho",
+			ChainID:              "eip155:1",
+			AssetID:              "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+			ProviderNativeID:     "0x2222222222222222222222222222222222222222",
+			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
+		},
+		StartTime: start,
+		EndTime:   fixedNow,
+		Interval:  providers.YieldHistoryIntervalDay,
+		Metrics:   []providers.YieldHistoryMetric{providers.YieldHistoryMetricAPYTotal},
+	})
+	if err != nil {
+		t.Fatalf("YieldHistory failed: %v", err)
+	}
+	if len(series) != 1 || len(series[0].Points) != 1 {
+		t.Fatalf("unexpected series: %+v", series)
+	}
+	if series[0].Points[0].Value != 4 {
+		t.Fatalf("expected v2 apy value 4, got %+v", series[0].Points[0])
 	}
 }

@@ -7,15 +7,50 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
 
-func TestNormalizeLendingProtocol(t *testing.T) {
-	if got := normalizeLendingProtocol("AAVE-V3"); got != "aave" {
+func TestNormalizeLendingProvider(t *testing.T) {
+	if got := normalizeLendingProvider("AAVE-V3"); got != "aave" {
 		t.Fatalf("expected aave, got %s", got)
 	}
-	if got := normalizeLendingProtocol("morpho-blue"); got != "morpho" {
+	if got := normalizeLendingProvider("morpho-blue"); got != "morpho" {
 		t.Fatalf("expected morpho, got %s", got)
 	}
-	if got := normalizeLendingProtocol("kamino-finance"); got != "kamino" {
+	if got := normalizeLendingProvider("kamino-finance"); got != "kamino" {
 		t.Fatalf("expected kamino, got %s", got)
+	}
+}
+
+func TestParseLendPositionType(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		want    providers.LendPositionType
+		wantErr bool
+	}{
+		{name: "default", input: "", want: providers.LendPositionTypeAll},
+		{name: "all", input: "all", want: providers.LendPositionTypeAll},
+		{name: "supply", input: "supply", want: providers.LendPositionTypeSupply},
+		{name: "borrow", input: "borrow", want: providers.LendPositionTypeBorrow},
+		{name: "collateral", input: "collateral", want: providers.LendPositionTypeCollateral},
+		{name: "invalid", input: "debt", wantErr: true},
+	}
+
+	for _, tc := range tests {
+		tc := tc
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseLendPositionType(tc.input)
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("expected error for input %q", tc.input)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("parseLendPositionType failed: %v", err)
+			}
+			if got != tc.want {
+				t.Fatalf("expected %q, got %q", tc.want, got)
+			}
+		})
 	}
 }
 
