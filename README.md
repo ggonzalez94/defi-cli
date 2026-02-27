@@ -109,6 +109,7 @@ defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --ass
 defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap status --action-id <action_id> --results-only
 defi actions list --results-only
+defi actions estimate --action-id <action_id> --results-only
 ```
 
 `yield opportunities --providers` and `yield history --providers` accept provider names from `defi providers list` (for example `aave,morpho,kamino`).
@@ -173,7 +174,7 @@ Execution command surface:
 - `approvals plan|run|submit|status`
 - `lend supply|withdraw|borrow|repay plan|run|submit|status` (provider: `aave|morpho`)
 - `rewards claim|compound plan|run|submit|status` (provider: `aave`)
-- `actions list|show`
+- `actions list|show|estimate`
 
 ## Command API Key Requirements
 
@@ -281,13 +282,14 @@ providers:
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show`) bypass cache reads/writes.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show|estimate`) bypass cache reads/writes.
 
 ## Caveats
 
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
 - `yield opportunities` returns objective metrics and composition data: `apy_total`, `tvl_usd`, `liquidity_usd`, and full `backing_assets` (subjective `risk_*`/`score` fields were removed).
 - `liquidity_usd` is provider-sourced available liquidity and is intentionally distinct from `tvl_usd` (total supplied/managed value).
+- `actions estimate` reports source-chain EVM step gas/fee projections from planned calldata (`eth_estimateGas` + EIP-1559); it does not add destination settlement gas unless that transaction is an explicit action step.
 - `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
 - Aave historical windows are lookback-based and effectively end near current time; use `--window` for Aave-friendly history requests.
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.

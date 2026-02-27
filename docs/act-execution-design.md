@@ -20,10 +20,10 @@ Execution is integrated inside existing domain commands (for example `swap`, `br
 |---|---|---|---|
 | Swap | `swap plan|run|submit|status` | `--provider` required | `taikoswap` execution today |
 | Bridge | `bridge plan|run|submit|status` | `--provider` required | `across`, `lifi` execution |
-| Lend | `lend <supply|withdraw|borrow|repay> plan|run|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
-| Rewards | `rewards <claim|compound> plan|run|submit|status` | `--provider` required | `aave` execution |
+| Lend | `lend (supply|withdraw|borrow|repay) plan|run|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
+| Rewards | `rewards (claim|compound) plan|run|submit|status` | `--provider` required | `aave` execution |
 | Approvals | `approvals plan|run|submit|status` | no provider selector | native ERC-20 approval execution |
-| Action inspection | `actions list|show` | optional `--status` filter | persisted action inspection |
+| Action inspection | `actions list|show|estimate` | optional `--status` / `--action-id` filters | persisted action inspection + gas/fee estimation |
 
 Notes:
 
@@ -139,6 +139,7 @@ Tradeoff:
 - Domain `status` commands fetch one action.
 - `actions list` gives cross-domain recent actions.
 - `actions show` fetches any action by ID.
+- `actions estimate` computes per-step `eth_estimateGas` and EIP-1559 likely/worst-case fee projections for a persisted action.
 
 ## 5. Signing and Key Handling
 

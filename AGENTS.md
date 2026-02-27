@@ -86,7 +86,7 @@ README.md                         # user-facing usage + caveats
   - `approvals plan|run|submit|status`
   - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave, Morpho)
   - `rewards claim|compound plan|run|submit|status` (Aave)
-  - `actions list|show`
+  - `actions list|show|estimate`
 - Execution builder architecture is intentionally split:
   - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
   - `lend`/`rewards`/`approvals` action construction uses internal planners for deterministic contract-call composition.
@@ -110,7 +110,7 @@ README.md                         # user-facing usage + caveats
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show`) bypass cache initialization.
+- Execution commands (`swap|bridge|approvals|lend|rewards ... plan|run|submit|status`, `actions list|show|estimate`) bypass cache initialization.
 - For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.

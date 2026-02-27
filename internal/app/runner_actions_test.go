@@ -115,6 +115,9 @@ func TestShouldOpenActionStore(t *testing.T) {
 	if !shouldOpenActionStore("actions show") {
 		t.Fatal("expected actions show to require action store")
 	}
+	if !shouldOpenActionStore("actions estimate") {
+		t.Fatal("expected actions estimate to require action store")
+	}
 	if shouldOpenActionStore("swap quote") {
 		t.Fatal("did not expect swap quote to require action store")
 	}
@@ -137,6 +140,9 @@ func TestActionsCommandHasNoStatusAlias(t *testing.T) {
 	}
 	if _, ok := names["show"]; !ok {
 		t.Fatal("expected actions show command to be present")
+	}
+	if _, ok := names["estimate"]; !ok {
+		t.Fatal("expected actions estimate command to be present")
 	}
 	if _, ok := names["status"]; ok {
 		t.Fatal("did not expect deprecated actions status alias")
@@ -161,6 +167,9 @@ func TestShouldOpenCacheBypassesExecutionCommands(t *testing.T) {
 	}
 	if shouldOpenCache("actions show") {
 		t.Fatal("did not expect actions show to open cache")
+	}
+	if shouldOpenCache("actions estimate") {
+		t.Fatal("did not expect actions estimate to open cache")
 	}
 	if !shouldOpenCache("lend rates") {
 		t.Fatal("expected lend rates to open cache")
@@ -286,5 +295,17 @@ func TestRunnerExecutionStatusBypassesCacheOpen(t *testing.T) {
 	code := r.Run([]string{"approvals", "status", "--action-id", "act_missing"})
 	if code != 2 {
 		t.Fatalf("expected usage exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestParseActionEstimateOptionsRejectsGasMultiplierLTEOne(t *testing.T) {
+	if _, err := parseActionEstimateOptions("", 1, "", "", "pending"); err == nil {
+		t.Fatal("expected gas multiplier <= 1 to fail")
+	}
+}
+
+func TestParseActionEstimateOptionsRejectsUnknownBlockTag(t *testing.T) {
+	if _, err := parseActionEstimateOptions("", 1.2, "", "", "safe"); err == nil {
+		t.Fatal("expected unknown block tag to fail")
 	}
 }

@@ -1265,8 +1265,52 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 	}
 	showCmd.Flags().StringVar(&showActionID, "action-id", "", "Action identifier")
 
+	var estimateActionID, estimateStepIDs, estimateMaxFeeGwei, estimateMaxPriorityFeeGwei, estimateBlockTag string
+	var estimateGasMultiplier float64
+	estimateCmd := &cobra.Command{
+		Use:   "estimate",
+		Short: "Estimate gas and EIP-1559 fees for a planned action",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			actionID, err := resolveActionID(estimateActionID)
+			if err != nil {
+				return err
+			}
+			if err := s.ensureActionStore(); err != nil {
+				return err
+			}
+			action, err := s.actionStore.Get(actionID)
+			if err != nil {
+				return clierr.Wrap(clierr.CodeUsage, "load action", err)
+			}
+			opts, err := parseActionEstimateOptions(
+				estimateStepIDs,
+				estimateGasMultiplier,
+				estimateMaxFeeGwei,
+				estimateMaxPriorityFeeGwei,
+				estimateBlockTag,
+			)
+			if err != nil {
+				return err
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
+			defer cancel()
+			estimate, err := execution.EstimateActionGas(ctx, action, opts)
+			if err != nil {
+				return err
+			}
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), estimate, nil, cacheMetaBypass(), nil, false)
+		},
+	}
+	estimateCmd.Flags().StringVar(&estimateActionID, "action-id", "", "Action identifier")
+	estimateCmd.Flags().StringVar(&estimateStepIDs, "step-ids", "", "Optional comma-separated step_id filter")
+	estimateCmd.Flags().Float64Var(&estimateGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
+	estimateCmd.Flags().StringVar(&estimateMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
+	estimateCmd.Flags().StringVar(&estimateMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	estimateCmd.Flags().StringVar(&estimateBlockTag, "block-tag", "pending", "Block tag used for estimation (pending|latest)")
+
 	root.AddCommand(listCmd)
 	root.AddCommand(showCmd)
+	root.AddCommand(estimateCmd)
 	return root
 }
 
@@ -1437,15 +1481,15 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 						continue
 					}
 
-						discoveryReq := providers.YieldRequest{
-							Chain:             chain,
-							Asset:             asset,
-							Limit:             historyLimit,
-							MinTVLUSD:         0,
-							MinAPY:            0,
-							SortBy:            "apy_total",
-							IncludeIncomplete: true,
-						}
+					discoveryReq := providers.YieldRequest{
+						Chain:             chain,
+						Asset:             asset,
+						Limit:             historyLimit,
+						MinTVLUSD:         0,
+						MinAPY:            0,
+						SortBy:            "apy_total",
+						IncludeIncomplete: true,
+					}
 					if len(opportunityIDSet) > 0 {
 						discoveryReq.Limit = 0
 					}
@@ -2240,7 +2284,7 @@ func normalizeCommandPath(commandPath string) string {
 
 func isExecutionCommandPath(path string) bool {
 	switch path {
-	case "actions", "actions list", "actions show":
+	case "actions", "actions list", "actions show", "actions estimate":
 		return true
 	}
 	parts := strings.Fields(path)
@@ -2368,6 +2412,30 @@ func parseExecuteOptions(
 	opts.MaxPriorityFeeGwei = strings.TrimSpace(maxPriorityFeeGwei)
 	opts.AllowMaxApproval = allowMaxApproval
 	opts.UnsafeProviderTx = unsafeProviderTx
+	return opts, nil
+}
+
+func parseActionEstimateOptions(
+	stepIDsCSV string,
+	gasMultiplier float64,
+	maxFeeGwei, maxPriorityFeeGwei, blockTag string,
+) (execution.EstimateOptions, error) {
+	opts := execution.DefaultEstimateOptions()
+	opts.StepIDs = splitCSV(stepIDsCSV)
+	if gasMultiplier <= 1 {
+		return execution.EstimateOptions{}, clierr.New(clierr.CodeUsage, "--gas-multiplier must be > 1")
+	}
+	opts.GasMultiplier = gasMultiplier
+	opts.MaxFeeGwei = strings.TrimSpace(maxFeeGwei)
+	opts.MaxPriorityFeeGwei = strings.TrimSpace(maxPriorityFeeGwei)
+	switch strings.ToLower(strings.TrimSpace(blockTag)) {
+	case "", string(execution.EstimateBlockTagPending):
+		opts.BlockTag = execution.EstimateBlockTagPending
+	case string(execution.EstimateBlockTagLatest):
+		opts.BlockTag = execution.EstimateBlockTagLatest
+	default:
+		return execution.EstimateOptions{}, clierr.New(clierr.CodeUsage, "--block-tag must be one of: pending,latest")
+	}
 	return opts, nil
 }
 

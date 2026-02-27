@@ -24,6 +24,7 @@ Format:
 - Added nightly execution-planning smoke workflow (`nightly-execution-smoke.yml`) and script.
 - Added `lend positions` to query account-level lending positions by address for Aave and Morpho with `--type all|supply|borrow|collateral`.
 - Added `yield history` to query historical yield-provider series with `--metrics apy_total,tvl_usd`, `--interval hour|day`, `--window`/`--from`/`--to`, and optional `--opportunity-ids`.
+- Added `actions estimate` to compute per-step gas projections for persisted actions using `eth_estimateGas` and EIP-1559 fee cap/tip resolution.
 
 ### Changed
 - BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) sourced from Morpho vault/vault-v2 data instead of Morpho market IDs.
