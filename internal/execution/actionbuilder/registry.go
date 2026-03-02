@@ -124,7 +124,7 @@ type YieldRequest struct {
 }
 
 func (r *Registry) BuildLendAction(ctx context.Context, req LendRequest) (execution.Action, error) {
-	providerName := normalizeLendingProvider(req.Provider)
+	providerName := providers.NormalizeLendingProvider(req.Provider)
 	if providerName == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
@@ -163,7 +163,7 @@ func (r *Registry) BuildLendAction(ctx context.Context, req LendRequest) (execut
 }
 
 func (r *Registry) BuildYieldAction(ctx context.Context, req YieldRequest) (execution.Action, error) {
-	providerName := normalizeLendingProvider(req.Provider)
+	providerName := providers.NormalizeLendingProvider(req.Provider)
 	if providerName == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
@@ -240,7 +240,7 @@ type RewardsClaimRequest struct {
 }
 
 func (r *Registry) BuildRewardsClaimAction(ctx context.Context, req RewardsClaimRequest) (execution.Action, error) {
-	providerName := normalizeLendingProvider(req.Provider)
+	providerName := providers.NormalizeLendingProvider(req.Provider)
 	if providerName == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
@@ -278,7 +278,7 @@ type RewardsCompoundRequest struct {
 }
 
 func (r *Registry) BuildRewardsCompoundAction(ctx context.Context, req RewardsCompoundRequest) (execution.Action, error) {
-	providerName := normalizeLendingProvider(req.Provider)
+	providerName := providers.NormalizeLendingProvider(req.Provider)
 	if providerName == "" {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "--provider is required")
 	}
@@ -325,17 +325,4 @@ func (r *Registry) BuildTransferAction(req TransferRequest) (execution.Action, e
 		Simulate:        req.Simulate,
 		RPCURL:          req.RPCURL,
 	})
-}
-
-func normalizeLendingProvider(v string) string {
-	switch strings.ToLower(strings.TrimSpace(v)) {
-	case "aave", "aave-v2", "aave-v3":
-		return "aave"
-	case "morpho", "morpho-blue":
-		return "morpho"
-	case "kamino", "kamino-lend", "kamino-finance":
-		return "kamino"
-	default:
-		return strings.ToLower(strings.TrimSpace(v))
-	}
 }

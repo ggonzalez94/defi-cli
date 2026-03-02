@@ -315,8 +315,12 @@ func BuildAaveRewardsCompoundAction(ctx context.Context, req AaveRewardsCompound
 	}
 	sender := common.HexToAddress(strings.TrimSpace(req.Sender))
 	onBehalfOf := sender
-	if strings.TrimSpace(req.OnBehalfOf) != "" {
-		onBehalfOf = common.HexToAddress(req.OnBehalfOf)
+	onBehalfOfInput := strings.TrimSpace(req.OnBehalfOf)
+	if onBehalfOfInput != "" {
+		if !common.IsHexAddress(onBehalfOfInput) {
+			return execution.Action{}, clierr.New(clierr.CodeUsage, "invalid on-behalf-of address")
+		}
+		onBehalfOf = common.HexToAddress(onBehalfOfInput)
 	}
 	rewardAddr := common.HexToAddress(req.RewardToken)
 	if err := appendApprovalIfNeeded(ctx, client, &claimAction, req.Chain.CAIP2, rpcURL, rewardAddr, sender, poolAddr, amount, "Approve reward token for Aave supply"); err != nil {

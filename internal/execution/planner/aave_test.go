@@ -130,6 +130,35 @@ func TestBuildAaveRewardsCompoundActionRejectsRecipientMismatch(t *testing.T) {
 	}
 }
 
+func TestBuildAaveRewardsCompoundActionRejectsInvalidOnBehalfOf(t *testing.T) {
+	rpc := newPlannerRPCServer(t, big.NewInt(0))
+	defer rpc.Close()
+
+	chain, err := id.ParseChain("ethereum")
+	if err != nil {
+		t.Fatalf("parse chain: %v", err)
+	}
+	_, err = BuildAaveRewardsCompoundAction(context.Background(), AaveRewardsCompoundRequest{
+		Chain:             chain,
+		Sender:            "0x00000000000000000000000000000000000000AA",
+		Recipient:         "0x00000000000000000000000000000000000000AA",
+		OnBehalfOf:        "invalid",
+		Assets:            []string{"0x00000000000000000000000000000000000000D1"},
+		RewardToken:       "0x00000000000000000000000000000000000000D2",
+		AmountBaseUnits:   "1000",
+		Simulate:          true,
+		RPCURL:            rpc.URL,
+		ControllerAddress: "0x00000000000000000000000000000000000000D3",
+		PoolAddress:       "0x00000000000000000000000000000000000000D4",
+	})
+	if err == nil {
+		t.Fatal("expected invalid on-behalf-of error")
+	}
+	if !strings.Contains(err.Error(), "invalid on-behalf-of address") {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
 func TestBuildAaveLendActionRequiresSender(t *testing.T) {
 	chain, _ := id.ParseChain("ethereum")
 	asset, _ := id.ParseAsset("USDC", chain)

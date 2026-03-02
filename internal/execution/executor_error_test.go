@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"math/big"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -99,6 +100,42 @@ func TestExecuteActionRejectsInvalidStepTargetBeforeRPCDial(t *testing.T) {
 	}
 	if action.Steps[0].Status != StepStatusFailed {
 		t.Fatalf("expected step to be marked failed, got %s", action.Steps[0].Status)
+	}
+}
+
+func TestExecuteActionReturnsErrorWhenPersistFails(t *testing.T) {
+	storePath := filepath.Join(t.TempDir(), "actions.db")
+	lockPath := filepath.Join(t.TempDir(), "actions.lock")
+	store, err := OpenStore(storePath, lockPath)
+	if err != nil {
+		t.Fatalf("open store: %v", err)
+	}
+	if err := store.Close(); err != nil {
+		t.Fatalf("close store: %v", err)
+	}
+
+	action := NewAction("act_test", "swap", "eip155:1", Constraints{Simulate: true})
+	action.Steps = append(action.Steps, ActionStep{
+		StepID:  "step-1",
+		Type:    StepTypeSwap,
+		Status:  StepStatusPending,
+		ChainID: "eip155:1",
+		RPCURL:  "http://127.0.0.1:65535",
+		Target:  "0x00000000000000000000000000000000000000bb",
+		Data:    "0x",
+		Value:   "0",
+	})
+
+	err = ExecuteAction(context.Background(), store, &action, staticSigner{}, DefaultExecuteOptions())
+	if err == nil {
+		t.Fatal("expected persist error")
+	}
+	typed, ok := clierr.As(err)
+	if !ok || typed.Code != clierr.CodeInternal {
+		t.Fatalf("expected internal error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "persist action state") {
+		t.Fatalf("unexpected persist error message: %v", err)
 	}
 }
 

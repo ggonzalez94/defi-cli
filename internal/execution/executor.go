@@ -83,15 +83,20 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 	if opts.GasMultiplier <= 1 {
 		return clierr.New(clierr.CodeUsage, "gas multiplier must be > 1")
 	}
-	persist := func() {
+	persist := func() error {
 		action.Touch()
 		if store != nil {
-			_ = store.Save(*action)
+			if err := store.Save(*action); err != nil {
+				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
+			}
 		}
+		return nil
 	}
 	action.Status = ActionStatusRunning
 	action.FromAddress = txSigner.Address().Hex()
-	persist()
+	if err := persist(); err != nil {
+		return err
+	}
 
 	rpcClients := make(map[string]*ethclient.Client)
 	defer func() {
@@ -112,17 +117,23 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 		step.RPCURL = stepRPCURL
 		if stepRPCURL == "" {
 			markStepFailed(action, step, "missing rpc url")
-			persist()
+			if err := persist(); err != nil {
+				return err
+			}
 			return clierr.New(clierr.CodeUsage, "missing rpc url for action step")
 		}
 		if strings.TrimSpace(step.Target) == "" {
 			markStepFailed(action, step, "missing target")
-			persist()
+			if err := persist(); err != nil {
+				return err
+			}
 			return clierr.New(clierr.CodeUsage, "missing target for action step")
 		}
 		if !common.IsHexAddress(step.Target) {
 			markStepFailed(action, step, "invalid target address")
-			persist()
+			if err := persist(); err != nil {
+				return err
+			}
 			return clierr.New(clierr.CodeUsage, "invalid target address for action step")
 		}
 		client := rpcClients[stepRPCURL]
@@ -131,7 +142,9 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			client, err = ethclient.DialContext(ctx, stepRPCURL)
 			if err != nil {
 				markStepFailed(action, step, err.Error())
-				persist()
+				if err := persist(); err != nil {
+					return err
+				}
 				return clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
 			}
 			rpcClients[stepRPCURL] = client
@@ -143,7 +156,9 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			cancel()
 			if err != nil {
 				markStepFailed(action, step, err.Error())
-				persist()
+				if err := persist(); err != nil {
+					return err
+				}
 				return err
 			}
 		}
@@ -153,7 +168,9 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			if step.Status != StepStatusFailed {
 				markStepFailed(action, step, err.Error())
 			}
-			persist()
+			if persistErr := persist(); persistErr != nil {
+				return persistErr
+			}
 			return err
 		}
 
@@ -162,14 +179,18 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 				requiredHeadByRPC[stepRPCURL] = confirmedBlock
 			}
 		}
-		persist()
+		if err := persist(); err != nil {
+			return err
+		}
 	}
 	action.Status = ActionStatusCompleted
-	persist()
+	if err := persist(); err != nil {
+		return err
+	}
 	return nil
 }
 
-func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.Signer, action *Action, step *ActionStep, opts ExecuteOptions, persist func()) (*big.Int, error) {
+func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.Signer, action *Action, step *ActionStep, opts ExecuteOptions, persist func() error) (*big.Int, error) {
 	chainID, err := client.ChainID(ctx)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeUnavailable, "read chain id", err)
@@ -199,7 +220,9 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 	msg := ethereum.CallMsg{From: txSigner.Address(), To: &target, Value: value, Data: data}
 	if txHash, ok := normalizeStepTxHash(step.TxHash); ok {
 		step.Status = StepStatusSubmitted
-		safePersist(persist)
+		if err := safePersist(persist); err != nil {
+			return nil, err
+		}
 		return waitForStepConfirmation(ctx, client, step, msg, txHash, opts, persist)
 	}
 
@@ -208,7 +231,9 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 			return nil, wrapEVMExecutionError(clierr.CodeActionSim, "simulate step (eth_call)", err)
 		}
 		step.Status = StepStatusSimulated
-		safePersist(persist)
+		if err := safePersist(persist); err != nil {
+			return nil, err
+		}
 	}
 
 	gasLimit, err := client.EstimateGas(ctx, msg)
@@ -262,11 +287,13 @@ func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.
 	}
 	step.Status = StepStatusSubmitted
 	step.TxHash = signed.Hash().Hex()
-	safePersist(persist)
+	if err := safePersist(persist); err != nil {
+		return nil, err
+	}
 	return waitForStepConfirmation(ctx, client, step, msg, signed.Hash(), opts, persist)
 }
 
-func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step *ActionStep, msg ethereum.CallMsg, txHash common.Hash, opts ExecuteOptions, persist func()) (*big.Int, error) {
+func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step *ActionStep, msg ethereum.CallMsg, txHash common.Hash, opts ExecuteOptions, persist func() error) (*big.Int, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, opts.StepTimeout)
 	defer cancel()
 	ticker := time.NewTicker(opts.PollInterval)
@@ -282,7 +309,9 @@ func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step
 					return nil, err
 				}
 				step.Status = StepStatusConfirmed
-				safePersist(persist)
+				if err := safePersist(persist); err != nil {
+					return nil, err
+				}
 				if receipt.BlockNumber == nil {
 					return nil, nil
 				}
@@ -307,11 +336,11 @@ func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step
 	}
 }
 
-func safePersist(persist func()) {
+func safePersist(persist func() error) error {
 	if persist == nil {
-		return
+		return nil
 	}
-	persist()
+	return persist()
 }
 
 func waitForRPCHeadAtLeast(ctx context.Context, reader headerReader, minBlock *big.Int, pollInterval time.Duration) error {

@@ -1864,16 +1864,7 @@ func (s *runtimeState) renderError(commandPath string, err error, warnings []str
 }
 
 func normalizeLendingProvider(input string) string {
-	switch strings.ToLower(strings.TrimSpace(input)) {
-	case "aave", "aave-v2", "aave-v3":
-		return "aave"
-	case "morpho", "morpho-blue":
-		return "morpho"
-	case "kamino", "kamino-lend", "kamino-finance":
-		return "kamino"
-	default:
-		return strings.ToLower(strings.TrimSpace(input))
-	}
+	return providers.NormalizeLendingProvider(input)
 }
 
 func parseLendPositionType(input string) (providers.LendPositionType, error) {
