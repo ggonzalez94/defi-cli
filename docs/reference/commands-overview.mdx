@@ -30,7 +30,7 @@ description: Top-level command map and shared global flags.
 | `--results-only` | bool | Output only data payload on success |
 | `--select` | string | Select fields from payload |
 | `--strict` | bool | Fail on partial results |
-| `--timeout` | duration string | Provider request timeout |
+| `--timeout` | duration string | Command timeout (provider requests and execution runtime cap) |
 | `--retries` | int | Retries per provider request |
 | `--max-stale` | duration string | Max stale fallback window |
 | `--no-stale` | bool | Disable stale fallback |
@@ -50,8 +50,8 @@ Examples:
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi yield positions --chain 1 --address 0xYourEOA --providers aave,morpho --results-only
 defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --from-address 0xYourEOA --results-only
-defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --timeout 12s --retries 2 --results-only
-defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --timeout 12s --retries 2 --results-only
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 defi transfer plan --chain taiko --asset USDC --amount 1000000 --from-address 0xYourEOA --recipient 0xRecipient --results-only
 defi actions estimate --action-id <action_id> --results-only
 ```

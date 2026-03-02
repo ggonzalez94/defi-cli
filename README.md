@@ -12,7 +12,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 - **Lending** — query markets/rates from Aave/Morpho/Kamino and account positions from Aave/Morpho, plus execute Aave/Morpho loan actions (`lend supply|withdraw|borrow|repay`).
 - **Yield** — compare opportunities, query account yield positions, fetch historical yield/TVL series, and execute yield deposit/withdraw flows.
-- **Bridging** — get cross-chain quotes (Across, LiFi), bridge analytics (volume, chain breakdown), and execute LiFi bridge plans.
+- **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics (volume, chain breakdown), and execute Across/LiFi bridge plans.
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
 - **Approvals, transfers & rewards** — create and execute ERC-20 approvals/transfers plus Aave rewards claim/compound flows.
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
@@ -325,6 +325,7 @@ providers:
 - Aave execution resolves pool addresses automatically on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche; use `--pool-address` / `--pool-address-provider` on unsupported chains.
 - LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
+- `--step-timeout` applies to each bridge wait stage (receipt and settlement polling); global `--timeout` still bounds the full command, so set both for longer routes.
 - LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
 - Transfer execution pre-sign checks validate ERC-20 `transfer(to,amount)` calldata, recipient, amount, and token target invariants before signing.

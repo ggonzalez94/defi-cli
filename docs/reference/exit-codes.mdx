@@ -17,9 +17,15 @@ description: Stable exit code contract for scripts and agents.
 | `14` | stale_data | Stale data beyond configured budget |
 | `15` | partial_results | Partial results with `--strict` |
 | `16` | command_blocked | Blocked by `--enable-commands` policy |
+| `20` | action_plan_error | Execution plan validation failed |
+| `21` | action_simulation_error | Execution simulation failed |
+| `22` | action_policy_error | Execution blocked by safety policy |
+| `23` | action_timeout | Execution timed out waiting for chain/provider state |
+| `24` | signer_error | Signer unavailable or signing failed |
 
 ## Error handling recommendation
 
 - Parse stderr envelope on non-zero exits.
 - Branch logic on `error.code`.
 - Use retries only for transient types (`11`, `12`).
+- For execution commands, treat `23` as potentially recoverable (for example increase `--step-timeout`/`--timeout` and retry).

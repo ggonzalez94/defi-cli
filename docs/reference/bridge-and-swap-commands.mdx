@@ -6,12 +6,12 @@ description: Full reference for bridge/swap quote families plus ERC-20 transfer 
 ## `bridge quote`
 
 ```bash
-defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 ```
 
 Flags:
 
-- `--provider string` (`across|lifi|bungee`, default `across`)
+- `--provider string` (`across|lifi|bungee`) required
 - `--from string` required
 - `--to string` required
 - `--asset string` required
@@ -54,33 +54,72 @@ Reason: this route uses DefiLlama bridge analytics endpoints that are provider-g
 
 ```bash
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
-defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
 
 Flags:
 
-- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee`, default: `1inch` for EVM exact-input, `uniswap` for EVM exact-output, `jupiter` for Solana exact-input)
+- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee|taikoswap`) required
 - `--chain string` required
 - `--from-asset string` required
 - `--to-asset string` required
 - `--type string` (`exact-input|exact-output`, default `exact-input`)
 - `--amount string` or `--amount-decimal string` (for `--type exact-input`)
 - `--amount-out string` or `--amount-out-decimal string` (for `--type exact-output`)
+- `--from-address string` required for `--provider uniswap`
 - `--slippage-pct float` optional (Uniswap only; default uses provider auto slippage)
 
 Type support:
 
 - `uniswap`: `exact-input`, `exact-output`
-- `1inch`, `jupiter`, `fibrous`, `bungee`: `exact-input` only
+- `1inch`, `jupiter`, `fibrous`, `bungee`, `taikoswap`: `exact-input` only
 
 Auth requirements:
 
 - `1inch` -> `DEFI_1INCH_API_KEY`
 - `uniswap` -> `DEFI_UNISWAP_API_KEY`
 - `jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
-- `fibrous`, `bungee` -> keyless by default
+- `fibrous`, `bungee`, `taikoswap` -> keyless by default
 
 These requirements are driven by provider APIs. `defi-cli` passes through provider auth requirements per route/provider pair.
+
+## `bridge plan|run|submit|status`
+
+```bash
+defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi bridge run --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi bridge submit --action-id <action_id> --results-only
+defi bridge status --action-id <action_id> --results-only
+```
+
+Execution providers: `across|lifi`.
+
+`run`/`submit` notes:
+
+- `bridge` steps are marked complete only after source-chain confirmation and destination settlement confirmation from provider status APIs.
+- `--step-timeout` applies to each bridge wait stage (receipt and settlement polling).
+- Global `--timeout` still bounds the whole command; set it high enough for slower bridge routes.
+- `--allow-max-approval` lets execution continue when provider approval calldata exceeds planned input amount (needed for some Across routes).
+- `--unsafe-provider-tx` bypasses settlement metadata/endpoint guardrails for provider-generated bridge payloads.
+
+Recommended slow-route settings:
+
+```bash
+defi bridge run --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --step-timeout 15m --timeout 20m --allow-max-approval --results-only
+```
+
+## `swap plan|run|submit|status`
+
+```bash
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap run --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap submit --action-id <action_id> --results-only
+defi swap status --action-id <action_id> --results-only
+```
+
+Execution provider today: `taikoswap`.
+
+`run`/`submit` support signer, polling, gas, simulation, and policy override flags consistent with other execution commands (`--simulate`, signer inputs, `--poll-interval`, `--step-timeout`, `--gas-multiplier`, `--max-fee-gwei`, `--max-priority-fee-gwei`, `--allow-max-approval`, `--unsafe-provider-tx`).
 
 ## `transfer plan|run|submit|status`
 

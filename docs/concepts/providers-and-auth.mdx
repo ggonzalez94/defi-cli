@@ -41,7 +41,7 @@ If either is missing, bungee quotes use public backend.
 - `lend positions` currently supports `--provider aave|morpho`.
 - `yield opportunities` aggregates direct providers and accepts `--providers aave,morpho,kamino`.
 - `yield history` uses the same direct providers and accepts `--providers aave,morpho,kamino`.
-- `swap quote` defaults by chain family: `1inch` for EVM chains, `jupiter` for Solana.
+- `bridge quote` and `swap quote` require explicit `--provider`; there are no implicit provider defaults.
 - Provider/chain-family mismatches fail fast with `unsupported` errors (for example `--provider jupiter` on EVM chains).
 
 ## Data caveats

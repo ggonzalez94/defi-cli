@@ -46,14 +46,12 @@ defi yield history --chain 1 --asset USDC --providers aave,morpho --metrics apy_
 ## 6. Get bridge and swap quotes
 
 ```bash
-defi bridge quote --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
+defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 1000000 --results-only
 
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
-defi swap quote --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
-
-On Solana, `swap quote` defaults to the Jupiter adapter.
 
 ## 7. Use schema for machine integration
 

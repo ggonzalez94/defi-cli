@@ -72,6 +72,7 @@ Format:
 - Aave `yield deposit|withdraw` now maps to Aave reserve supply/withdraw execution while preserving yield-intent command semantics and metadata.
 - `providers list` for Aave/Morpho/Kamino now advertises `yield.history` capability metadata.
 - `providers list` for Aave/Morpho now also advertises `yield.positions`, `yield.plan`, and `yield.execute` capability metadata.
+- Bridge execution flag help now clarifies that `--step-timeout` includes settlement polling and that `--allow-max-approval` may be needed on provider routes that return larger approval calldata.
 
 ### Fixed
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
@@ -88,6 +89,8 @@ Format:
 - Documented `yield history` usage, flags, and provider caveats across README and Mintlify yield/lending references.
 - Documented `yield positions` and `yield deposit|withdraw` execution usage across README, AGENTS, and Mintlify command references.
 - Updated yield docs/reference examples to remove risk-based flags and document `backing_assets` plus objective `tvl_usd`/`liquidity_usd` semantics.
+- Updated README + Mintlify bridge/swap docs to remove stale implicit-provider defaults, require explicit `--provider` in examples, and document Across max-approval behavior with `--allow-max-approval`.
+- Clarified bridge settlement timeout guidance across docs, including how `--step-timeout` and global `--timeout` interact on slower routes.
 
 ### Security
 - None yet.
