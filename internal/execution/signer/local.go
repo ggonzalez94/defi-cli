@@ -13,6 +13,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/crypto"
+	"github.com/ggonzalez94/defi-cli/internal/fsutil"
 )
 
 const (
@@ -91,6 +92,25 @@ func NewLocalSignerFromInputs(source, privateKeyOverride string) (*LocalSigner, 
 		keystorePath = ""
 		keystorePassword = ""
 		keystorePasswordFile = ""
+	}
+	var err error
+	if privateKeyFile != "" {
+		privateKeyFile, err = fsutil.NormalizePath(privateKeyFile)
+		if err != nil {
+			return nil, fmt.Errorf("normalize private key file: %w", err)
+		}
+	}
+	if keystorePath != "" {
+		keystorePath, err = fsutil.NormalizePath(keystorePath)
+		if err != nil {
+			return nil, fmt.Errorf("normalize keystore path: %w", err)
+		}
+	}
+	if keystorePasswordFile != "" {
+		keystorePasswordFile, err = fsutil.NormalizePath(keystorePasswordFile)
+		if err != nil {
+			return nil, fmt.Errorf("normalize keystore password file: %w", err)
+		}
 	}
 
 	return NewLocalSigner(LocalSignerConfig{

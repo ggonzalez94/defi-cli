@@ -26,11 +26,11 @@ defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount-dec
 
 ## Execution notes (Across and LiFi)
 
-Bridge execution is available through `bridge plan|run|submit|status` for `--provider across|lifi`.
+Bridge execution is available through `bridge plan|submit|status` for `--provider across|lifi`.
 
 ```bash
 defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi bridge run --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi bridge submit --action-id <action_id> --results-only
 ```
 
 ## Bridge analytics
@@ -51,7 +51,7 @@ defi bridge details --bridge layerzero --results-only
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only flows.
 - Quotes include `fee_breakdown` with `lp_fee`, `relayer_fee`, `gas_fee`, totals, and a consistency check against amount deltas.
 - Across can omit native USD fee fields on some routes; in those cases `estimated_fee_usd` may use a stable-asset approximation.
-- Across `/swap/approval` responses can include max-allowance `approve` calldata. `defi-cli` blocks approval amounts above planned input by default; use `--allow-max-approval` on `bridge run|submit` only when you explicitly accept that larger allowance.
-- Bridge `run|submit` marks bridge steps complete only after destination settlement is confirmed by provider status APIs (Across `/deposit/status`, LiFi `/status`).
+- Across `/swap/approval` responses can include max-allowance `approve` calldata. `defi-cli` blocks approval amounts above planned input by default; use `--allow-max-approval` on `bridge submit` only when you explicitly accept that larger allowance.
+- Bridge `submit` marks bridge steps complete only after destination settlement is confirmed by provider status APIs (Across `/deposit/status`, LiFi `/status`).
 - `--step-timeout` applies to each bridge wait stage (receipt and settlement polling). Slow routes may need higher values (for example `--step-timeout 15m`).
 - Global `--timeout` controls provider/planning requests. Execution wait budget is derived from `--step-timeout` and remaining action stages.

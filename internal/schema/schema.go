@@ -9,20 +9,29 @@ import (
 )
 
 type CommandSchema struct {
-	Path        string          `json:"path"`
-	Use         string          `json:"use"`
-	Short       string          `json:"short"`
-	Aliases     []string        `json:"aliases,omitempty"`
-	Flags       []FlagSchema    `json:"flags,omitempty"`
-	Subcommands []CommandSchema `json:"subcommands,omitempty"`
+	Path        string            `json:"path"`
+	Use         string            `json:"use"`
+	Short       string            `json:"short"`
+	Aliases     []string          `json:"aliases,omitempty"`
+	Mutation    bool              `json:"mutation,omitempty"`
+	InputModes  []string          `json:"input_modes,omitempty"`
+	Auth        []AuthRequirement `json:"auth,omitempty"`
+	Request     *TypeSchema       `json:"request,omitempty"`
+	Response    *TypeSchema       `json:"response,omitempty"`
+	Flags       []FlagSchema      `json:"flags,omitempty"`
+	Subcommands []CommandSchema   `json:"subcommands,omitempty"`
 }
 
 type FlagSchema struct {
-	Name      string `json:"name"`
-	Shorthand string `json:"shorthand,omitempty"`
-	Type      string `json:"type"`
-	Usage     string `json:"usage"`
-	Default   string `json:"default,omitempty"`
+	Name      string   `json:"name"`
+	Shorthand string   `json:"shorthand,omitempty"`
+	Type      string   `json:"type"`
+	Usage     string   `json:"usage"`
+	Default   any      `json:"default,omitempty"`
+	Required  bool     `json:"required,omitempty"`
+	Enum      []string `json:"enum,omitempty"`
+	Format    string   `json:"format,omitempty"`
+	Scope     string   `json:"scope,omitempty"`
 }
 
 func Build(root *cobra.Command, commandPath string) (CommandSchema, error) {
@@ -47,12 +56,18 @@ func Build(root *cobra.Command, commandPath string) (CommandSchema, error) {
 }
 
 func serialize(cmd *cobra.Command) CommandSchema {
+	meta := CommandMetadataFor(cmd)
 	s := CommandSchema{
-		Path:    strings.TrimSpace(cmd.CommandPath()),
-		Use:     cmd.Use,
-		Short:   cmd.Short,
-		Aliases: cmd.Aliases,
-		Flags:   collectFlags(cmd),
+		Path:       strings.TrimSpace(cmd.CommandPath()),
+		Use:        cmd.Use,
+		Short:      cmd.Short,
+		Aliases:    cmd.Aliases,
+		Mutation:   meta.Mutation,
+		InputModes: meta.InputModes,
+		Auth:       meta.Auth,
+		Request:    meta.Request,
+		Response:   meta.Response,
+		Flags:      collectFlags(cmd),
 	}
 
 	subs := cmd.Commands()
@@ -68,13 +83,29 @@ func serialize(cmd *cobra.Command) CommandSchema {
 
 func collectFlags(cmd *cobra.Command) []FlagSchema {
 	items := []FlagSchema{}
-	cmd.NonInheritedFlags().VisitAll(func(f *pflag.Flag) {
+	inherited := map[string]struct{}{}
+	cmd.InheritedFlags().VisitAll(func(f *pflag.Flag) {
+		inherited[f.Name] = struct{}{}
+	})
+	cmd.Flags().VisitAll(func(f *pflag.Flag) {
+		if f.Hidden || f.Name == "help" {
+			return
+		}
+		meta := MergedFlagMetadata(f)
+		scope := "local"
+		if _, ok := inherited[f.Name]; ok {
+			scope = "inherited"
+		}
 		item := FlagSchema{
 			Name:      f.Name,
 			Shorthand: f.Shorthand,
 			Type:      f.Value.Type(),
 			Usage:     f.Usage,
-			Default:   f.DefValue,
+			Default:   parseFlagDefault(f),
+			Required:  meta.Required,
+			Enum:      meta.Enum,
+			Format:    meta.Format,
+			Scope:     scope,
 		}
 		items = append(items, item)
 	})

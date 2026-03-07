@@ -11,12 +11,12 @@ Format:
 
 ### Added
 - Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
-- Added swap execution workflow commands: `swap plan`, `swap run`, `swap submit`, and `swap status`.
-- Added bridge execution workflow commands: `bridge plan`, `bridge run`, `bridge submit`, and `bridge status` (Across and LiFi providers).
-- Added approvals workflow commands: `approvals plan`, `approvals run`, `approvals submit`, and `approvals status`.
-- Added transfer workflow commands: `transfer plan`, `transfer run`, `transfer submit`, and `transfer status` for native ERC-20 wallet-to-wallet sends.
-- Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|run|submit|status` (Aave and Morpho).
-- Added rewards execution workflow commands under `rewards claim|compound ... plan|run|submit|status` (Aave).
+- Added swap execution workflow commands: `swap plan`, `swap submit`, and `swap status`.
+- Added bridge execution workflow commands: `bridge plan`, `bridge submit`, and `bridge status` (Across and LiFi providers).
+- Added approvals workflow commands: `approvals plan`, `approvals submit`, and `approvals status`.
+- Added transfer workflow commands: `transfer plan`, `transfer submit`, and `transfer status` for native ERC-20 wallet-to-wallet sends.
+- Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|submit|status` (Aave and Morpho).
+- Added rewards execution workflow commands under `rewards claim|compound ... plan|submit|status` (Aave).
 - Added action persistence and inspection commands: `actions list` and `actions show`.
 - Added local signer support for execution with env/file/keystore key sources.
 - Added Taiko Hoodi chain alias and token registry entries (`USDC`, `USDT`, `WETH`) for deterministic asset parsing.
@@ -26,13 +26,15 @@ Format:
 - Added `lend positions` to query account-level lending positions by address for Aave and Morpho with `--type all|supply|borrow|collateral`.
 - Added `yield positions` to query account-level yield deposit positions by address for Aave and Morpho.
 - Added `yield history` to query historical yield-provider series with `--metrics apy_total,tvl_usd`, `--interval hour|day`, `--window`/`--from`/`--to`, and optional `--opportunity-ids`.
-- Added yield execution workflow commands under `yield deposit|withdraw ... plan|run|submit|status` (Aave and Morpho).
+- Added yield execution workflow commands under `yield deposit|withdraw ... plan|submit|status` (Aave and Morpho).
 - Added `actions estimate` to compute per-step gas projections for persisted actions using `eth_estimateGas` and EIP-1559 fee cap/tip resolution.
+- Added structured request input for execution `plan` and `submit` commands via `--input-json` and `--input-file` (use `-` to read JSON from stdin).
 
 ### Changed
 - BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) sourced from Morpho vault/vault-v2 data instead of Morpho market IDs.
 - BREAKING: `yield opportunities` removed subjective fields (`risk_level`, `risk_reasons`, `score`) and removed the `--max-risk` flag.
 - BREAKING: `yield opportunities --sort` now supports only objective keys (`apy_total|tvl_usd|liquidity_usd`) and defaults to `apy_total`.
+- BREAKING: Removed one-shot execution `run` commands across all execution domains; use `plan` to persist an action and `submit --action-id` to broadcast it.
 - `yield opportunities` now returns `backing_assets` with full per-opportunity backing composition.
 - Yield liquidity/TVL sourcing is now provider-native and consistent: Aave (`size.usd`, `borrowInfo.availableLiquidity.usd`), Morpho vaults (`totalAssetsUsd`, vault liquidity fields), and Kamino (`totalSupplyUsd`, `max(totalSupplyUsd-totalBorrowUsd,0)`).
 - BREAKING: Lend and rewards commands now use `--provider` as the selector flag; `--protocol` has been removed.
@@ -42,28 +44,29 @@ Format:
 - `providers list` now includes Morpho lend execution capabilities (`lend.plan`, `lend.execute`).
 - Added execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
 - Added execution config/env support for action store paths.
-- Execution command cache/action-store policy now covers `swap|bridge|approvals|transfer|lend|rewards ... plan|run|submit|status`.
+- Execution command cache/action-store policy now covers `swap|bridge|approvals|transfer|lend|rewards ... plan|submit|status`.
 - Removed implicit defaults for multi-provider command paths; `--provider` must be set explicitly where applicable.
-- Added bridge gas-top-up request support via `--from-amount-for-gas` for LiFi quote/plan/run flows.
+- Added bridge gas-top-up request support via `--from-amount-for-gas` for LiFi quote/plan flows.
 - Bridge execution now tracks LiFi destination settlement status before finalizing bridge steps.
 - Bridge execution now tracks Across destination settlement status before finalizing bridge steps.
 - Aave execution registry defaults now include PoolAddressesProvider mappings for Base, Arbitrum, Optimism, Polygon, and Avalanche in addition to Ethereum.
-- Execution `run`/`submit` commands now propagate command timeout/cancel context through on-chain execution.
+- Execution `submit` commands now propagate command timeout/cancel context through on-chain execution.
 - Morpho lend execution now requires explicit `--market-id` to avoid ambiguous market selection.
-- Execution `run`/`submit` commands no longer require `--yes`; command intent now gates execution.
+- Execution `submit` commands no longer require `--yes`; command intent now gates execution.
 - Unified execution action-construction dispatch under a shared ActionBuilder registry while preserving existing command semantics.
 - Execution commands now use `--from-address` as the single signer-address guard; `--confirm-address` has been removed.
-- Execution `run` commands now default sender to signer address when `--from-address` is omitted.
-- Execution `run`/`submit` commands now support `--private-key` as a one-off local signer override (highest precedence).
+- Execution `submit` commands now support `--private-key` as a one-off local signer override (highest precedence).
 - Local signer `--key-source auto` now discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
 - Missing local-signer key errors now include a simple default key-file hint (`~/.config/defi/key.hex`, with `XDG_CONFIG_HOME` override note).
 - Local signer key/keystore file loading no longer hard-fails on non-`0600` file permissions.
+- `schema` output now includes inherited flags, typed defaults, `required`/`enum`/`format` flag metadata, command auth metadata, and request/response structure hints for agent discovery.
+- Execution command input validation now hardens control-character/path handling and enforces canonical `act_<32 hex chars>` action IDs.
 - Execution endpoint defaults for Across/LiFi settlement polling and Morpho GraphQL planning are now centralized in `internal/registry`.
 - Default chain RPC metadata is now centralized in `internal/registry/rpc.go`; execution/quote flows use shared chain defaults when `--rpc-url` is not provided.
 - Execution pre-sign validation now enforces bounded ERC-20 approvals by default and validates TaikoSwap router/selector invariants before signing.
 - Transfer execution pre-sign validation now enforces ERC-20 `transfer(to,amount)` calldata invariants (selector, recipient, amount, and token target consistency with planned action metadata).
-- Execution `run`/`submit` commands now expose `--allow-max-approval` and `--unsafe-provider-tx` overrides for advanced/provider-specific flows.
-- `swap quote` (on-chain providers) and `swap plan`/`swap run` now support `--rpc-url` to override chain default RPCs per invocation.
+- Execution `submit` commands now expose `--allow-max-approval` and `--unsafe-provider-tx` overrides for advanced/provider-specific flows.
+- `swap quote` (on-chain providers) and `swap plan` now support `--rpc-url` to override chain default RPCs per invocation.
 - Swap execution planning now validates sender/recipient fields as EVM addresses before route planning.
 - Uniswap `swap quote` now requires a real `--from-address` swapper input instead of using a deterministic placeholder address.
 - `lend positions` now emits non-overlapping type rows for automation: `supply` (non-collateral), `collateral` (posted collateral), and `borrow` (debt).
@@ -78,7 +81,7 @@ Format:
 - Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
 - Fixed execution read-after-write consistency for sequential on-chain steps by reusing RPC clients per action, gating on confirmed block visibility, and waiting for ERC-20 allowance state visibility after successful approval receipts.
 - Fixed `actions estimate` for multi-step same-chain actions (`approve` then contract call) by using sequential `eth_simulateV1` estimation when supported and falling back to per-step `eth_estimateGas` when unavailable.
-- Fixed execution timeout budgeting so `run|submit` waits are derived from per-step execution stages instead of the short provider request timeout.
+- Fixed execution timeout budgeting so `submit` waits are derived from per-step execution stages instead of the short provider request timeout.
 - Fixed `approvals submit` and `bridge submit` to short-circuit completed actions before requesting signer inputs.
 - Fixed Across/LiFi bridge planning to reject provider transaction payloads with invalid target addresses.
 - Fixed Aave rewards compound planning to reject recipient/sender mismatches so claim/supply addresses stay aligned.

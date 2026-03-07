@@ -1,4 +1,4 @@
-# Execution Component Design (`plan|run|submit|status`)
+# Execution Component Design (`plan|submit|status`)
 
 Status: Implemented (v1)  
 Last Updated: 2026-02-24  
@@ -18,13 +18,13 @@ Execution is integrated inside existing domain commands (for example `swap`, `br
 
 | Domain | Commands | Selector Requirement | Execution Coverage |
 |---|---|---|---|
-| Swap | `swap plan|run|submit|status` | `--provider` required | `taikoswap` execution today |
-| Bridge | `bridge plan|run|submit|status` | `--provider` required | `across`, `lifi` execution |
-| Transfer | `transfer plan|run|submit|status` | no provider selector | native ERC-20 wallet transfer execution |
-| Lend | `lend (supply|withdraw|borrow|repay) plan|run|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
-| Yield | `yield (deposit|withdraw) plan|run|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--vault-address`) |
-| Rewards | `rewards (claim|compound) plan|run|submit|status` | `--provider` required | `aave` execution |
-| Approvals | `approvals plan|run|submit|status` | no provider selector | native ERC-20 approval execution |
+| Swap | `swap plan|submit|status` | `--provider` required | `taikoswap` execution today |
+| Bridge | `bridge plan|submit|status` | `--provider` required | `across`, `lifi` execution |
+| Transfer | `transfer plan|submit|status` | no provider selector | native ERC-20 wallet transfer execution |
+| Lend | `lend (supply|withdraw|borrow|repay) plan|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
+| Yield | `yield (deposit|withdraw) plan|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--vault-address`) |
+| Rewards | `rewards (claim|compound) plan|submit|status` | `--provider` required | `aave` execution |
+| Approvals | `approvals plan|submit|status` | no provider selector | native ERC-20 approval execution |
 | Action inspection | `actions list|show|estimate` | optional `--status` / `--action-id` filters | persisted action inspection + gas/fee estimation |
 
 Notes:
@@ -62,7 +62,7 @@ Registry responsibility:
 
 - Resolve provider-backed action builders for swap/bridge.
 - Resolve planner-backed action builders for lend/yield/rewards/approvals/transfer.
-- Keep command-level orchestration (`plan|run|submit|status`) consistent across domains.
+- Keep command-level orchestration (`plan|submit|status`) consistent across domains.
 
 Design decision:
 
@@ -128,17 +128,12 @@ Tradeoff:
 - Performs planning-time checks required by each planner/provider (for example allowance reads, route fetches, address resolution).
 - Does not broadcast transactions.
 
-### 4.2 `run`
-
-- Performs plan + execute in one invocation.
-- Persists action first, then executes steps.
-
-### 4.3 `submit`
+### 4.2 `submit`
 
 - Loads a previously persisted action by `--action-id`.
 - Executes remaining steps.
 
-### 4.4 `status` and `actions`
+### 4.3 `status` and `actions`
 
 - Domain `status` commands fetch one action.
 - `actions list` gives cross-domain recent actions.
@@ -160,7 +155,7 @@ Supported backend today:
 Key sources:
 
 - `--key-source auto|env|file|keystore`
-- `--private-key` (run/submit one-off override)
+- `--private-key` (submit one-off override)
 - Environment variables:
   - `DEFI_PRIVATE_KEY`
   - `DEFI_PRIVATE_KEY_FILE`
@@ -178,7 +173,6 @@ Key sources:
 
 Security controls:
 
-- run flows derive sender from signer when omitted; if `--from-address` is provided it must match signer address
 - optional `--from-address` signer-address check in submit flows
 
 Design decision:
@@ -244,7 +238,7 @@ Bridge-specific consistency:
 
 Context and timeout behavior:
 
-- Command timeout is propagated to run/submit execution via `executeActionWithTimeout(...)`.
+- Command timeout is propagated to submit execution via `executeActionWithTimeout(...)`.
 - Per-step timeout and poll interval are configurable (`--step-timeout`, `--poll-interval`).
 
 Design decision:
@@ -297,7 +291,7 @@ Design decision:
 
 Tradeoff:
 
-- Detects endpoint/RPC/contract drift early, but does not prove end-to-end transaction broadcasting on every run.
+- Detects endpoint/RPC/contract drift early, but does not prove end-to-end transaction broadcasting on every submit.
 
 ## 10. Major Decisions and Tradeoffs Summary
 
@@ -308,7 +302,7 @@ Tradeoff:
 | Local signer only for v1 | Fast, reliable implementation | No external signer ecosystems yet |
 | Store action payload as JSON blob | Easy persistence and replay semantics | Limited SQL-native analytics on steps |
 | Compile-time registry | Type-safe and deterministic | Slower metadata hotfix cadence |
-| Runtime simulation + settlement polling | Better safety and finality confidence | Longer run time and external API dependency |
+| Runtime simulation + settlement polling | Better safety and finality confidence | Longer execution time and external API dependency |
 | No `cast` runtime dependency | Portable binary releases | Less shell-tool parity for debugging |
 
 ## 11. Known Gaps and Next Increments

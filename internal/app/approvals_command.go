@@ -17,21 +17,36 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "approvals", Short: "Approval execution commands"}
 
 	type approvalArgs struct {
-		chainArg      string
-		assetArg      string
-		spender       string
-		amountBase    string
-		amountDecimal string
-		fromAddress   string
-		simulate      bool
-		rpcURL        string
+		ChainArg      string `json:"chain" flag:"chain" required:"true" format:"chain"`
+		AssetArg      string `json:"asset" flag:"asset" required:"true" format:"asset"`
+		Spender       string `json:"spender" flag:"spender" required:"true" format:"evm-address"`
+		AmountBase    string `json:"amount" flag:"amount" format:"base-units"`
+		AmountDecimal string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
+		FromAddress   string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		Simulate      bool   `json:"simulate" flag:"simulate"`
+		RPCURL        string `json:"rpc_url" flag:"rpc-url" format:"url"`
+	}
+	type approvalSubmitArgs struct {
+		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
+		Simulate           bool    `json:"simulate" flag:"simulate"`
+		Signer             string  `json:"signer" flag:"signer" enum:"local"`
+		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
+		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
+		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
+		PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
+		StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
+		GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
+		MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
+		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
+		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
+		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
 	}
 	buildAction := func(args approvalArgs) (execution.Action, error) {
-		chain, err := id.ParseChain(args.chainArg)
+		chain, err := id.ParseChain(args.ChainArg)
 		if err != nil {
 			return execution.Action{}, err
 		}
-		asset, err := id.ParseAsset(args.assetArg, chain)
+		asset, err := id.ParseAsset(args.AssetArg, chain)
 		if err != nil {
 			return execution.Action{}, err
 		}
@@ -39,7 +54,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		if decimals <= 0 {
 			decimals = 18
 		}
-		base, _, err := id.NormalizeAmount(args.amountBase, args.amountDecimal, decimals)
+		base, _, err := id.NormalizeAmount(args.AmountBase, args.AmountDecimal, decimals)
 		if err != nil {
 			return execution.Action{}, err
 		}
@@ -47,10 +62,10 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			Chain:           chain,
 			Asset:           asset,
 			AmountBaseUnits: base,
-			Sender:          args.fromAddress,
-			Spender:         args.spender,
-			Simulate:        args.simulate,
-			RPCURL:          args.rpcURL,
+			Sender:          args.FromAddress,
+			Spender:         args.Spender,
+			Simulate:        args.Simulate,
+			RPCURL:          args.RPCURL,
 		})
 	}
 
@@ -76,103 +91,26 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), status, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.chainArg, "chain", "", "Chain identifier")
-	planCmd.Flags().StringVar(&plan.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	planCmd.Flags().StringVar(&plan.spender, "spender", "", "Spender address")
-	planCmd.Flags().StringVar(&plan.amountBase, "amount", "", "Amount in base units")
-	planCmd.Flags().StringVar(&plan.amountDecimal, "amount-decimal", "", "Amount in decimal units")
-	planCmd.Flags().StringVar(&plan.fromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().BoolVar(&plan.simulate, "simulate", true, "Include simulation checks during execution")
-	planCmd.Flags().StringVar(&plan.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
+	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
+	planCmd.Flags().StringVar(&plan.AssetArg, "asset", "", "Asset symbol/address/CAIP-19")
+	planCmd.Flags().StringVar(&plan.Spender, "spender", "", "Spender address")
+	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
+	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
+	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
+	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("spender")
 	_ = planCmd.MarkFlagRequired("from-address")
+	configureStructuredInput[approvalArgs](planCmd, structuredInputOptions{Mutation: true})
 
-	var run approvalArgs
-	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
-	var runGasMultiplier float64
-	var runMaxFeeGwei, runMaxPriorityFeeGwei string
-	var runAllowMaxApproval, runUnsafeProviderTx bool
-	runCmd := &cobra.Command{
-		Use:   "run",
-		Short: "Plan and execute an approval action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, run.fromAddress)
-			if err != nil {
-				return err
-			}
-			runArgs := run
-			runArgs.fromAddress = runSenderAddress
-
-			start := time.Now()
-			action, err := buildAction(runArgs)
-			status := []model.ProviderStatus{{Name: "native", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-			if err != nil {
-				s.captureCommandDiagnostics(nil, status, false)
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			if err := s.actionStore.Save(action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-			execOpts, err := parseExecuteOptions(
-				run.simulate,
-				runPollInterval,
-				runStepTimeout,
-				runGasMultiplier,
-				runMaxFeeGwei,
-				runMaxPriorityFeeGwei,
-				runAllowMaxApproval,
-				runUnsafeProviderTx,
-			)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, status, false)
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
-				s.captureCommandDiagnostics(nil, status, false)
-				return err
-			}
-			s.captureCommandDiagnostics(nil, status, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), status, false)
-		},
-	}
-	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
-	runCmd.Flags().StringVar(&run.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	runCmd.Flags().StringVar(&run.spender, "spender", "", "Spender address")
-	runCmd.Flags().StringVar(&run.amountBase, "amount", "", "Amount in base units")
-	runCmd.Flags().StringVar(&run.amountDecimal, "amount-decimal", "", "Amount in decimal units")
-	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
-	runCmd.Flags().BoolVar(&run.simulate, "simulate", true, "Run preflight simulation before submission")
-	runCmd.Flags().StringVar(&run.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
-	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
-	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
-	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	_ = runCmd.MarkFlagRequired("chain")
-	_ = runCmd.MarkFlagRequired("asset")
-	_ = runCmd.MarkFlagRequired("spender")
-
-	var submitActionID string
-	var submitSimulate bool
-	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress, submitPollInterval, submitStepTimeout string
-	var submitGasMultiplier float64
-	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
-	var submitAllowMaxApproval, submitUnsafeProviderTx bool
+	var submit approvalSubmitArgs
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing approval action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(submitActionID)
+			actionID, err := resolveActionID(submit.ActionID)
 			if err != nil {
 				return err
 			}
@@ -189,25 +127,25 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
+			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
 			execOpts, err := parseExecuteOptions(
-				submitSimulate,
-				submitPollInterval,
-				submitStepTimeout,
-				submitGasMultiplier,
-				submitMaxFeeGwei,
-				submitMaxPriorityFeeGwei,
-				submitAllowMaxApproval,
-				submitUnsafeProviderTx,
+				submit.Simulate,
+				submit.PollInterval,
+				submit.StepTimeout,
+				submit.GasMultiplier,
+				submit.MaxFeeGwei,
+				submit.MaxPriorityFeeGwei,
+				submit.AllowMaxApproval,
+				submit.UnsafeProviderTx,
 			)
 			if err != nil {
 				return err
@@ -218,19 +156,20 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
 		},
 	}
-	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
-	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by approvals plan")
+	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
+	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local)")
+	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
+	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
+	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
+	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
+	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
+	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	annotateStructuredSubmitCommand(submitCmd, approvalSubmitArgs{})
 
 	var statusActionID string
 	statusCmd := &cobra.Command{
@@ -254,10 +193,10 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
 		},
 	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
+	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by approvals plan")
+	annotateExecutionStatusCommand(statusCmd)
 
 	root.AddCommand(planCmd)
-	root.AddCommand(runCmd)
 	root.AddCommand(submitCmd)
 	root.AddCommand(statusCmd)
 	return root

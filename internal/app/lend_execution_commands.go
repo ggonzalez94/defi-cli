@@ -30,23 +30,38 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	expectedIntent := "lend_" + string(verb)
 
 	type lendArgs struct {
-		provider            string
-		chainArg            string
-		assetArg            string
-		marketID            string
-		amountBase          string
-		amountDecimal       string
-		fromAddress         string
-		recipient           string
-		onBehalfOf          string
-		interestRateMode    int64
-		simulate            bool
-		rpcURL              string
-		poolAddress         string
-		poolAddressProvider string
+		Provider            string `json:"provider" flag:"provider" required:"true" enum:"aave,morpho"`
+		ChainArg            string `json:"chain" flag:"chain" required:"true" format:"chain"`
+		AssetArg            string `json:"asset" flag:"asset" required:"true" format:"asset"`
+		MarketID            string `json:"market_id" flag:"market-id" format:"bytes32"`
+		AmountBase          string `json:"amount" flag:"amount" format:"base-units"`
+		AmountDecimal       string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
+		FromAddress         string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		Recipient           string `json:"recipient" flag:"recipient" format:"evm-address"`
+		OnBehalfOf          string `json:"on_behalf_of" flag:"on-behalf-of" format:"evm-address"`
+		InterestRateMode    int64  `json:"interest_rate_mode" flag:"interest-rate-mode"`
+		Simulate            bool   `json:"simulate" flag:"simulate"`
+		RPCURL              string `json:"rpc_url" flag:"rpc-url" format:"url"`
+		PoolAddress         string `json:"pool_address" flag:"pool-address" format:"evm-address"`
+		PoolAddressProvider string `json:"pool_address_provider" flag:"pool-address-provider" format:"evm-address"`
+	}
+	type lendSubmitArgs struct {
+		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
+		Simulate           bool    `json:"simulate" flag:"simulate"`
+		Signer             string  `json:"signer" flag:"signer" enum:"local"`
+		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
+		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
+		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
+		PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
+		StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
+		GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
+		MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
+		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
+		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
+		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
 	}
 	buildAction := func(ctx context.Context, args lendArgs) (execution.Action, error) {
-		chain, asset, err := parseChainAsset(args.chainArg, args.assetArg)
+		chain, asset, err := parseChainAsset(args.ChainArg, args.AssetArg)
 		if err != nil {
 			return execution.Action{}, err
 		}
@@ -54,25 +69,25 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		if decimals <= 0 {
 			decimals = 18
 		}
-		base, _, err := id.NormalizeAmount(args.amountBase, args.amountDecimal, decimals)
+		base, _, err := id.NormalizeAmount(args.AmountBase, args.AmountDecimal, decimals)
 		if err != nil {
 			return execution.Action{}, err
 		}
 		return s.actionBuilderRegistry().BuildLendAction(ctx, actionbuilder.LendRequest{
-			Provider:            args.provider,
+			Provider:            args.Provider,
 			Verb:                verb,
 			Chain:               chain,
 			Asset:               asset,
-			MarketID:            args.marketID,
+			MarketID:            args.MarketID,
 			AmountBaseUnits:     base,
-			Sender:              args.fromAddress,
-			Recipient:           args.recipient,
-			OnBehalfOf:          args.onBehalfOf,
-			InterestRateMode:    args.interestRateMode,
-			Simulate:            args.simulate,
-			RPCURL:              args.rpcURL,
-			PoolAddress:         args.poolAddress,
-			PoolAddressProvider: args.poolAddressProvider,
+			Sender:              args.FromAddress,
+			Recipient:           args.Recipient,
+			OnBehalfOf:          args.OnBehalfOf,
+			InterestRateMode:    args.InterestRateMode,
+			Simulate:            args.Simulate,
+			RPCURL:              args.RPCURL,
+			PoolAddress:         args.PoolAddress,
+			PoolAddressProvider: args.PoolAddressProvider,
 		})
 	}
 
@@ -85,7 +100,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			defer cancel()
 			start := time.Now()
 			action, err := buildAction(ctx, plan)
-			providerName := normalizeLendingProvider(plan.provider)
+			providerName := normalizeLendingProvider(plan.Provider)
 			if providerName == "" {
 				providerName = "lend"
 			}
@@ -104,121 +119,32 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.provider, "provider", "", "Lending provider (aave|morpho)")
-	planCmd.Flags().StringVar(&plan.chainArg, "chain", "", "Chain identifier")
-	planCmd.Flags().StringVar(&plan.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	planCmd.Flags().StringVar(&plan.marketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")
-	planCmd.Flags().StringVar(&plan.amountBase, "amount", "", "Amount in base units")
-	planCmd.Flags().StringVar(&plan.amountDecimal, "amount-decimal", "", "Amount in decimal units")
-	planCmd.Flags().StringVar(&plan.fromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().StringVar(&plan.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	planCmd.Flags().StringVar(&plan.onBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
-	planCmd.Flags().Int64Var(&plan.interestRateMode, "interest-rate-mode", 2, "Aave borrow/repay mode (1=stable,2=variable)")
-	planCmd.Flags().BoolVar(&plan.simulate, "simulate", true, "Include simulation checks during execution")
-	planCmd.Flags().StringVar(&plan.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
-	planCmd.Flags().StringVar(&plan.poolAddress, "pool-address", "", "Aave pool address override")
-	planCmd.Flags().StringVar(&plan.poolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
+	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Lending provider (aave|morpho)")
+	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
+	planCmd.Flags().StringVar(&plan.AssetArg, "asset", "", "Asset symbol/address/CAIP-19")
+	planCmd.Flags().StringVar(&plan.MarketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")
+	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
+	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
+	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
+	planCmd.Flags().StringVar(&plan.OnBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
+	planCmd.Flags().Int64Var(&plan.InterestRateMode, "interest-rate-mode", 2, "Aave borrow/repay mode (1=stable,2=variable)")
+	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
+	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
+	planCmd.Flags().StringVar(&plan.PoolAddress, "pool-address", "", "Aave pool address override")
+	planCmd.Flags().StringVar(&plan.PoolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
+	configureStructuredInput[lendArgs](planCmd, structuredInputOptions{Mutation: true})
 
-	var run lendArgs
-	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
-	var runGasMultiplier float64
-	var runMaxFeeGwei, runMaxPriorityFeeGwei string
-	var runAllowMaxApproval, runUnsafeProviderTx bool
-	runCmd := &cobra.Command{
-		Use:   "run",
-		Short: "Plan and execute a lend action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, run.fromAddress)
-			if err != nil {
-				return err
-			}
-			runArgs := run
-			runArgs.fromAddress = runSenderAddress
-
-			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
-			defer cancel()
-			start := time.Now()
-			action, err := buildAction(ctx, runArgs)
-			providerName := normalizeLendingProvider(run.provider)
-			if providerName == "" {
-				providerName = "lend"
-			}
-			statuses := []model.ProviderStatus{{Name: providerName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			if err := s.actionStore.Save(action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-			execOpts, err := parseExecuteOptions(
-				run.simulate,
-				runPollInterval,
-				runStepTimeout,
-				runGasMultiplier,
-				runMaxFeeGwei,
-				runMaxPriorityFeeGwei,
-				runAllowMaxApproval,
-				runUnsafeProviderTx,
-			)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
-		},
-	}
-	runCmd.Flags().StringVar(&run.provider, "provider", "", "Lending provider (aave|morpho)")
-	runCmd.Flags().StringVar(&run.chainArg, "chain", "", "Chain identifier")
-	runCmd.Flags().StringVar(&run.assetArg, "asset", "", "Asset symbol/address/CAIP-19")
-	runCmd.Flags().StringVar(&run.marketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")
-	runCmd.Flags().StringVar(&run.amountBase, "amount", "", "Amount in base units")
-	runCmd.Flags().StringVar(&run.amountDecimal, "amount-decimal", "", "Amount in decimal units")
-	runCmd.Flags().StringVar(&run.fromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
-	runCmd.Flags().StringVar(&run.recipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	runCmd.Flags().StringVar(&run.onBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
-	runCmd.Flags().Int64Var(&run.interestRateMode, "interest-rate-mode", 2, "Aave borrow/repay mode (1=stable,2=variable)")
-	runCmd.Flags().BoolVar(&run.simulate, "simulate", true, "Run preflight simulation before submission")
-	runCmd.Flags().StringVar(&run.rpcURL, "rpc-url", "", "RPC URL override for the selected chain")
-	runCmd.Flags().StringVar(&run.poolAddress, "pool-address", "", "Aave pool address override")
-	runCmd.Flags().StringVar(&run.poolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
-	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
-	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
-	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	_ = runCmd.MarkFlagRequired("chain")
-	_ = runCmd.MarkFlagRequired("asset")
-	_ = runCmd.MarkFlagRequired("provider")
-
-	var submitActionID string
-	var submitSimulate bool
-	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress, submitPollInterval, submitStepTimeout string
-	var submitGasMultiplier float64
-	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
-	var submitAllowMaxApproval, submitUnsafeProviderTx bool
+	var submit lendSubmitArgs
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing lend action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(submitActionID)
+			actionID, err := resolveActionID(submit.ActionID)
 			if err != nil {
 				return err
 			}
@@ -235,25 +161,25 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
+			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
 			execOpts, err := parseExecuteOptions(
-				submitSimulate,
-				submitPollInterval,
-				submitStepTimeout,
-				submitGasMultiplier,
-				submitMaxFeeGwei,
-				submitMaxPriorityFeeGwei,
-				submitAllowMaxApproval,
-				submitUnsafeProviderTx,
+				submit.Simulate,
+				submit.PollInterval,
+				submit.StepTimeout,
+				submit.GasMultiplier,
+				submit.MaxFeeGwei,
+				submit.MaxPriorityFeeGwei,
+				submit.AllowMaxApproval,
+				submit.UnsafeProviderTx,
 			)
 			if err != nil {
 				return err
@@ -264,19 +190,20 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
 		},
 	}
-	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
-	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by lend plan")
+	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
+	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local)")
+	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
+	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
+	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
+	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
+	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
+	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	annotateStructuredSubmitCommand(submitCmd, lendSubmitArgs{})
 
 	var statusActionID string
 	statusCmd := &cobra.Command{
@@ -300,10 +227,10 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
 		},
 	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
+	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by lend plan")
+	annotateExecutionStatusCommand(statusCmd)
 
 	root.AddCommand(planCmd)
-	root.AddCommand(runCmd)
 	root.AddCommand(submitCmd)
 	root.AddCommand(statusCmd)
 	return root

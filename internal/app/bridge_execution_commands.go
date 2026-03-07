@@ -58,20 +58,46 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		}, nil
 	}
 
-	var planProviderArg, planFromArg, planToArg, planAssetArg, planToAssetArg string
-	var planAmountBase, planAmountDecimal, planFromAddress, planRecipient, planFromAmountForGas string
-	var planSlippageBps int64
-	var planSimulate bool
-	var planRPCURL string
+	type bridgePlanArgs struct {
+		Provider         string `json:"provider" flag:"provider" required:"true" enum:"across,lifi"`
+		FromArg          string `json:"from" flag:"from" required:"true" format:"chain"`
+		ToArg            string `json:"to" flag:"to" required:"true" format:"chain"`
+		AssetArg         string `json:"asset" flag:"asset" required:"true" format:"asset"`
+		ToAssetArg       string `json:"to_asset" flag:"to-asset" format:"asset"`
+		AmountBase       string `json:"amount" flag:"amount" format:"base-units"`
+		AmountDecimal    string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
+		FromAmountForGas string `json:"from_amount_for_gas" flag:"from-amount-for-gas" format:"base-units"`
+		FromAddress      string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		Recipient        string `json:"recipient" flag:"recipient" format:"evm-address"`
+		SlippageBps      int64  `json:"slippage_bps" flag:"slippage-bps"`
+		Simulate         bool   `json:"simulate" flag:"simulate"`
+		RPCURL           string `json:"rpc_url" flag:"rpc-url" format:"url"`
+	}
+	type bridgeSubmitArgs struct {
+		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
+		Simulate           bool    `json:"simulate" flag:"simulate"`
+		Signer             string  `json:"signer" flag:"signer" enum:"local"`
+		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
+		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
+		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
+		PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
+		StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
+		GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
+		MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
+		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
+		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
+		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
+	}
+	var plan bridgePlanArgs
 	planCmd := &cobra.Command{
 		Use:   "plan",
 		Short: "Create and persist a bridge action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			providerName := strings.ToLower(strings.TrimSpace(planProviderArg))
+			providerName := strings.ToLower(strings.TrimSpace(plan.Provider))
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			reqStruct, err := buildRequest(planFromArg, planToArg, planAssetArg, planToAssetArg, planAmountBase, planAmountDecimal, planFromAmountForGas)
+			reqStruct, err := buildRequest(plan.FromArg, plan.ToArg, plan.AssetArg, plan.ToAssetArg, plan.AmountBase, plan.AmountDecimal, plan.FromAmountForGas)
 			if err != nil {
 				return err
 			}
@@ -79,12 +105,12 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			defer cancel()
 			start := time.Now()
 			action, providerInfoName, err := s.actionBuilderRegistry().BuildBridgeAction(ctx, providerName, reqStruct, providers.BridgeExecutionOptions{
-				Sender:           planFromAddress,
-				Recipient:        planRecipient,
-				SlippageBps:      planSlippageBps,
-				Simulate:         planSimulate,
-				RPCURL:           planRPCURL,
-				FromAmountForGas: planFromAmountForGas,
+				Sender:           plan.FromAddress,
+				Recipient:        plan.Recipient,
+				SlippageBps:      plan.SlippageBps,
+				Simulate:         plan.Simulate,
+				RPCURL:           plan.RPCURL,
+				FromAmountForGas: plan.FromAmountForGas,
 			})
 			if strings.TrimSpace(providerInfoName) == "" {
 				providerInfoName = providerName
@@ -104,136 +130,32 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&planProviderArg, "provider", "", "Bridge provider (across|lifi)")
-	planCmd.Flags().StringVar(&planFromArg, "from", "", "Source chain")
-	planCmd.Flags().StringVar(&planToArg, "to", "", "Destination chain")
-	planCmd.Flags().StringVar(&planAssetArg, "asset", "", "Asset on source chain")
-	planCmd.Flags().StringVar(&planToAssetArg, "to-asset", "", "Destination asset override")
-	planCmd.Flags().StringVar(&planAmountBase, "amount", "", "Amount in base units")
-	planCmd.Flags().StringVar(&planAmountDecimal, "amount-decimal", "", "Amount in decimal units")
-	planCmd.Flags().StringVar(&planFromAmountForGas, "from-amount-for-gas", "", "Optional amount in source token base units to reserve for destination native gas (LiFi)")
-	planCmd.Flags().StringVar(&planFromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().StringVar(&planRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	planCmd.Flags().Int64Var(&planSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
-	planCmd.Flags().BoolVar(&planSimulate, "simulate", true, "Include simulation checks during execution")
-	planCmd.Flags().StringVar(&planRPCURL, "rpc-url", "", "RPC URL override for source chain")
+	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Bridge provider (across|lifi)")
+	planCmd.Flags().StringVar(&plan.FromArg, "from", "", "Source chain")
+	planCmd.Flags().StringVar(&plan.ToArg, "to", "", "Destination chain")
+	planCmd.Flags().StringVar(&plan.AssetArg, "asset", "", "Asset on source chain")
+	planCmd.Flags().StringVar(&plan.ToAssetArg, "to-asset", "", "Destination asset override")
+	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
+	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.FromAmountForGas, "from-amount-for-gas", "", "Optional amount in source token base units to reserve for destination native gas (LiFi)")
+	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
+	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
+	planCmd.Flags().Int64Var(&plan.SlippageBps, "slippage-bps", 50, "Max slippage in basis points")
+	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
+	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for source chain")
 	_ = planCmd.MarkFlagRequired("from")
 	_ = planCmd.MarkFlagRequired("to")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
+	configureStructuredInput[bridgePlanArgs](planCmd, structuredInputOptions{Mutation: true})
 
-	var runProviderArg, runFromArg, runToArg, runAssetArg, runToAssetArg string
-	var runAmountBase, runAmountDecimal, runFromAddress, runRecipient, runFromAmountForGas string
-	var runSlippageBps int64
-	var runSimulate bool
-	var runRPCURL string
-	var runSigner, runKeySource, runPrivateKey, runPollInterval, runStepTimeout string
-	var runGasMultiplier float64
-	var runMaxFeeGwei, runMaxPriorityFeeGwei string
-	var runAllowMaxApproval, runUnsafeProviderTx bool
-	runCmd := &cobra.Command{
-		Use:   "run",
-		Short: "Plan and execute a bridge action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			providerName := strings.ToLower(strings.TrimSpace(runProviderArg))
-			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required")
-			}
-			txSigner, runSenderAddress, err := resolveRunSignerAndFromAddress(runSigner, runKeySource, runPrivateKey, runFromAddress)
-			if err != nil {
-				return err
-			}
-			reqStruct, err := buildRequest(runFromArg, runToArg, runAssetArg, runToAssetArg, runAmountBase, runAmountDecimal, runFromAmountForGas)
-			if err != nil {
-				return err
-			}
-			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
-			defer cancel()
-			start := time.Now()
-			action, providerInfoName, err := s.actionBuilderRegistry().BuildBridgeAction(ctx, providerName, reqStruct, providers.BridgeExecutionOptions{
-				Sender:           runSenderAddress,
-				Recipient:        runRecipient,
-				SlippageBps:      runSlippageBps,
-				Simulate:         runSimulate,
-				RPCURL:           runRPCURL,
-				FromAmountForGas: runFromAmountForGas,
-			})
-			if strings.TrimSpace(providerInfoName) == "" {
-				providerInfoName = providerName
-			}
-			statuses := []model.ProviderStatus{{Name: providerInfoName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			if err := s.actionStore.Save(action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-			execOpts, err := parseExecuteOptions(
-				runSimulate,
-				runPollInterval,
-				runStepTimeout,
-				runGasMultiplier,
-				runMaxFeeGwei,
-				runMaxPriorityFeeGwei,
-				runAllowMaxApproval,
-				runUnsafeProviderTx,
-			)
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
-		},
-	}
-	runCmd.Flags().StringVar(&runProviderArg, "provider", "", "Bridge provider (across|lifi)")
-	runCmd.Flags().StringVar(&runFromArg, "from", "", "Source chain")
-	runCmd.Flags().StringVar(&runToArg, "to", "", "Destination chain")
-	runCmd.Flags().StringVar(&runAssetArg, "asset", "", "Asset on source chain")
-	runCmd.Flags().StringVar(&runToAssetArg, "to-asset", "", "Destination asset override")
-	runCmd.Flags().StringVar(&runAmountBase, "amount", "", "Amount in base units")
-	runCmd.Flags().StringVar(&runAmountDecimal, "amount-decimal", "", "Amount in decimal units")
-	runCmd.Flags().StringVar(&runFromAmountForGas, "from-amount-for-gas", "", "Optional amount in source token base units to reserve for destination native gas (LiFi)")
-	runCmd.Flags().StringVar(&runFromAddress, "from-address", "", "Sender EOA address (defaults to signer address)")
-	runCmd.Flags().StringVar(&runRecipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	runCmd.Flags().Int64Var(&runSlippageBps, "slippage-bps", 50, "Max slippage in basis points")
-	runCmd.Flags().BoolVar(&runSimulate, "simulate", true, "Run preflight simulation before submission")
-	runCmd.Flags().StringVar(&runRPCURL, "rpc-url", "", "RPC URL override for source chain")
-	runCmd.Flags().StringVar(&runSigner, "signer", "local", "Signer backend (local)")
-	runCmd.Flags().StringVar(&runKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	runCmd.Flags().StringVar(&runPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	runCmd.Flags().StringVar(&runPollInterval, "poll-interval", "2s", "Receipt polling interval")
-	runCmd.Flags().StringVar(&runStepTimeout, "step-timeout", "2m", "Timeout per bridge wait stage (receipt or settlement polling)")
-	runCmd.Flags().Float64Var(&runGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	runCmd.Flags().StringVar(&runMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	runCmd.Flags().StringVar(&runMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	runCmd.Flags().BoolVar(&runAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount (needed for some provider routes, e.g. Across max approvals)")
-	runCmd.Flags().BoolVar(&runUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	_ = runCmd.MarkFlagRequired("from")
-	_ = runCmd.MarkFlagRequired("to")
-	_ = runCmd.MarkFlagRequired("asset")
-	_ = runCmd.MarkFlagRequired("provider")
-
-	var submitActionID string
-	var submitSimulate bool
-	var submitSigner, submitKeySource, submitPrivateKey, submitFromAddress, submitPollInterval, submitStepTimeout string
-	var submitGasMultiplier float64
-	var submitMaxFeeGwei, submitMaxPriorityFeeGwei string
-	var submitAllowMaxApproval, submitUnsafeProviderTx bool
+	var submit bridgeSubmitArgs
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing bridge action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(submitActionID)
+			actionID, err := resolveActionID(submit.ActionID)
 			if err != nil {
 				return err
 			}
@@ -250,25 +172,25 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submitSigner, submitKeySource, submitPrivateKey)
+			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(submitFromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submitFromAddress), txSigner.Address().Hex()) {
+			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
 			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
 			execOpts, err := parseExecuteOptions(
-				submitSimulate,
-				submitPollInterval,
-				submitStepTimeout,
-				submitGasMultiplier,
-				submitMaxFeeGwei,
-				submitMaxPriorityFeeGwei,
-				submitAllowMaxApproval,
-				submitUnsafeProviderTx,
+				submit.Simulate,
+				submit.PollInterval,
+				submit.StepTimeout,
+				submit.GasMultiplier,
+				submit.MaxFeeGwei,
+				submit.MaxPriorityFeeGwei,
+				submit.AllowMaxApproval,
+				submit.UnsafeProviderTx,
 			)
 			if err != nil {
 				return err
@@ -279,19 +201,20 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
 		},
 	}
-	submitCmd.Flags().StringVar(&submitActionID, "action-id", "", "Action identifier")
-	submitCmd.Flags().BoolVar(&submitSimulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submitSigner, "signer", "local", "Signer backend (local)")
-	submitCmd.Flags().StringVar(&submitKeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submitPrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submitFromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submitPollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submitStepTimeout, "step-timeout", "2m", "Timeout per bridge wait stage (receipt or settlement polling)")
-	submitCmd.Flags().Float64Var(&submitGasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submitMaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submitMaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submitAllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount (needed for some provider routes, e.g. Across max approvals)")
-	submitCmd.Flags().BoolVar(&submitUnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by bridge plan")
+	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
+	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local)")
+	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
+	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
+	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Timeout per bridge wait stage (receipt or settlement polling)")
+	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
+	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
+	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount (needed for some provider routes, e.g. Across max approvals)")
+	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	annotateStructuredSubmitCommand(submitCmd, bridgeSubmitArgs{})
 
 	var statusActionID string
 	statusCmd := &cobra.Command{
@@ -315,10 +238,10 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
 		},
 	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier")
+	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by bridge plan")
+	annotateExecutionStatusCommand(statusCmd)
 
 	root.AddCommand(planCmd)
-	root.AddCommand(runCmd)
 	root.AddCommand(submitCmd)
 	root.AddCommand(statusCmd)
 }

@@ -76,30 +76,32 @@ README.md                         # user-facing usage + caveats
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
 - TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
-- `swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
+- `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
+- Execution `plan` and `submit` commands also support `--input-json` and `--input-file` (`-` reads stdin); explicit flags override structured input values.
 - Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.
+- `schema` now includes inherited flags plus command/flag metadata (`required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints).
 - Metadata ownership is split by intent:
   - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
   - `internal/providers/*/client.go`: provider quote/read API base URLs.
   - `internal/id/id.go`: bootstrap token symbol/address registry for deterministic asset parsing.
 - Execution commands currently available:
-  - `swap plan|run|submit|status`
-  - `bridge plan|run|submit|status` (Across, LiFi)
-  - `approvals plan|run|submit|status`
-  - `transfer plan|run|submit|status`
-  - `lend supply|withdraw|borrow|repay plan|run|submit|status` (Aave, Morpho)
-  - `yield deposit|withdraw plan|run|submit|status` (Aave, Morpho)
-  - `rewards claim|compound plan|run|submit|status` (Aave)
+  - `swap plan|submit|status`
+  - `bridge plan|submit|status` (Across, LiFi)
+  - `approvals plan|submit|status`
+  - `transfer plan|submit|status`
+  - `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho)
+  - `yield deposit|withdraw plan|submit|status` (Aave, Morpho)
+  - `rewards claim|compound plan|submit|status` (Aave)
   - `actions list|show|estimate`
 - Execution builder architecture is intentionally split:
   - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
   - `lend`/`yield`/`rewards`/`approvals`/`transfer` action construction uses internal planners for deterministic contract-call composition.
-- All execution `run` / `submit` commands can broadcast transactions.
+- All execution `submit` commands can broadcast transactions.
 - Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts into larger approvals when required.
 - Bridge execution pre-sign checks validate provider settlement metadata/endpoints by default; `--unsafe-provider-tx` bypasses these guardrails.
-- LiFi bridge quote/plan/run support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- LiFi bridge quote/plan support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
-- Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
+- Rewards `--assets` flag accepts comma-separated on-chain addresses used by Aave incentives contracts; structured input accepts a JSON string array.
 - Aave execution has default pool-address-provider coverage for chain IDs `1`, `10`, `137`, `8453`, `42161`, and `43114`; override with `--pool-address` / `--pool-address-provider` otherwise.
 - Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
 - Morpho yield execution requires `--vault-address` (Morpho vault contract address).
@@ -115,7 +117,7 @@ README.md                         # user-facing usage + caveats
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|run|submit|status`, `actions list|show|estimate`) bypass cache initialization.
+- Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache initialization.
 - For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.

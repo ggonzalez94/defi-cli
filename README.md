@@ -16,7 +16,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
 - **Approvals, transfers & rewards** — create and execute ERC-20 approvals/transfers plus Aave rewards claim/compound flows.
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
-- **Automation-friendly** — JSON-first output, field selection (`--select`), strict mode, and a machine-readable schema export.
+- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input for mutation workflows, and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
 
 ## Documentation Site (Mintlify)
 
@@ -110,6 +110,7 @@ defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address
 defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --assets 0x... --reward-token 0x... --results-only
 defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
 defi transfer plan --chain taiko --asset USDC --amount 1000000 --from-address 0xYourEOA --recipient 0xRecipient --results-only
+defi transfer plan --input-json '{"chain":"taiko","asset":"USDC","amount":"1000000","from_address":"0xYourEOA","recipient":"0xRecipient"}' --results-only
 defi swap status --action-id <action_id> --results-only
 defi actions list --results-only
 defi actions estimate --action-id <action_id> --results-only
@@ -144,7 +145,7 @@ Swap execution flow (local signer):
 
 ```bash
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
-# or pass --private-key 0x... on run/submit commands for one-off usage
+# or pass --private-key 0x... on submit commands for one-off usage
 
 # 1) Plan only
 defi swap plan \
@@ -156,30 +157,37 @@ defi swap plan \
   --from-address 0xYourEOA \
   --results-only
 
-# 2) Execute in one command
-defi swap run \
-  --provider taikoswap \
-  --chain taiko \
-  --from-asset USDC \
-  --to-asset WETH \
-  --amount 1000000 \
-  --from-address 0xYourEOA \
+# 2) Execute the saved action
+defi swap submit \
+  --action-id <action_id> \
   --results-only
 ```
 
-`swap quote` (on-chain quote providers) and execution `plan`/`run` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`).
+Execution `plan` and `submit` commands also accept structured input for agents:
+
+```bash
+defi bridge plan --input-file ./bridge-plan.json --results-only
+defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","from_address":"0xYourEOA"}' --results-only
+defi swap submit --input-json '{"action_id":"<action_id>","from_address":"0xYourEOA"}' --results-only
+```
+
+For structured input, flags still win over JSON/file values when both are provided.
+
+`swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`).
 For bridge flows, `--rpc-url` applies to the source-chain execution RPC.
 
 Execution command surface:
 
-- `swap plan|run|submit|status`
-- `bridge plan|run|submit|status` (provider: `across|lifi`)
-- `approvals plan|run|submit|status`
-- `transfer plan|run|submit|status`
-- `lend supply|withdraw|borrow|repay plan|run|submit|status` (provider: `aave|morpho`)
-- `yield deposit|withdraw plan|run|submit|status` (provider: `aave|morpho`)
-- `rewards claim|compound plan|run|submit|status` (provider: `aave`)
+- `swap plan|submit|status`
+- `bridge plan|submit|status` (provider: `across|lifi`)
+- `approvals plan|submit|status`
+- `transfer plan|submit|status`
+- `lend supply|withdraw|borrow|repay plan|submit|status` (provider: `aave|morpho`)
+- `yield deposit|withdraw plan|submit|status` (provider: `aave|morpho`)
+- `rewards claim|compound plan|submit|status` (provider: `aave`)
 - `actions list|show|estimate`
+
+Schema output is designed for agent discovery. `defi schema` now includes inherited flags plus command/flag metadata such as `required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints.
 
 ## Command API Key Requirements
 
@@ -214,9 +222,9 @@ For persistent shell setup, add exports to your shell profile (for example `~/.z
 
 If a keyed provider is used without a key, CLI exits with code `10`.
 
-## Execution Signer Inputs (Run/Submit Commands)
+## Execution Signer Inputs (Submit Commands)
 
-Execution `run`/`submit` commands currently support a local key signer.
+Execution `submit` commands currently support a local key signer.
 
 Key input precedence:
 
@@ -232,7 +240,6 @@ Key env/file inputs (in precedence order when `--key-source auto` and `--private
 
 You can force source selection with `--key-source env|file|keystore`.
 
-`run` commands default sender to the loaded signer address; when `--from-address` is provided, it must match the signer.
 `submit` commands support optional `--from-address` as an explicit signer-address guard.
 
 ## Config (Optional)
@@ -270,7 +277,7 @@ providers:
     api_key_env: DEFI_UNISWAP_API_KEY
 ```
 
-`swap quote` (on-chain quote providers) and execution `plan`/`run` `--rpc-url` flags override chain default RPCs for that invocation.
+`swap quote` (on-chain quote providers) and execution `plan` `--rpc-url` flags override chain default RPCs for that invocation.
 `submit`/`status` commands use stored per-step RPC URLs from the persisted action.
 
 ## Execution Metadata Locations (Implementers)
@@ -287,7 +294,7 @@ providers:
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|run|submit|status`, `actions list|show|estimate`) bypass cache reads/writes.
+- Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache reads/writes.
 
 ## Caveats
 
@@ -326,12 +333,12 @@ providers:
 - LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
 - `--step-timeout` applies to each bridge wait stage (receipt and settlement polling); execution wait budget is derived from `--step-timeout` and remaining action stages.
-- LiFi bridge quote/plan/run support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- LiFi bridge quote/plan support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
 - Transfer execution pre-sign checks validate ERC-20 `transfer(to,amount)` calldata, recipient, amount, and token target invariants before signing.
 - Swap execution validates `--from-address` and `--recipient` as EVM hex addresses before planning transactions.
 - Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
-- All `run` / `submit` execution commands will broadcast signed transactions.
+- All `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
 - Selector choice is explicit for multi-provider flows; pass `--provider` (no implicit defaults).
 

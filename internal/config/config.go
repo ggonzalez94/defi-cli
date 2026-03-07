@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ggonzalez94/defi-cli/internal/fsutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -149,7 +150,7 @@ func defaultSettings() (Settings, error) {
 
 func resolveConfigPath(input string) (string, error) {
 	if strings.TrimSpace(input) != "" {
-		return input, nil
+		return fsutil.NormalizePath(input)
 	}
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {

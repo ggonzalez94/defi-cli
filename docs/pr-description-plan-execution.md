@@ -5,7 +5,7 @@ This PR moves `defi-cli` from a retrieval-only tool to a tool that can execute o
 
 The core design is an explicit two-step flow:
 - first `plan`: build and persist an action without broadcasting
-- then `run` or `submit`: execute immediately or execute a previously planned action
+- then `submit`: execute a previously planned action
 
 This lets agents and humans move from quote/data discovery to deterministic planning and then controlled execution, while keeping the same automation contract:
 - stable JSON envelopes
@@ -13,7 +13,7 @@ This lets agents and humans move from quote/data discovery to deterministic plan
 - canonical chain/asset/amount handling
 
 ## What’s New
-- Added execution lifecycle commands across DeFi domains: `plan`, `run`, `submit`, `status`.
+- Added execution lifecycle commands across DeFi domains: `plan`, `submit`, `status`.
 - Added persisted action tracking with `actions list` and `actions show`.
 - Added local signer support for execution (`env`, `file`, `keystore`, plus one-off `--private-key`).
 - Added execution support for:
@@ -26,11 +26,11 @@ This is the initial execution-capable set; more providers will be added under th
 
 ## API Surface
 ### Execution command matrix
-- `swap plan|run|submit|status`
-- `bridge plan|run|submit|status` (provider: `across|lifi`)
-- `approvals plan|run|submit|status`
-- `lend supply|withdraw|borrow|repay plan|run|submit|status` (provider: `aave|morpho`)
-- `rewards claim|compound plan|run|submit|status` (provider: `aave`)
+- `swap plan|submit|status`
+- `bridge plan|submit|status` (provider: `across|lifi`)
+- `approvals plan|submit|status`
+- `lend supply|withdraw|borrow|repay plan|submit|status` (provider: `aave|morpho`)
+- `rewards claim|compound plan|submit|status` (provider: `aave`)
 - `actions list|show`
 
 ### Required selectors
@@ -47,8 +47,8 @@ This is the initial execution-capable set; more providers will be added under th
 ## Signing and Simulation
 - Signing backend today is `local` only (`--signer local`).
 - Signer wiring is abstracted, so additional signer backends can be added in future releases without changing the command model.
-- `run` does plan + execute in one call; `submit` executes a previously planned action by `--action-id`.
-- In `run`, sender defaults to the loaded signer address when `--from-address` is omitted; when provided, it must match the signer.
+- `submit` executes a previously planned action by `--action-id`.
+- `submit` supports an optional `--from-address` signer-address guard.
 - `--simulate` is enabled by default and runs preflight transaction simulation before broadcast; disabling it is opt-in (`--simulate=false`).
 - `--step-timeout` and `--poll-interval` control confirmation waiting behavior during execution.
 
@@ -72,13 +72,13 @@ defi bridge submit --action-id <action_id> --results-only
 defi bridge status --action-id <action_id> --results-only
 ```
 
-### Story 2: Execute immediately when speed matters (Lending)
+### Story 2: Plan and submit a lending action
 ```bash
-# Aave supply in one command (chain name)
-defi lend supply run --provider aave --chain base --asset USDC --amount 1000000 --results-only
+# Aave supply plan (chain name)
+defi lend supply plan --provider aave --chain base --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 
-# Morpho supply in one command (numeric chain id + explicit market-id)
-defi lend supply run --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --results-only
+# Morpho supply later submit (numeric chain id + explicit market-id)
+defi lend supply submit --action-id <action_id> --results-only
 ```
 
 ### Story 3: Plan and submit rewards in separate steps
@@ -95,5 +95,4 @@ defi rewards claim submit --action-id <action_id> --results-only
 defi actions list --results-only
 defi actions show --action-id <action_id> --results-only
 ```
-
 

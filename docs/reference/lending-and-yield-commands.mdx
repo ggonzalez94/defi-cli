@@ -114,33 +114,42 @@ Flags:
 - `--opportunity-ids string` optional CSV filter from `yield opportunities`
 - `--limit int` max opportunities per provider (default `20`)
 
-## `yield deposit|withdraw plan|run|submit|status`
+## `yield deposit|withdraw plan|submit|status`
 
 ```bash
 defi yield deposit plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --from-address 0xYourEOA --results-only
-defi yield withdraw run --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 500000 --from-address 0xYourEOA --results-only
 defi yield deposit submit --action-id <action_id> --results-only
 ```
 
-Flags (plan/run):
+Flags (`plan`):
 
 - `--provider string` (`aave|morpho`) required
 - `--chain string` required
 - `--asset string` required
 - `--amount string` or `--amount-decimal string` required
-- `--from-address string` required for `plan`; optional for `run` (defaults to signer)
+- `--from-address string` required
 - `--vault-address string` required for `--provider morpho`
 - `--recipient string` optional (defaults to sender)
 - `--on-behalf-of string` optional (defaults to sender)
 - `--rpc-url string` optional
 - `--pool-address string` / `--pool-address-provider string` optional Aave overrides
-- execution controls: `--simulate`, signer flags, gas/fee flags, `--allow-max-approval`, `--unsafe-provider-tx`
+- planning controls: `--simulate`
+- structured input: `--input-json string` or `--input-file string` (`-` reads stdin)
 
-Flags (`submit|status`):
+Flags (`submit`):
 
 - `--action-id string` required
-- `submit` also supports signer/simulation/gas/policy override flags, same as other execution surfaces
+- `--input-json string` optional structured payload
+- `--input-file string` optional structured payload file or `-` for stdin
+- `submit` also supports signer/simulation/gas/policy override flags (`--from-address`, signer flags, gas/fee flags, `--allow-max-approval`, `--unsafe-provider-tx`)
+- explicit flags override structured input values
+
+Flags (`status`):
+
+- `--action-id string` required
+
+`lend ... plan|submit`, `yield ... plan|submit`, and `rewards ... plan|submit` follow the same structured-input pattern. For rewards structured input, `assets` accepts a JSON string array while the CLI flag remains comma-separated.
 
 ## Provider-selection note
 
