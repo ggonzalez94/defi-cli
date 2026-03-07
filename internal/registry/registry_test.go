@@ -126,17 +126,38 @@ func TestIsAllowedBridgeSettlementURL(t *testing.T) {
 	}
 }
 
+func TestHasBridgeExecutionTargetPolicy(t *testing.T) {
+	if !HasBridgeExecutionTargetPolicy("lifi", 8453) {
+		t.Fatal("expected lifi target policy coverage for base")
+	}
+	if !HasBridgeExecutionTargetPolicy("across", 1) {
+		t.Fatal("expected across target policy coverage for mainnet")
+	}
+	if HasBridgeExecutionTargetPolicy("across", 43114) {
+		t.Fatal("did not expect across target policy coverage for unsupported chain")
+	}
+	if HasBridgeExecutionTargetPolicy("unknown", 1) {
+		t.Fatal("did not expect target policy coverage for unknown provider")
+	}
+}
+
 func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
-	if !IsAllowedBridgeExecutionTarget("lifi", 1, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
-		t.Fatal("expected canonical lifi execution target to be allowed")
+	if !IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE") {
+		t.Fatal("expected canonical lifi target to be allowed on base")
 	}
-	if IsAllowedBridgeExecutionTarget("lifi", 1, "0x1111111111111111111111111111111111111111") {
-		t.Fatal("did not expect unknown lifi execution target to be allowed")
+	if IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1111111111111111111111111111111111111111") {
+		t.Fatal("did not expect unknown lifi target to be allowed")
 	}
-	if IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
-		t.Fatal("did not expect chain without allowlist coverage to be allowed")
+	if !IsAllowedBridgeExecutionTarget("across", 1, "0x767e4c20F521a829dE4Ffc40C25176676878147f") {
+		t.Fatal("expected canonical across target to be allowed on mainnet")
+	}
+	if IsAllowedBridgeExecutionTarget("across", 1, "not-an-address") {
+		t.Fatal("did not expect malformed target to be allowed")
+	}
+	if IsAllowedBridgeExecutionTarget("across", 43114, "0x767e4c20F521a829dE4Ffc40C25176676878147f") {
+		t.Fatal("did not expect target without chain coverage to be allowed")
 	}
 	if IsAllowedBridgeExecutionTarget("across", 1, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
-		t.Fatal("did not expect non-lifi provider to pass lifi execution target guardrail")
+		t.Fatal("did not expect unrelated provider target to be allowed")
 	}
 }

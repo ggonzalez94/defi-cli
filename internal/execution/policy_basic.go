@@ -37,7 +37,7 @@ func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []
 	case StepTypeSwap:
 		return validateSwapPolicy(action, step, chainID, data)
 	case StepTypeBridge:
-		return validateBridgePolicy(action, step, opts)
+		return validateBridgePolicy(action, step, chainID, opts)
 	default:
 		return nil
 	}
@@ -144,7 +144,7 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 	return nil
 }
 
-func validateBridgePolicy(action *Action, step *ActionStep, opts ExecuteOptions) error {
+func validateBridgePolicy(action *Action, step *ActionStep, chainID int64, opts ExecuteOptions) error {
 	if opts.UnsafeProviderTx {
 		return nil
 	}
@@ -167,6 +167,10 @@ func validateBridgePolicy(action *Action, step *ActionStep, opts ExecuteOptions)
 	}
 	if !registry.IsAllowedBridgeSettlementURL(provider, statusEndpoint) {
 		return clierr.New(clierr.CodeActionPlan, "bridge step settlement endpoint is not allowed; use --unsafe-provider-tx to override")
+	}
+	// Enforce canonical target checks only on provider/chain pairs with explicit registry coverage.
+	if registry.HasBridgeExecutionTargetPolicy(provider, chainID) && !registry.IsAllowedBridgeExecutionTarget(provider, chainID, step.Target) {
+		return clierr.New(clierr.CodeActionPlan, "bridge step target is not an allowed provider execution contract; use --unsafe-provider-tx to override")
 	}
 	return nil
 }

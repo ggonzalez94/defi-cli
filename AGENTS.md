@@ -98,7 +98,7 @@ README.md                         # user-facing usage + caveats
   - `lend`/`yield`/`rewards`/`approvals`/`transfer` action construction uses internal planners for deterministic contract-call composition.
 - All execution `submit` commands can broadcast transactions.
 - Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts into larger approvals when required.
-- Bridge execution pre-sign checks validate provider settlement metadata/endpoints by default; `--unsafe-provider-tx` bypasses these guardrails.
+- Bridge execution pre-sign checks validate canonical execution targets plus provider settlement metadata/endpoints on covered Across/LiFi source chains by default; `--unsafe-provider-tx` bypasses these guardrails.
 - LiFi bridge quote/plan support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
 - Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
 - Rewards `--assets` flag accepts comma-separated on-chain addresses used by Aave incentives contracts; structured input accepts a JSON string array.

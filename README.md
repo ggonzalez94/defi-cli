@@ -337,7 +337,7 @@ providers:
 - Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
 - Transfer execution pre-sign checks validate ERC-20 `transfer(to,amount)` calldata, recipient, amount, and token target invariants before signing.
 - Swap execution validates `--from-address` and `--recipient` as EVM hex addresses before planning transactions.
-- Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
+- Bridge execution pre-sign checks validate canonical execution targets plus settlement endpoints on covered Across/LiFi source chains; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
 - Selector choice is explicit for multi-provider flows; pass `--provider` (no implicit defaults).

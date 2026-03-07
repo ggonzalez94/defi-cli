@@ -229,8 +229,8 @@ func TestBuildBridgeActionSkipsApprovalWhenSpenderMissing(t *testing.T) {
 	}
 }
 
-func TestBuildBridgeActionRejectsDisallowedTransactionTarget(t *testing.T) {
-	quoteServer := newLiFiQuoteServerWithTxTo(t, "0x0000000000000000000000000000000000000ABC", "0x1111111111111111111111111111111111111111")
+func TestBuildBridgeActionAllowsNonCanonicalTransactionTargetAtPlanTime(t *testing.T) {
+	quoteServer := newLiFiQuoteServerWithTxTo(t, "", "0x1111111111111111111111111111111111111111")
 	defer quoteServer.Close()
 
 	c := New(httpx.New(2*time.Second, 0))
@@ -241,7 +241,7 @@ func TestBuildBridgeActionRejectsDisallowedTransactionTarget(t *testing.T) {
 	fromAsset, _ := id.ParseAsset("USDC", fromChain)
 	toAsset, _ := id.ParseAsset("USDC", toChain)
 
-	_, err := c.BuildBridgeAction(context.Background(), providers.BridgeQuoteRequest{
+	action, err := c.BuildBridgeAction(context.Background(), providers.BridgeQuoteRequest{
 		FromChain:       fromChain,
 		ToChain:         toChain,
 		FromAsset:       fromAsset,
@@ -254,8 +254,14 @@ func TestBuildBridgeActionRejectsDisallowedTransactionTarget(t *testing.T) {
 		RPCURL:    "http://127.0.0.1:1",
 		Recipient: "0x00000000000000000000000000000000000000AA",
 	})
-	if err == nil {
-		t.Fatal("expected disallowed transaction target error")
+	if err != nil {
+		t.Fatalf("expected plan-time target validation to be deferred, got err=%v", err)
+	}
+	if len(action.Steps) != 1 {
+		t.Fatalf("expected bridge-only step, got %d", len(action.Steps))
+	}
+	if action.Steps[0].Target != "0x1111111111111111111111111111111111111111" {
+		t.Fatalf("unexpected bridge target: %q", action.Steps[0].Target)
 	}
 }
 

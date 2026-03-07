@@ -244,9 +244,6 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "lifi transaction chain does not match source chain")
 	}
 	target := common.HexToAddress(strings.TrimSpace(resp.TransactionRequest.To)).Hex()
-	if !registry.IsAllowedBridgeExecutionTarget("lifi", req.FromChain.EVMChainID, target) {
-		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "lifi transaction target is not an allowed bridge contract; use --unsafe-provider-tx to override during submit")
-	}
 
 	rpcURL, err := registry.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
 	if err != nil {

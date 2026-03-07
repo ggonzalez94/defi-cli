@@ -101,7 +101,7 @@ Format:
 - Clarified release-channel behavior: prerelease tags are published as prereleases and no longer sync Mintlify `docs-live`; stable tags continue to drive production docs.
 
 ### Security
-- None yet.
+- Bridge `submit` now validates canonical Across/LiFi execution targets on covered source chains before signing, while keeping `--unsafe-provider-tx` as the explicit provider-payload override.
 
 ## [v0.3.1] - 2026-02-25
 
