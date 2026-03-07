@@ -18,28 +18,6 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Chains & protocols** — browse chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
 
-## Documentation Site (Mintlify)
-
-This repo includes a dedicated Mintlify docs site under [`docs/`](docs) (`docs/docs.json` + `.mdx` pages).
-
-Preview locally:
-
-```bash
-cd docs
-npx --yes mint@4.2.378 dev --no-open
-```
-
-Validate before publishing:
-
-```bash
-cd docs
-npx --yes mint@4.2.378 validate
-npx --yes mint@4.2.378 broken-links
-npx --yes mint@4.2.378 a11y
-```
-
-Production docs deployment should target `docs-live` in Mintlify Git settings. The release workflow syncs `docs-live` on stable release tags (non-prerelease) so live docs align with main-channel binaries.
-
 ## Install
 
 ### 1) Quick install (macOS/Linux)
@@ -333,3 +311,17 @@ go test -race ./...
 go vet ./...
 bash scripts/nightly_execution_smoke.sh
 ```
+
+### Documentation Site (Mintlify)
+
+The `docs/` directory contains a Mintlify docs site (`docs.json` + `.mdx` pages).
+
+```bash
+cd docs
+npx --yes mint@4.2.378 dev --no-open        # local preview
+npx --yes mint@4.2.378 validate             # validate before publishing
+npx --yes mint@4.2.378 broken-links
+npx --yes mint@4.2.378 a11y
+```
+
+Production docs deploy from the `docs-live` branch, which the release workflow syncs on stable (non-prerelease) tags.
