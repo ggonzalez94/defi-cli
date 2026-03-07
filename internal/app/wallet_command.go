@@ -103,6 +103,11 @@ func (s *runtimeState) newWalletCommand() *cobra.Command {
 	return root
 }
 
+type walletRPCClient interface {
+	BalanceAt(ctx context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error)
+	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
+}
+
 // fetchBalance queries the on-chain balance for a native token or ERC-20.
 func fetchBalance(ctx context.Context, rpcURL string, chain id.Chain, address common.Address, asset *id.Asset) (model.WalletBalance, error) {
 	client, err := ethclient.DialContext(ctx, rpcURL)
@@ -117,7 +122,7 @@ func fetchBalance(ctx context.Context, rpcURL string, chain id.Chain, address co
 	return fetchERC20Balance(ctx, client, chain, address, *asset)
 }
 
-func fetchNativeBalance(ctx context.Context, client *ethclient.Client, chain id.Chain, address common.Address) (model.WalletBalance, error) {
+func fetchNativeBalance(ctx context.Context, client walletRPCClient, chain id.Chain, address common.Address) (model.WalletBalance, error) {
 	balance, err := client.BalanceAt(ctx, address, nil)
 	if err != nil {
 		return model.WalletBalance{}, fmt.Errorf("eth_getBalance: %w", err)
@@ -131,7 +136,7 @@ func fetchNativeBalance(ctx context.Context, client *ethclient.Client, chain id.
 		ChainID:        chain.CAIP2,
 		AccountAddress: strings.ToLower(address.Hex()),
 		AssetType:      "native",
-		AssetID:        chain.CAIP2 + "/slip44:60",
+		AssetID:        nativeAssetID(chain),
 		Symbol:         nativeSymbol(chain),
 		Balance: model.AmountInfo{
 			AmountBaseUnits: baseUnits,
@@ -148,7 +153,7 @@ var (
 	erc20DecimalsSelector = common.Hex2Bytes("313ce567")
 )
 
-func fetchERC20Balance(ctx context.Context, client *ethclient.Client, chain id.Chain, address common.Address, asset id.Asset) (model.WalletBalance, error) {
+func fetchERC20Balance(ctx context.Context, client walletRPCClient, chain id.Chain, address common.Address, asset id.Asset) (model.WalletBalance, error) {
 	if asset.Address == "" {
 		return model.WalletBalance{}, fmt.Errorf("asset address is required for ERC-20 balance query")
 	}
@@ -197,7 +202,7 @@ func fetchERC20Balance(ctx context.Context, client *ethclient.Client, chain id.C
 }
 
 // fetchERC20Decimals queries the on-chain decimals() for a token contract.
-func fetchERC20Decimals(ctx context.Context, client *ethclient.Client, token common.Address) (int, error) {
+func fetchERC20Decimals(ctx context.Context, client walletRPCClient, token common.Address) (int, error) {
 	result, err := client.CallContract(ctx, ethereum.CallMsg{
 		To:   &token,
 		Data: erc20DecimalsSelector,
@@ -215,40 +220,46 @@ func fetchERC20Decimals(ctx context.Context, client *ethclient.Client, token com
 	return int(d.Int64()), nil
 }
 
+func nativeAssetID(chain id.Chain) string {
+	_, slip44Ref := nativeAssetInfo(chain)
+	return chain.CAIP2 + "/slip44:" + slip44Ref
+}
+
+func nativeAssetInfo(chain id.Chain) (symbol string, slip44Ref string) {
+	switch chain.EVMChainID {
+	case 1, 10, 324, 480, 4326, 534352, 57073, 59144, 81457, 167000, 167013, 42161, 8453:
+		return "ETH", "60"
+	case 56:
+		return "BNB", "714"
+	case 100:
+		return "XDAI", "700"
+	case 137:
+		return "POL", "966"
+	case 143:
+		return "MON", "268435779"
+	case 146:
+		return "S", "10007"
+	case 252:
+		return "frxETH", "60"
+	case 999:
+		return "HYPE", "2457"
+	case 4114:
+		return "cBTC", "60"
+	case 5000:
+		return "MNT", "60"
+	case 42220:
+		return "CELO", "52752"
+	case 43114:
+		return "AVAX", "9000"
+	case 80094:
+		return "BERA", "8008"
+	default:
+		return "ETH", "60"
+	}
+}
+
 // nativeSymbol returns the conventional native token symbol for a chain.
 func nativeSymbol(chain id.Chain) string {
-	switch chain.EVMChainID {
-	case 1, 10, 8453, 42161, 534352, 59144, 81457, 167000, 167013, 57073, 4326:
-		return "ETH"
-	case 56:
-		return "BNB"
-	case 137:
-		return "POL"
-	case 43114:
-		return "AVAX"
-	case 100:
-		return "XDAI"
-	case 5000:
-		return "MNT"
-	case 252:
-		return "frxETH"
-	case 324:
-		return "ETH"
-	case 480:
-		return "ETH"
-	case 42220:
-		return "CELO"
-	case 146:
-		return "S"
-	case 80094:
-		return "BERA"
-	case 999:
-		return "HYPE"
-	case 143:
-		return "MON"
-	case 4114:
-		return "cBTC"
-	default:
-		return "ETH"
-	}
+	symbol, _ := nativeAssetInfo(chain)
+	return symbol
 }
