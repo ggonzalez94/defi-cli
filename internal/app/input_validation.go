@@ -42,7 +42,7 @@ func normalizeAndValidateCommandFlags(cmd *cobra.Command) error {
 				}
 			}
 		case "stringSlice", "stringArray":
-			values, err := cmd.Flags().GetStringSlice(flag.Name)
+			values, err := stringValuesForValidation(cmd, flag)
 			if err != nil {
 				validationErr = clierr.Wrap(clierr.CodeUsage, "read --"+flag.Name, err)
 				return
@@ -56,6 +56,15 @@ func normalizeAndValidateCommandFlags(cmd *cobra.Command) error {
 		}
 	})
 	return validationErr
+}
+
+func stringValuesForValidation(cmd *cobra.Command, flag *pflag.Flag) ([]string, error) {
+	switch flag.Value.Type() {
+	case "stringArray":
+		return cmd.Flags().GetStringArray(flag.Name)
+	default:
+		return cmd.Flags().GetStringSlice(flag.Name)
+	}
 }
 
 func canonicalizeCLIPath(path string) (string, error) {
