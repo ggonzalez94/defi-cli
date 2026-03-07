@@ -99,7 +99,7 @@ func TestQuoteBridgeWithFromAmountForGas(t *testing.T) {
 				"estimate": {"toAmount":"500000000000000"}
 			}],
 			"transactionRequest": {
-				"to": "0x0000000000000000000000000000000000000DDD",
+				"to": "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE",
 				"from": "0x00000000000000000000000000000000000000AA",
 				"data": "0x1234",
 				"value": "0x0",
@@ -229,6 +229,36 @@ func TestBuildBridgeActionSkipsApprovalWhenSpenderMissing(t *testing.T) {
 	}
 }
 
+func TestBuildBridgeActionRejectsDisallowedTransactionTarget(t *testing.T) {
+	quoteServer := newLiFiQuoteServerWithTxTo(t, "0x0000000000000000000000000000000000000ABC", "0x1111111111111111111111111111111111111111")
+	defer quoteServer.Close()
+
+	c := New(httpx.New(2*time.Second, 0))
+	c.baseURL = quoteServer.URL
+
+	fromChain, _ := id.ParseChain("ethereum")
+	toChain, _ := id.ParseChain("base")
+	fromAsset, _ := id.ParseAsset("USDC", fromChain)
+	toAsset, _ := id.ParseAsset("USDC", toChain)
+
+	_, err := c.BuildBridgeAction(context.Background(), providers.BridgeQuoteRequest{
+		FromChain:       fromChain,
+		ToChain:         toChain,
+		FromAsset:       fromAsset,
+		ToAsset:         toAsset,
+		AmountBaseUnits: "1000000",
+		AmountDecimal:   "1",
+	}, providers.BridgeExecutionOptions{
+		Sender:    "0x00000000000000000000000000000000000000AA",
+		Simulate:  true,
+		RPCURL:    "http://127.0.0.1:1",
+		Recipient: "0x00000000000000000000000000000000000000AA",
+	})
+	if err == nil {
+		t.Fatal("expected disallowed transaction target error")
+	}
+}
+
 func TestBuildBridgeActionRejectsInvalidTransactionTarget(t *testing.T) {
 	quoteServer := newLiFiQuoteServerWithTxTo(t, "0x0000000000000000000000000000000000000ABC", "not-an-address")
 	defer quoteServer.Close()
@@ -260,7 +290,7 @@ func TestBuildBridgeActionRejectsInvalidTransactionTarget(t *testing.T) {
 }
 
 func newLiFiQuoteServer(t *testing.T, approvalAddress string) *httptest.Server {
-	return newLiFiQuoteServerWithTxTo(t, approvalAddress, "0x0000000000000000000000000000000000000DDD")
+	return newLiFiQuoteServerWithTxTo(t, approvalAddress, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE")
 }
 
 func newLiFiQuoteServerWithTxTo(t *testing.T, approvalAddress, txTo string) *httptest.Server {

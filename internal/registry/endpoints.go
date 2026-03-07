@@ -6,6 +6,12 @@ import (
 	"strings"
 )
 
+var lifiExecutionTargets = map[int64]map[string]struct{}{
+	1: {
+		"0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae": {},
+	},
+}
+
 const (
 	// Execution provider endpoints.
 	LiFiBaseURL         = "https://li.quest/v1"
@@ -64,6 +70,18 @@ func IsAllowedBridgeSettlementURL(provider, endpoint string) bool {
 		return false
 	}
 	return normalizedURLPath(parsed.Path) == normalizedURLPath(allowed.Path)
+}
+
+func IsAllowedBridgeExecutionTarget(provider string, chainID int64, target string) bool {
+	if !strings.EqualFold(strings.TrimSpace(provider), "lifi") {
+		return false
+	}
+	allowedByChain, ok := lifiExecutionTargets[chainID]
+	if !ok {
+		return false
+	}
+	_, ok = allowedByChain[strings.ToLower(strings.TrimSpace(target))]
+	return ok
 }
 
 func isLoopbackHost(host string) bool {

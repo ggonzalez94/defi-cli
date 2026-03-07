@@ -243,6 +243,10 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	if resp.TransactionRequest.ChainID != 0 && resp.TransactionRequest.ChainID != req.FromChain.EVMChainID {
 		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "lifi transaction chain does not match source chain")
 	}
+	target := common.HexToAddress(strings.TrimSpace(resp.TransactionRequest.To)).Hex()
+	if !registry.IsAllowedBridgeExecutionTarget("lifi", req.FromChain.EVMChainID, target) {
+		return execution.Action{}, clierr.New(clierr.CodeActionPlan, "lifi transaction target is not an allowed bridge contract; use --unsafe-provider-tx to override during submit")
+	}
 
 	rpcURL, err := registry.ResolveRPCURL(opts.RPCURL, req.FromChain.EVMChainID)
 	if err != nil {
@@ -263,7 +267,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		"from_asset_id":    req.FromAsset.AssetID,
 		"to_asset_id":      req.ToAsset.AssetID,
 		"route":            firstNonEmpty(resp.ToolDetails.Name, resp.Tool),
-		"approval_spender": resp.Estimate.ApprovalAddress,
+		"approval_spender": strings.TrimSpace(resp.Estimate.ApprovalAddress),
 	}
 	if fromAmountForGas != "" {
 		action.Metadata["from_amount_for_gas"] = fromAmountForGas
@@ -336,7 +340,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		ChainID:     req.FromChain.CAIP2,
 		RPCURL:      rpcURL,
 		Description: "Bridge transfer via LiFi route",
-		Target:      common.HexToAddress(resp.TransactionRequest.To).Hex(),
+		Target:      target,
 		Data:        ensureHexPrefix(resp.TransactionRequest.Data),
 		Value:       bridgeValue,
 		ExpectedOutputs: map[string]string{

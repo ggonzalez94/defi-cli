@@ -125,3 +125,18 @@ func TestIsAllowedBridgeSettlementURL(t *testing.T) {
 		t.Fatal("did not expect malformed endpoint to be allowed")
 	}
 }
+
+func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
+	if !IsAllowedBridgeExecutionTarget("lifi", 1, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
+		t.Fatal("expected canonical lifi execution target to be allowed")
+	}
+	if IsAllowedBridgeExecutionTarget("lifi", 1, "0x1111111111111111111111111111111111111111") {
+		t.Fatal("did not expect unknown lifi execution target to be allowed")
+	}
+	if IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
+		t.Fatal("did not expect chain without allowlist coverage to be allowed")
+	}
+	if IsAllowedBridgeExecutionTarget("across", 1, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
+		t.Fatal("did not expect non-lifi provider to pass lifi execution target guardrail")
+	}
+}
