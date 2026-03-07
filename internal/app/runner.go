@@ -250,6 +250,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 	cmd.AddCommand(s.newTransferCommand())
 	cmd.AddCommand(s.newActionsCommand())
 	cmd.AddCommand(s.newYieldCommand())
+	cmd.AddCommand(s.newWalletCommand())
 	cmd.AddCommand(newVersionCommand())
 
 	return cmd

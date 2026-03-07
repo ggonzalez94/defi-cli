@@ -15,6 +15,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics (volume, chain breakdown), and execute Across/LiFi bridge plans.
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
 - **Approvals, transfers & rewards** — create and execute ERC-20 approvals/transfers plus Aave rewards claim/compound flows.
+- **Wallet** — query native and ERC-20 token balances on any supported EVM chain (no API key required).
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input for mutation workflows, and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
 
@@ -89,6 +90,8 @@ defi providers list --results-only
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi assets resolve --chain base --symbol USDC --results-only
+defi wallet balance --chain 1 --address 0xYourEOA --results-only
+defi wallet balance --chain base --address 0xYourEOA --asset USDC --results-only
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi lend rates --provider morpho --chain 1 --asset USDC --results-only
 defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
@@ -288,7 +291,7 @@ providers:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `wallet balance`: `15s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
@@ -298,6 +301,8 @@ providers:
 
 ## Caveats
 
+- `wallet balance` currently supports EVM chains only; Solana is not yet supported.
+- `wallet balance` uses `eth_getBalance` for native tokens and ERC-20 `balanceOf` for tokens; it does not query pending/unconfirmed balances.
 - Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
 - `yield` and `lend` represent distinct user intents: use `yield` for passive deposit/withdraw flows and `lend` for market loan lifecycle (`supply|withdraw|borrow|repay`).
 - Morpho execution surfaces are intentionally split: `yield deposit|withdraw` target Morpho vaults (`--vault-address`), while `lend ...` targets Morpho Blue markets (`--market-id`).

@@ -10,6 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Added `wallet balance` command to query native or ERC-20 token balances by address and chain, using on-chain RPC calls (no API key required).
 - Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
 - Added swap execution workflow commands: `swap plan`, `swap submit`, and `swap status`.
 - Added bridge execution workflow commands: `bridge plan`, `bridge submit`, and `bridge status` (Across and LiFi providers).
