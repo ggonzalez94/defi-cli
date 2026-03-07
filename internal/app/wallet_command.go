@@ -141,8 +141,12 @@ func fetchNativeBalance(ctx context.Context, client *ethclient.Client, chain id.
 	}, nil
 }
 
-// erc20BalanceOfSelector is the 4-byte selector for balanceOf(address).
-var erc20BalanceOfSelector = common.Hex2Bytes("70a08231")
+var (
+	// erc20BalanceOfSelector is the 4-byte selector for balanceOf(address).
+	erc20BalanceOfSelector = common.Hex2Bytes("70a08231")
+	// erc20DecimalsSelector is the 4-byte selector for decimals().
+	erc20DecimalsSelector = common.Hex2Bytes("313ce567")
+)
 
 func fetchERC20Balance(ctx context.Context, client *ethclient.Client, chain id.Chain, address common.Address, asset id.Asset) (model.WalletBalance, error) {
 	if asset.Address == "" {
@@ -162,15 +166,18 @@ func fetchERC20Balance(ctx context.Context, client *ethclient.Client, chain id.C
 	if err != nil {
 		return model.WalletBalance{}, fmt.Errorf("balanceOf call: %w", err)
 	}
-
-	balance := new(big.Int)
-	if len(result) >= 32 {
-		balance.SetBytes(result[:32])
+	if len(result) < 32 {
+		return model.WalletBalance{}, fmt.Errorf("balanceOf returned %d bytes; target address may not be an ERC-20 contract", len(result))
 	}
+
+	balance := new(big.Int).SetBytes(result[:32])
 
 	decimals := asset.Decimals
 	if decimals <= 0 {
-		decimals = 18
+		decimals, err = fetchERC20Decimals(ctx, client, tokenAddr)
+		if err != nil {
+			return model.WalletBalance{}, fmt.Errorf("decimals() call: %w", err)
+		}
 	}
 	baseUnits := balance.String()
 	decimalStr := id.FormatDecimalCompat(baseUnits, decimals)
@@ -187,6 +194,25 @@ func fetchERC20Balance(ctx context.Context, client *ethclient.Client, chain id.C
 			Decimals:        decimals,
 		},
 	}, nil
+}
+
+// fetchERC20Decimals queries the on-chain decimals() for a token contract.
+func fetchERC20Decimals(ctx context.Context, client *ethclient.Client, token common.Address) (int, error) {
+	result, err := client.CallContract(ctx, ethereum.CallMsg{
+		To:   &token,
+		Data: erc20DecimalsSelector,
+	}, nil)
+	if err != nil {
+		return 0, err
+	}
+	if len(result) < 32 {
+		return 0, fmt.Errorf("decimals() returned %d bytes; target may not be an ERC-20 contract", len(result))
+	}
+	d := new(big.Int).SetBytes(result[:32])
+	if !d.IsInt64() || d.Int64() < 0 || d.Int64() > 255 {
+		return 0, fmt.Errorf("decimals() returned invalid value: %s", d.String())
+	}
+	return int(d.Int64()), nil
 }
 
 // nativeSymbol returns the conventional native token symbol for a chain.
