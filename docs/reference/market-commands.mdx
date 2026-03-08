@@ -11,6 +11,15 @@ List supported providers and capability auth metadata.
 defi providers list --results-only
 ```
 
+## `chains list`
+
+List all supported chains with slugs, CAIP-2 identifiers, namespaces, and accepted aliases. No API keys required; bypasses cache.
+
+```bash
+defi chains list --results-only
+defi chains list --results-only --select slug,caip2,namespace
+```
+
 ## `chains top`
 
 Top chains by TVL.

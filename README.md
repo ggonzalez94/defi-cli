@@ -86,6 +86,7 @@ defi version --long
 
 ```bash
 defi providers list --results-only
+defi chains list --results-only --select slug,caip2,namespace
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi assets resolve --chain base --symbol USDC --results-only
@@ -293,7 +294,7 @@ providers:
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
-- Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+- Metadata commands (`version`, `schema`, `providers list`, `chains list`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache reads/writes.
 
 ## Caveats

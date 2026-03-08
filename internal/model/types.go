@@ -62,6 +62,15 @@ type ProviderCapabilityAuth struct {
 	Description string `json:"description,omitempty"`
 }
 
+type SupportedChain struct {
+	Name       string   `json:"name"`
+	Slug       string   `json:"slug"`
+	CAIP2      string   `json:"caip2"`
+	Namespace  string   `json:"namespace"`
+	EVMChainID int64    `json:"evm_chain_id,omitempty"`
+	Aliases    []string `json:"aliases,omitempty"`
+}
+
 type ChainTVL struct {
 	Rank    int     `json:"rank"`
 	Chain   string  `json:"chain"`

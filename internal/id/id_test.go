@@ -427,6 +427,80 @@ func TestParseAssetMegaETHBootstrapAddresses(t *testing.T) {
 	}
 }
 
+func TestListChainsReturnsDedupedSortedEntries(t *testing.T) {
+	entries := ListChains()
+	if len(entries) == 0 {
+		t.Fatal("expected at least one chain entry")
+	}
+
+	// Verify uniqueness by CAIP-2.
+	seen := map[string]bool{}
+	for _, e := range entries {
+		if seen[e.Chain.CAIP2] {
+			t.Fatalf("duplicate CAIP-2: %s", e.Chain.CAIP2)
+		}
+		seen[e.Chain.CAIP2] = true
+	}
+
+	// Verify sorted by CAIP-2.
+	for i := 1; i < len(entries); i++ {
+		if entries[i].Chain.CAIP2 < entries[i-1].Chain.CAIP2 {
+			t.Fatalf("entries not sorted: %s before %s", entries[i-1].Chain.CAIP2, entries[i].Chain.CAIP2)
+		}
+	}
+
+	// Verify Ethereum is present with expected alias.
+	var found bool
+	for _, e := range entries {
+		if e.Chain.Slug == "ethereum" {
+			found = true
+			if e.Chain.CAIP2 != "eip155:1" {
+				t.Fatalf("expected ethereum CAIP2 eip155:1, got %s", e.Chain.CAIP2)
+			}
+			hasMainnet := false
+			for _, alias := range e.Aliases {
+				if alias == "mainnet" {
+					hasMainnet = true
+				}
+				if alias == "ethereum" {
+					t.Fatal("primary slug should not appear in aliases")
+				}
+			}
+			if !hasMainnet {
+				t.Fatal("expected 'mainnet' alias for ethereum")
+			}
+		}
+	}
+	if !found {
+		t.Fatal("expected to find ethereum in chain list")
+	}
+
+	// Verify Solana is present.
+	var solanaFound bool
+	for _, e := range entries {
+		if e.Chain.Slug == "solana" {
+			solanaFound = true
+			if !e.Chain.IsSolana() {
+				t.Fatal("expected solana chain to be solana namespace")
+			}
+		}
+	}
+	if !solanaFound {
+		t.Fatal("expected to find solana in chain list")
+	}
+}
+
+func TestListChainsAliasesExcludePrimarySlug(t *testing.T) {
+	entries := ListChains()
+	for _, e := range entries {
+		for _, alias := range e.Aliases {
+			if alias == e.Chain.Slug {
+				t.Fatalf("chain %s has primary slug in aliases", e.Chain.Slug)
+			}
+		}
+	}
+}
+
 func TestParseAssetFibrousChainBootstrapAddresses(t *testing.T) {
 	tests := []struct {
 		chainInput string

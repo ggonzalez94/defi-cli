@@ -5,6 +5,17 @@ description: Discover chains, protocols, and assets before running strategy-spec
 
 Use market-discovery commands to scope chains/protocols and normalize assets first.
 
+## Supported chains
+
+Enumerate all chains the CLI recognizes, including slugs and CAIP-2 identifiers. No API keys required.
+
+```bash
+defi chains list --results-only
+defi chains list --results-only --select slug,caip2,namespace
+```
+
+Use this to discover valid `--chain` values before running other commands.
+
 ## Top chains by TVL
 
 ```bash

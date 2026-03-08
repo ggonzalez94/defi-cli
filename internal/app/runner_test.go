@@ -396,6 +396,62 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 }
 
+func TestRunnerChainsList(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"chains", "list", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if len(out) == 0 {
+		t.Fatal("expected at least one chain in output")
+	}
+
+	// Verify each entry has required fields.
+	for _, item := range out {
+		if _, ok := item["name"].(string); !ok {
+			t.Fatalf("missing name field: %+v", item)
+		}
+		if _, ok := item["slug"].(string); !ok {
+			t.Fatalf("missing slug field: %+v", item)
+		}
+		if _, ok := item["caip2"].(string); !ok {
+			t.Fatalf("missing caip2 field: %+v", item)
+		}
+		if _, ok := item["namespace"].(string); !ok {
+			t.Fatalf("missing namespace field: %+v", item)
+		}
+	}
+
+	// Verify Ethereum is present.
+	var ethFound bool
+	for _, item := range out {
+		if item["slug"] == "ethereum" {
+			ethFound = true
+			if item["caip2"] != "eip155:1" {
+				t.Fatalf("expected ethereum caip2 eip155:1, got %v", item["caip2"])
+			}
+			if item["namespace"] != "eip155" {
+				t.Fatalf("expected eip155 namespace, got %v", item["namespace"])
+			}
+		}
+	}
+	if !ethFound {
+		t.Fatal("expected ethereum in chains list output")
+	}
+}
+
+func TestRunnerChainsListBypassesCache(t *testing.T) {
+	if shouldOpenCache("chains list") {
+		t.Fatal("chains list should bypass cache initialization")
+	}
+}
+
 func TestRunnerErrorEnvelopeIgnoresResultsOnly(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

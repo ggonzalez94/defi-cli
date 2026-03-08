@@ -311,6 +311,30 @@ func (s *runtimeState) newProvidersCommand() *cobra.Command {
 
 func (s *runtimeState) newChainsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "chains", Short: "Chain market data"}
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all supported chains with aliases (no keys required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			entries := id.ListChains()
+			result := make([]model.SupportedChain, 0, len(entries))
+			for _, e := range entries {
+				result = append(result, model.SupportedChain{
+					Name:       e.Chain.Name,
+					Slug:       e.Chain.Slug,
+					CAIP2:      e.Chain.CAIP2,
+					Namespace:  e.Chain.Namespace(),
+					EVMChainID: e.Chain.EVMChainID,
+					Aliases:    e.Aliases,
+				})
+			}
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), result, nil, cacheMetaBypass(), nil, false)
+		},
+	}
+	listResponse := schema.SchemaFromType([]model.SupportedChain{})
+	_ = schema.SetCommandMetadata(listCmd, schema.CommandMetadata{Response: &listResponse})
+	root.AddCommand(listCmd)
+
 	var limit int
 	topCmd := &cobra.Command{
 		Use:   "top",
@@ -2387,7 +2411,7 @@ func staleFallbackAllowed(err error) bool {
 func shouldOpenCache(commandPath string) bool {
 	path := normalizeCommandPath(commandPath)
 	switch path {
-	case "", "version", "schema", "providers", "providers list":
+	case "", "version", "schema", "providers", "providers list", "chains list":
 		return false
 	}
 	if isExecutionCommandPath(path) {

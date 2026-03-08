@@ -10,6 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Added `chains list` command to enumerate all supported chains with slugs, CAIP-2 identifiers, namespaces, and accepted aliases (no keys required, bypasses cache).
 - Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
 - Added swap execution workflow commands: `swap plan`, `swap submit`, and `swap status`.
 - Added bridge execution workflow commands: `bridge plan`, `bridge submit`, and `bridge status` (Across and LiFi providers).
