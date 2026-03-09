@@ -71,6 +71,17 @@ type SupportedChain struct {
 	Aliases    []string `json:"aliases,omitempty"`
 }
 
+type GasPrice struct {
+	ChainID        string `json:"chain_id"`
+	ChainName      string `json:"chain_name"`
+	BlockNumber    int64  `json:"block_number"`
+	EIP1559        bool   `json:"eip1559"`
+	BaseFeeGwei    string `json:"base_fee_gwei"`
+	PriorityFeeGwei string `json:"priority_fee_gwei"`
+	GasPriceGwei   string `json:"gas_price_gwei"`
+	FetchedAt      string `json:"fetched_at"`
+}
+
 type ChainTVL struct {
 	Rank    int     `json:"rank"`
 	Chain   string  `json:"chain"`

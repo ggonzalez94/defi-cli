@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"sort"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ggonzalez94/defi-cli/internal/cache"
 	"github.com/ggonzalez94/defi-cli/internal/config"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -22,6 +24,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/out"
@@ -398,6 +401,38 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 		Response: &assetsResponse,
 	})
 	root.AddCommand(assetsCmd)
+
+	var gasChainArg string
+	var gasRPCURL string
+	gasCmd := &cobra.Command{
+		Use:   "gas",
+		Short: "Current gas prices for an EVM chain (no keys required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			chain, err := id.ParseChain(gasChainArg)
+			if err != nil {
+				return err
+			}
+			if chain.Namespace() != "eip155" {
+				return clierr.New(clierr.CodeUnsupported, "chains gas is only supported for EVM chains")
+			}
+			rpcURL, err := registry.ResolveRPCURL(gasRPCURL, chain.EVMChainID)
+			if err != nil {
+				return clierr.Wrap(clierr.CodeUnavailable, "resolve rpc", err)
+			}
+			ctx := cmd.Context()
+			result, err := fetchGasPrice(ctx, chain, rpcURL, s.runner.now)
+			if err != nil {
+				return err
+			}
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), result, nil, cacheMetaBypass(), nil, false)
+		},
+	}
+	gasCmd.Flags().StringVar(&gasChainArg, "chain", "", "Chain id/name/CAIP-2")
+	gasCmd.Flags().StringVar(&gasRPCURL, "rpc-url", "", "RPC URL override")
+	_ = gasCmd.MarkFlagRequired("chain")
+	gasResponse := schema.SchemaFromType(model.GasPrice{})
+	_ = schema.SetCommandMetadata(gasCmd, schema.CommandMetadata{Response: &gasResponse})
+	root.AddCommand(gasCmd)
 
 	return root
 }
@@ -2290,6 +2325,57 @@ func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
 	return "raw:" + strings.ToUpper(strings.TrimSpace(rawInput))
 }
 
+func fetchGasPrice(ctx context.Context, chain id.Chain, rpcURL string, now func() time.Time) (model.GasPrice, error) {
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return model.GasPrice{}, clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
+	}
+	defer client.Close()
+
+	header, err := client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return model.GasPrice{}, clierr.Wrap(clierr.CodeUnavailable, "fetch block header", err)
+	}
+
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return model.GasPrice{}, clierr.Wrap(clierr.CodeUnavailable, "fetch gas price", err)
+	}
+
+	eip1559 := header.BaseFee != nil
+	var baseFee, priorityFee *big.Int
+	if eip1559 {
+		baseFee = header.BaseFee
+		priorityFee, err = client.SuggestGasTipCap(ctx)
+		if err != nil {
+			priorityFee = new(big.Int)
+		}
+	}
+
+	result := model.GasPrice{
+		ChainID:     chain.CAIP2,
+		ChainName:   chain.Name,
+		BlockNumber: header.Number.Int64(),
+		EIP1559:     eip1559,
+		GasPriceGwei: weiToGwei(gasPrice),
+		FetchedAt:   now().UTC().Format(time.RFC3339),
+	}
+	if eip1559 {
+		result.BaseFeeGwei = weiToGwei(baseFee)
+		result.PriorityFeeGwei = weiToGwei(priorityFee)
+	}
+	return result, nil
+}
+
+func weiToGwei(wei *big.Int) string {
+	if wei == nil {
+		return "0"
+	}
+	gwei := new(big.Float).SetInt(wei)
+	gwei.Quo(gwei, big.NewFloat(1e9))
+	return gwei.Text('f', 6)
+}
+
 func cacheKey(commandPath string, req any) string {
 	buf, _ := json.Marshal(req)
 	prefix := []byte(commandPath + "|" + cachePayloadSchemaVersion + "|")
@@ -2411,7 +2497,7 @@ func staleFallbackAllowed(err error) bool {
 func shouldOpenCache(commandPath string) bool {
 	path := normalizeCommandPath(commandPath)
 	switch path {
-	case "", "version", "schema", "providers", "providers list", "chains list":
+	case "", "version", "schema", "providers", "providers list", "chains list", "chains gas":
 		return false
 	}
 	if isExecutionCommandPath(path) {

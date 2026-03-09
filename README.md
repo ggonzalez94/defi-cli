@@ -15,7 +15,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics (volume, chain breakdown), and execute Across/LiFi bridge plans.
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
 - **Approvals, transfers & rewards** — create and execute ERC-20 approvals/transfers plus Aave rewards claim/compound flows.
-- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
+- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input for mutation workflows, and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
 
 ## Documentation Site (Mintlify)
@@ -87,6 +87,7 @@ defi version --long
 ```bash
 defi providers list --results-only
 defi chains list --results-only --select slug,caip2,namespace
+defi chains gas --chain 1 --results-only
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi assets resolve --chain base --symbol USDC --results-only
@@ -341,6 +342,7 @@ providers:
 - Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
+- `chains gas` returns live EVM gas prices via RPC; it is EVM-only and bypasses cache. Use `--rpc-url` to override the default chain RPC.
 - Selector choice is explicit for multi-provider flows; pass `--provider` (no implicit defaults).
 
 ## Exit Codes
