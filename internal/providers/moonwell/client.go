@@ -309,7 +309,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	}
 
 	if len(posMarkets) == 0 {
-		return nil, nil
+		return []model.LendPosition{}, nil
 	}
 
 	// Phase 2: get symbol + decimals for each underlying.
