@@ -10,7 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
-- Added `chains gas` command to query current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection (no keys required, bypasses cache, supports `--rpc-url` override).
+- Added `chains gas` command to query current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection (no keys required, bypasses cache, supports `--rpc-url` override). Accepts comma-separated chains for multi-chain batch queries with parallel RPC fetching and partial-result support.
 - Added `chains list` command to enumerate all supported chains with slugs, CAIP-2 identifiers, namespaces, and accepted aliases (no keys required, bypasses cache).
 - Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
 - Added swap execution workflow commands: `swap plan`, `swap submit`, and `swap status`.

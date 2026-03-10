@@ -113,7 +113,7 @@ README.md                         # user-facing usage + caveats
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
-- `chains gas` returns live EVM gas prices via RPC (EVM-only, no API key, bypasses cache); supports `--rpc-url` override.
+- `chains gas` returns live EVM gas prices via RPC (EVM-only, no API key, bypasses cache); supports `--rpc-url` override and comma-separated `--chain` for parallel multi-chain queries (returns array; `--rpc-url` disallowed with multiple chains).
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.

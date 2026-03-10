@@ -406,31 +406,96 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 	var gasRPCURL string
 	gasCmd := &cobra.Command{
 		Use:   "gas",
-		Short: "Current gas prices for an EVM chain (no keys required)",
+		Short: "Current gas prices for one or more EVM chains (no keys required)",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			chain, err := id.ParseChain(gasChainArg)
-			if err != nil {
-				return err
+			rawChains := strings.Split(gasChainArg, ",")
+			var chainArgs []string
+			for _, c := range rawChains {
+				c = strings.TrimSpace(c)
+				if c != "" {
+					chainArgs = append(chainArgs, c)
+				}
 			}
-			if chain.Namespace() != "eip155" {
-				return clierr.New(clierr.CodeUnsupported, "chains gas is only supported for EVM chains")
+			if len(chainArgs) == 0 {
+				return clierr.New(clierr.CodeUsage, "at least one chain is required")
 			}
-			rpcURL, err := registry.ResolveRPCURL(gasRPCURL, chain.EVMChainID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUnavailable, "resolve rpc", err)
+
+			if len(chainArgs) > 1 && strings.TrimSpace(gasRPCURL) != "" {
+				return clierr.New(clierr.CodeUsage, "--rpc-url cannot be used with multiple chains")
 			}
+
+			// Parse and validate all chains up front.
+			type chainEntry struct {
+				chain  id.Chain
+				rpcURL string
+			}
+			entries := make([]chainEntry, 0, len(chainArgs))
+			for _, raw := range chainArgs {
+				chain, err := id.ParseChain(raw)
+				if err != nil {
+					return err
+				}
+				if chain.Namespace() != "eip155" {
+					return clierr.New(clierr.CodeUnsupported, "chains gas is only supported for EVM chains: "+raw)
+				}
+				rpcURL, err := registry.ResolveRPCURL(gasRPCURL, chain.EVMChainID)
+				if err != nil {
+					return clierr.Wrap(clierr.CodeUnavailable, "resolve rpc for "+raw, err)
+				}
+				entries = append(entries, chainEntry{chain: chain, rpcURL: rpcURL})
+			}
+
 			ctx := cmd.Context()
-			result, err := fetchGasPrice(ctx, chain, rpcURL, s.runner.now)
-			if err != nil {
-				return err
+
+			// Single chain: preserve the original scalar response.
+			if len(entries) == 1 {
+				result, err := fetchGasPrice(ctx, entries[0].chain, entries[0].rpcURL, s.runner.now)
+				if err != nil {
+					return err
+				}
+				return s.emitSuccess(trimRootPath(cmd.CommandPath()), result, nil, cacheMetaBypass(), nil, false)
 			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), result, nil, cacheMetaBypass(), nil, false)
+
+			// Multiple chains: fetch in parallel, preserve input order.
+			type gasResult struct {
+				price model.GasPrice
+				err   error
+			}
+			slots := make([]gasResult, len(entries))
+			done := make(chan int, len(entries))
+			for i, e := range entries {
+				go func(idx int, entry chainEntry) {
+					price, err := fetchGasPrice(ctx, entry.chain, entry.rpcURL, s.runner.now)
+					slots[idx] = gasResult{price: price, err: err}
+					done <- idx
+				}(i, e)
+			}
+			for range entries {
+				<-done
+			}
+
+			prices := make([]model.GasPrice, 0, len(entries))
+			var warnings []string
+			for i, r := range slots {
+				if r.err != nil {
+					warnings = append(warnings, fmt.Sprintf("chain %s: %s", entries[i].chain.CAIP2, r.err.Error()))
+					continue
+				}
+				prices = append(prices, r.price)
+			}
+
+			if len(prices) == 0 {
+				return clierr.New(clierr.CodeUnavailable, "all chains failed; "+strings.Join(warnings, "; "))
+			}
+
+			partial := len(warnings) > 0
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), prices, warnings, cacheMetaBypass(), nil, partial)
 		},
 	}
-	gasCmd.Flags().StringVar(&gasChainArg, "chain", "", "Chain id/name/CAIP-2")
-	gasCmd.Flags().StringVar(&gasRPCURL, "rpc-url", "", "RPC URL override")
+	gasCmd.Flags().StringVar(&gasChainArg, "chain", "", "Chain id/name/CAIP-2 (comma-separated for multiple)")
+	gasCmd.Flags().StringVar(&gasRPCURL, "rpc-url", "", "RPC URL override (single chain only)")
 	_ = gasCmd.MarkFlagRequired("chain")
-	gasResponse := schema.SchemaFromType(model.GasPrice{})
+	gasResponse := schema.SchemaFromType([]model.GasPrice{})
 	_ = schema.SetCommandMetadata(gasCmd, schema.CommandMetadata{Response: &gasResponse})
 	root.AddCommand(gasCmd)
 

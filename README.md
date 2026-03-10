@@ -88,6 +88,7 @@ defi version --long
 defi providers list --results-only
 defi chains list --results-only --select slug,caip2,namespace
 defi chains gas --chain 1 --results-only
+defi chains gas --chain 1,10,137,8453,42161 --results-only   # multi-chain batch
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi assets resolve --chain base --symbol USDC --results-only
@@ -342,7 +343,7 @@ providers:
 - Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
 - All `submit` execution commands will broadcast signed transactions.
 - Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
-- `chains gas` returns live EVM gas prices via RPC; it is EVM-only and bypasses cache. Use `--rpc-url` to override the default chain RPC.
+- `chains gas` returns live EVM gas prices via RPC; it is EVM-only and bypasses cache. Use `--rpc-url` to override the default chain RPC. Pass comma-separated chains (e.g. `--chain 1,10,8453`) for parallel multi-chain queries; `--rpc-url` is only allowed with a single chain.
 - Selector choice is explicit for multi-provider flows; pass `--provider` (no implicit defaults).
 
 ## Exit Codes

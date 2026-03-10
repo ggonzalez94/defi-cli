@@ -169,6 +169,109 @@ func TestChainsGasEndToEndWithMockRPC(t *testing.T) {
 	}
 }
 
+func TestChainsGasMultipleChainsRejectsRPCURL(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"chains", "gas", "--chain", "1,10", "--rpc-url", "http://example.com"})
+	if code == 0 {
+		t.Fatal("expected non-zero exit code when --rpc-url used with multiple chains")
+	}
+	if !strings.Contains(stderr.String(), "rpc-url") {
+		t.Fatalf("expected rpc-url error message, got: %s", stderr.String())
+	}
+}
+
+func TestChainsGasMultipleChainsWithMockRPC(t *testing.T) {
+	// Use two separate mock RPC servers to simulate different chains.
+	srv1 := newMockRPCServer(t, mockRPCConfig{
+		baseFeeHex:     "0x3B9ACA00",  // 1 gwei
+		priorityFeeHex: "0x77359400",  // 2 gwei
+		gasPriceHex:    "0xB2D05E00",  // 3 gwei
+		blockNumberHex: "0x10",
+	})
+	defer srv1.Close()
+
+	srv2 := newMockRPCServer(t, mockRPCConfig{
+		baseFeeHex:     "0x77359400",  // 2 gwei
+		priorityFeeHex: "0x3B9ACA00",  // 1 gwei
+		gasPriceHex:    "0xEE6B2800",  // 4 gwei
+		blockNumberHex: "0x20",
+	})
+	defer srv2.Close()
+
+	// Test the fetchGasPrice function directly for two chains and verify array behavior.
+	chain1 := id.Chain{Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1}
+	chain2 := id.Chain{Name: "Optimism", Slug: "optimism", CAIP2: "eip155:10", EVMChainID: 10}
+	now := func() time.Time { return time.Date(2026, 3, 10, 12, 0, 0, 0, time.UTC) }
+
+	r1, err := fetchGasPrice(context.Background(), chain1, srv1.URL, now)
+	if err != nil {
+		t.Fatalf("fetchGasPrice chain1: %v", err)
+	}
+	r2, err := fetchGasPrice(context.Background(), chain2, srv2.URL, now)
+	if err != nil {
+		t.Fatalf("fetchGasPrice chain2: %v", err)
+	}
+
+	results := []model.GasPrice{r1, r2}
+	if len(results) != 2 {
+		t.Fatalf("expected 2 results, got %d", len(results))
+	}
+	if results[0].ChainID != "eip155:1" {
+		t.Fatalf("expected first result chain_id eip155:1, got %s", results[0].ChainID)
+	}
+	if results[1].ChainID != "eip155:10" {
+		t.Fatalf("expected second result chain_id eip155:10, got %s", results[1].ChainID)
+	}
+	if results[0].GasPriceGwei != "3.000000" {
+		t.Fatalf("expected chain1 gas_price_gwei 3.000000, got %s", results[0].GasPriceGwei)
+	}
+	if results[1].GasPriceGwei != "4.000000" {
+		t.Fatalf("expected chain2 gas_price_gwei 4.000000, got %s", results[1].GasPriceGwei)
+	}
+	if results[1].BlockNumber != 32 {
+		t.Fatalf("expected chain2 block_number 32, got %d", results[1].BlockNumber)
+	}
+}
+
+func TestChainsGasSingleChainStillReturnsScalar(t *testing.T) {
+	srv := newMockRPCServer(t, mockRPCConfig{
+		baseFeeHex:     "0x3B9ACA00",
+		priorityFeeHex: "0x77359400",
+		gasPriceHex:    "0xB2D05E00",
+		blockNumberHex: "0x10",
+	})
+	defer srv.Close()
+
+	var stdout, stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"chains", "gas", "--chain", "1", "--rpc-url", srv.URL, "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	// Single chain should return a scalar object, not an array.
+	var result model.GasPrice
+	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+		t.Fatalf("single chain should return scalar GasPrice, got parse error: %v output=%s", err, stdout.String())
+	}
+	if result.ChainID != "eip155:1" {
+		t.Fatalf("expected chain_id eip155:1, got %s", result.ChainID)
+	}
+}
+
+func TestChainsGasRejectsNonEVMInMulti(t *testing.T) {
+	var stdout, stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"chains", "gas", "--chain", "1,solana"})
+	if code == 0 {
+		t.Fatal("expected non-zero exit code when non-EVM chain in multi list")
+	}
+	if !strings.Contains(stderr.String(), "EVM") {
+		t.Fatalf("expected EVM-only error message, got: %s", stderr.String())
+	}
+}
+
 // --- mock RPC server ---
 
 type mockRPCConfig struct {
