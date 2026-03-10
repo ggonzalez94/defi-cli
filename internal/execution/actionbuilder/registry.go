@@ -157,8 +157,20 @@ func (r *Registry) BuildLendAction(ctx context.Context, req LendRequest) (execut
 			Simulate:        req.Simulate,
 			RPCURL:          req.RPCURL,
 		})
+	case "moonwell":
+		return planner.BuildMoonwellLendAction(ctx, planner.MoonwellLendRequest{
+			Verb:            req.Verb,
+			Chain:           req.Chain,
+			Asset:           req.Asset,
+			AmountBaseUnits: req.AmountBaseUnits,
+			Sender:          req.Sender,
+			Recipient:       req.Recipient,
+			Simulate:        req.Simulate,
+			RPCURL:          req.RPCURL,
+			MTokenAddress:   req.PoolAddress,
+		})
 	default:
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports provider=aave|morpho")
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "lend execution currently supports provider=aave|morpho|moonwell")
 	}
 }
 
@@ -220,8 +232,39 @@ func (r *Registry) BuildYieldAction(ctx context.Context, req YieldRequest) (exec
 			Simulate:        req.Simulate,
 			RPCURL:          req.RPCURL,
 		})
+	case "moonwell":
+		var lendVerb planner.AaveLendVerb
+		switch yieldVerb {
+		case string(YieldVerbDeposit):
+			lendVerb = planner.AaveVerbSupply
+		case string(YieldVerbWithdraw):
+			lendVerb = planner.AaveVerbWithdraw
+		default:
+			return execution.Action{}, clierr.New(clierr.CodeUsage, "yield action must be deposit or withdraw")
+		}
+		action, err := planner.BuildMoonwellLendAction(ctx, planner.MoonwellLendRequest{
+			Verb:            lendVerb,
+			Chain:           req.Chain,
+			Asset:           req.Asset,
+			AmountBaseUnits: req.AmountBaseUnits,
+			Sender:          req.Sender,
+			Recipient:       req.Recipient,
+			Simulate:        req.Simulate,
+			RPCURL:          req.RPCURL,
+			MTokenAddress:   req.PoolAddress,
+		})
+		if err != nil {
+			return execution.Action{}, err
+		}
+		action.IntentType = "yield_" + yieldVerb
+		if action.Metadata == nil {
+			action.Metadata = map[string]any{}
+		}
+		action.Metadata["yield_action"] = yieldVerb
+		action.Metadata["yield_product"] = "moonwell_market"
+		return action, nil
 	default:
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "yield execution currently supports provider=aave|morpho")
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "yield execution currently supports provider=aave|morpho|moonwell")
 	}
 }
 

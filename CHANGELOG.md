@@ -9,7 +9,11 @@ Format:
 
 ## [Unreleased]
 
-- None yet.
+### Added
+- Moonwell lending provider (Base, Optimism) — markets, rates, positions, yield opportunities/positions, and execution (supply, withdraw, borrow, repay)
+
+### Fixed
+- Optimism USDC bootstrap address now points to native USDC (`0x0b2c...ff85`) instead of bridged USDC.e; added separate `USDC.e` entry for the bridged variant.
 
 ## [v0.4.0] - 2026-03-07
 

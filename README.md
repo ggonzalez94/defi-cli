@@ -10,8 +10,8 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 
 ## Features
 
-- **Lending** — query markets/rates from Aave/Morpho/Kamino, account positions from Aave/Morpho, and execute loan actions (`lend supply|withdraw|borrow|repay`).
-- **Yield** — compare opportunities, query positions, fetch historical series, and execute deposit/withdraw flows (Aave, Morpho).
+- **Lending** — query markets/rates from Aave/Morpho/Kamino/Moonwell, account positions from Aave/Morpho/Moonwell, and execute loan actions (`lend supply|withdraw|borrow|repay`).
+- **Yield** — compare opportunities, query positions, fetch historical series, and execute deposit/withdraw flows (Aave, Morpho, Moonwell).
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics, and execute bridge plans (Across, LiFi).
 - **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, TaikoSwap, Fibrous, Bungee) and execute swap plans (TaikoSwap).
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
@@ -96,8 +96,8 @@ defi actions estimate --action-id <action_id> --results-only
 
 - `swap plan|submit|status` (TaikoSwap)
 - `bridge plan|submit|status` (Across, LiFi)
-- `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho)
-- `yield deposit|withdraw plan|submit|status` (Aave, Morpho)
+- `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho, Moonwell)
+- `yield deposit|withdraw plan|submit|status` (Aave, Morpho, Moonwell)
 - `rewards claim|compound plan|submit|status` (Aave)
 - `approvals plan|submit|status`
 - `transfer plan|submit|status`
@@ -105,7 +105,7 @@ defi actions estimate --action-id <action_id> --results-only
 
 All `plan` commands support `--rpc-url` to override chain default RPCs.
 `plan` and `submit` accept `--input-json` / `--input-file` for structured input; explicit flags override JSON values.
-`--providers` flags accept provider names from `defi providers list` (e.g. `aave,morpho,kamino`).
+`--providers` flags accept provider names from `defi providers list` (e.g. `aave,morpho,kamino,moonwell`).
 
 ### More quote examples
 
@@ -246,6 +246,7 @@ providers:
 - `yield` and `lend` are split by intent: `yield` for passive deposits/withdrawals, `lend` for loan lifecycle.
 - Morpho: `yield deposit|withdraw` targets vaults (`--vault-address`), `lend` targets markets (`--market-id`).
 - Aave execution auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche; use `--pool-address` on other chains.
+- Moonwell execution targets mToken contracts (Compound v2 style) on Base and Optimism; use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset.
 - Bridge execution waits for destination settlement; adjust `--step-timeout` for slower routes.
 - Pre-sign checks enforce bounded ERC-20 approvals by default; use `--allow-max-approval` to opt in to larger approvals.
 - Bridge pre-sign checks validate settlement endpoints; use `--unsafe-provider-tx` to bypass.
@@ -281,7 +282,7 @@ cmd/
 internal/
   app/runner.go                   # command wiring, routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/                 # lending + yield (read + execution)
+    aave/ morpho/ moonwell/       # lending + yield (read + execution)
     defillama/                    # normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes + lifi execution planning
     oneinch/ uniswap/ taikoswap/  # swap (quote + taikoswap execution planning)

@@ -38,3 +38,25 @@ func AavePoolAddressProvider(chainID int64) (string, bool) {
 	value, ok := aavePoolAddressProviderByChainID[chainID]
 	return value, ok
 }
+
+// Canonical Moonwell Comptroller (Unitroller) contracts per chain.
+var moonwellComptrollerByChainID = map[int64]string{
+	8453: "0xfBb21d0380beE3312B33c4353c8936a0F13EF26C", // Base
+	10:   "0xCa889f40aae37FFf165BccF69aeF1E82b5C511B9", // Optimism
+}
+
+func MoonwellComptroller(chainID int64) (string, bool) {
+	value, ok := moonwellComptrollerByChainID[chainID]
+	return value, ok
+}
+
+// Canonical Moonwell MultiRewardDistributor contracts per chain.
+var moonwellRewardDistributorByChainID = map[int64]string{
+	8453: "0xe9005b078701e2A0948D2EaC43010D35870Ad9d2", // Base
+	10:   "0xF9524bfa18C19C3E605FbfE8DFd05C6e967574Aa", // Optimism
+}
+
+func MoonwellRewardDistributor(chainID int64) (string, bool) {
+	value, ok := moonwellRewardDistributorByChainID[chainID]
+	return value, ok
+}

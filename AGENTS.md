@@ -34,7 +34,7 @@ cmd/
 internal/
   app/runner.go                   # command wiring, provider routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/                 # lending + yield (read + execution)
+    aave/ morpho/ moonwell/       # lending + yield (read + execution)
     defillama/                    # market/yield normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes + lifi execution planning
     oneinch/ uniswap/ taikoswap/  # swap quotes + uniswap-v3-compatible execution planning (taikoswap today)
@@ -67,10 +67,10 @@ README.md                         # user-facing usage + caveats
 
 - Error output always returns a full envelope, even with `--results-only` or `--select`.
 - Config precedence is `flags > env > config file > defaults`.
-- `yield --providers` expects provider names (`aave,morpho,kamino`), not protocol categories.
-- Lending routes by `--provider` use direct protocol adapters (`aave`, `morpho`, `kamino`).
-- `lend positions` currently supports `--provider aave|morpho`; `kamino` does not expose positions yet.
-- `yield positions` currently supports `aave|morpho`; `kamino` does not expose positions yet.
+- `yield --providers` expects provider names (`aave,morpho,kamino,moonwell`), not protocol categories.
+- Lending routes by `--provider` use direct protocol adapters (`aave`, `morpho`, `kamino`, `moonwell`).
+- `lend positions` currently supports `--provider aave|morpho|moonwell`; `kamino` does not expose positions yet.
+- `yield positions` currently supports `aave|morpho|moonwell`; `kamino` does not expose positions yet.
 - `lend positions --type all` intentionally returns non-overlapping intents (`supply`, `borrow`, `collateral`) for automation-friendly filtering.
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
@@ -89,8 +89,8 @@ README.md                         # user-facing usage + caveats
   - `bridge plan|submit|status` (Across, LiFi)
   - `approvals plan|submit|status`
   - `transfer plan|submit|status`
-  - `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho)
-  - `yield deposit|withdraw plan|submit|status` (Aave, Morpho)
+  - `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho, Moonwell)
+  - `yield deposit|withdraw plan|submit|status` (Aave, Morpho, Moonwell)
   - `rewards claim|compound plan|submit|status` (Aave)
   - `actions list|show|estimate`
 - Execution builder architecture is intentionally split:
@@ -105,6 +105,9 @@ README.md                         # user-facing usage + caveats
 - Aave execution has default pool-address-provider coverage for chain IDs `1`, `10`, `137`, `8453`, `42161`, and `43114`; override with `--pool-address` / `--pool-address-provider` otherwise.
 - Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
 - Morpho yield execution requires `--vault-address` (Morpho vault contract address).
+- Moonwell lending/yield uses on-chain RPC reads (no API key required); supported on Base and Optimism.
+- Moonwell execution targets mToken contracts (Compound v2 style); use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset via `Comptroller.getAllMarkets()`.
+- Moonwell's WETH mToken (mWETH) auto-unwraps to native ETH on borrow/withdraw and expects native ETH (not WETH) for supply/repay on some chains. Callers (UIs, automation) must wrap ETH → WETH before calling `repayBorrow` or handle the native ETH received from `borrow`/`redeemUnderlying`. The CLI planner currently uses the standard ERC-20 path (approve + call with value=0), so WETH wrapping is the caller's responsibility.
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
 - `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.

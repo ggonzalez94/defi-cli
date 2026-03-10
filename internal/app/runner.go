@@ -35,6 +35,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/jupiter"
 	"github.com/ggonzalez94/defi-cli/internal/providers/kamino"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
+	"github.com/ggonzalez94/defi-cli/internal/providers/moonwell"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
 	"github.com/ggonzalez94/defi-cli/internal/providers/oneinch"
 	"github.com/ggonzalez94/defi-cli/internal/providers/taikoswap"
@@ -148,18 +149,21 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				aaveProvider := aave.New(httpClient)
 				morphoProvider := morpho.New(httpClient)
 				kaminoProvider := kamino.New(httpClient)
+				moonwellProvider := moonwell.New()
 				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
 				taikoSwapProvider := taikoswap.New()
 				s.marketProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
 					"aave":   aaveProvider,
 					"morpho": morphoProvider,
-					"kamino": kaminoProvider,
+					"kamino":   kaminoProvider,
+					"moonwell": moonwellProvider,
 				}
 				s.yieldProviders = map[string]providers.YieldProvider{
 					"aave":   aaveProvider,
 					"morpho": morphoProvider,
-					"kamino": kaminoProvider,
+					"kamino":   kaminoProvider,
+					"moonwell": moonwellProvider,
 				}
 
 				s.bridgeProviders = map[string]providers.BridgeProvider{
@@ -183,6 +187,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					aaveProvider.Info(),
 					morphoProvider.Info(),
 					kaminoProvider.Info(),
+					moonwellProvider.Info(),
 					s.bridgeProviders["across"].Info(),
 					s.bridgeProviders["lifi"].Info(),
 					s.bridgeProviders["bungee"].Info(),
@@ -503,7 +508,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	marketsCmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino)")
+	marketsCmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
@@ -541,7 +546,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	ratesCmd.Flags().StringVar(&ratesProvider, "provider", "", "Lending provider (aave, morpho, kamino)")
+	ratesCmd.Flags().StringVar(&ratesProvider, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
@@ -613,7 +618,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			})
 		},
 	}
-	positionsCmd.Flags().StringVar(&positionsProvider, "provider", "", "Lending provider (aave, morpho)")
+	positionsCmd.Flags().StringVar(&positionsProvider, "provider", "", "Lending provider (aave, morpho, moonwell)")
 	positionsCmd.Flags().StringVar(&positionsChain, "chain", "", "Chain identifier")
 	positionsCmd.Flags().StringVar(&positionsAddress, "address", "", "Position owner address")
 	positionsCmd.Flags().StringVar(&positionsAsset, "asset", "", "Optional asset filter (symbol/address/CAIP-19)")
