@@ -1933,6 +1933,8 @@ func yieldProviderSupportsChain(name string, chain id.Chain) bool {
 		return chain.IsSolana()
 	case "aave", "morpho":
 		return chain.IsEVM()
+	case "moonwell":
+		return chain.IsEVM() && (chain.EVMChainID == 8453 || chain.EVMChainID == 10)
 	default:
 		return true
 	}

@@ -42,6 +42,7 @@ type LendPositionsRequest struct {
 	Asset        id.Asset
 	PositionType LendPositionType
 	Limit        int
+	RPCURL       string // optional RPC URL override (used by on-chain providers like Moonwell)
 }
 
 type LendingPositionsProvider interface {

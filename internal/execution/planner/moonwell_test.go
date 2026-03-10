@@ -88,7 +88,7 @@ func TestBuildMoonwellSupplyWithExplicitMToken(t *testing.T) {
 		Asset:           asset,
 		AmountBaseUnits: "1000000",
 		Sender:          testSender,
-		Recipient:       testRecipient,
+		Recipient:       testSender,
 		Simulate:        true,
 		RPCURL:          rpc.URL,
 		MTokenAddress:   testMToken,
@@ -120,6 +120,28 @@ func TestBuildMoonwellSupplyWithExplicitMToken(t *testing.T) {
 	}
 	if action.Steps[2].StepID != "moonwell-supply" {
 		t.Fatalf("unexpected step ID: %s", action.Steps[2].StepID)
+	}
+}
+
+func TestBuildMoonwellLendRejectsAlternateRecipient(t *testing.T) {
+	chain := id.Chain{CAIP2: "eip155:8453", EVMChainID: 8453}
+	asset := id.Asset{Address: testUnderlying, AssetID: "eip155:8453/erc20:" + testUnderlying}
+
+	_, err := BuildMoonwellLendAction(context.Background(), MoonwellLendRequest{
+		Verb:            AaveVerbSupply,
+		Chain:           chain,
+		Asset:           asset,
+		AmountBaseUnits: "1000000",
+		Sender:          testSender,
+		Recipient:       testRecipient,
+		Simulate:        true,
+		MTokenAddress:   testMToken,
+	})
+	if err == nil {
+		t.Fatal("expected error when recipient differs from sender")
+	}
+	if !strings.Contains(err.Error(), "alternate recipients") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }
 
@@ -232,7 +254,7 @@ func TestBuildMoonwellRepay(t *testing.T) {
 		Asset:           asset,
 		AmountBaseUnits: "750000",
 		Sender:          testSender,
-		Recipient:       testRecipient,
+		Recipient:       testSender,
 		Simulate:        true,
 		RPCURL:          rpc.URL,
 		MTokenAddress:   testMToken,

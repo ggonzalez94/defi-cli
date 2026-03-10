@@ -185,7 +185,11 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		return nil, clierr.New(clierr.CodeUsage, "lend positions requires a valid EVM address")
 	}
 
-	rpcURL, err := registry.ResolveRPCURL(c.rpcOverride, req.Chain.EVMChainID)
+	rpcOverride := c.rpcOverride
+	if req.RPCURL != "" {
+		rpcOverride = req.RPCURL
+	}
+	rpcURL, err := registry.ResolveRPCURL(rpcOverride, req.Chain.EVMChainID)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeUnsupported, "resolve rpc url", err)
 	}
@@ -491,6 +495,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		Asset:        req.Asset,
 		PositionType: providers.LendPositionTypeAll,
 		Limit:        req.Limit,
+		RPCURL:       req.RPCURL,
 	})
 	if err != nil {
 		return nil, err

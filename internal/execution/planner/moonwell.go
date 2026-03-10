@@ -53,6 +53,9 @@ func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (exec
 	if !common.IsHexAddress(recipient) {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "invalid recipient address")
 	}
+	if !strings.EqualFold(recipient, sender) {
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "moonwell does not support alternate recipients; Compound v2 calls operate on msg.sender only")
+	}
 	if !common.IsHexAddress(req.Asset.Address) {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "moonwell lend asset must resolve to an ERC20 address")
 	}
