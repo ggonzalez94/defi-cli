@@ -11,6 +11,9 @@ import (
 
 var decimalPattern = regexp.MustCompile(`^[0-9]+(\.[0-9]+)?$`)
 
+// MaxUint256 is the decimal string representation of 2^256 - 1.
+const MaxUint256 = "115792089237316195423570985008687907853269984665640564039457584007913129639935"
+
 func NormalizeAmount(baseUnits, decimal string, decimals int) (string, string, error) {
 	if baseUnits != "" && decimal != "" {
 		return "", "", clierr.New(clierr.CodeUsage, "use either --amount or --amount-decimal, not both")
@@ -20,6 +23,11 @@ func NormalizeAmount(baseUnits, decimal string, decimals int) (string, string, e
 	}
 	if decimals < 0 {
 		return "", "", clierr.New(clierr.CodeUsage, "decimals must be >= 0")
+	}
+
+	// "max" resolves to uint256.max — used by repay to close full borrow balance.
+	if strings.EqualFold(strings.TrimSpace(baseUnits), "max") {
+		return MaxUint256, "max", nil
 	}
 
 	if baseUnits != "" {
