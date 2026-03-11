@@ -228,6 +228,128 @@ func TestProtocolsCategoriesDeterministicTieBreak(t *testing.T) {
 	}
 }
 
+func TestStablecoinsTopSortsAndLimits(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoins", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"peggedAssets":[
+				{"name":"Tether","symbol":"USDT","pegType":"peggedUSD","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedUSD":120000000000},"circulatingPrevDay":{"peggedUSD":119500000000},
+				 "circulatingPrevWeek":{"peggedUSD":118000000000},"circulatingPrevMonth":{"peggedUSD":115000000000},
+				 "chains":["Ethereum","Tron","BSC","Arbitrum","Solana"],"price":1.0001},
+				{"name":"USD Coin","symbol":"USDC","pegType":"peggedUSD","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedUSD":55000000000},"circulatingPrevDay":{"peggedUSD":54800000000},
+				 "circulatingPrevWeek":{"peggedUSD":54000000000},"circulatingPrevMonth":{"peggedUSD":52000000000},
+				 "chains":["Ethereum","Base","Solana"],"price":0.9999},
+				{"name":"Dai","symbol":"DAI","pegType":"peggedUSD","pegMechanism":"crypto-backed",
+				 "circulating":{"peggedUSD":5000000000},"circulatingPrevDay":{"peggedUSD":4990000000},
+				 "circulatingPrevWeek":{"peggedUSD":4900000000},"circulatingPrevMonth":{"peggedUSD":4800000000},
+				 "chains":["Ethereum","Polygon"],"price":1.0},
+				{"name":"STASIS EURO","symbol":"EURS","pegType":"peggedEUR","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedUSD":100000000},"circulatingPrevDay":{"peggedUSD":99000000},
+				 "circulatingPrevWeek":{"peggedUSD":98000000},"circulatingPrevMonth":{"peggedUSD":95000000},
+				 "chains":["Ethereum"],"price":1.1}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinsTop(context.Background(), "", 2)
+	if err != nil {
+		t.Fatalf("StablecoinsTop failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].Symbol != "USDT" || items[0].Rank != 1 {
+		t.Fatalf("expected USDT first, got %+v", items[0])
+	}
+	if items[1].Symbol != "USDC" || items[1].Rank != 2 {
+		t.Fatalf("expected USDC second, got %+v", items[1])
+	}
+	if items[0].CirculatingUSD != 120000000000 {
+		t.Fatalf("unexpected circulating for USDT: %+v", items[0])
+	}
+	if items[0].Chains != 5 {
+		t.Fatalf("expected 5 chains for USDT, got %d", items[0].Chains)
+	}
+	if items[0].Price != 1.0001 {
+		t.Fatalf("unexpected price for USDT: %f", items[0].Price)
+	}
+	expectedDayChange := 120000000000.0 - 119500000000.0
+	if items[0].DayChangeUSD != expectedDayChange {
+		t.Fatalf("unexpected day change: got %f, want %f", items[0].DayChangeUSD, expectedDayChange)
+	}
+}
+
+func TestStablecoinsTopFiltersByPegType(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoins", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"peggedAssets":[
+				{"name":"Tether","symbol":"USDT","pegType":"peggedUSD","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedUSD":120000000000},"circulatingPrevDay":{"peggedUSD":119500000000},
+				 "circulatingPrevWeek":{"peggedUSD":118000000000},"circulatingPrevMonth":{"peggedUSD":115000000000},
+				 "chains":["Ethereum"],"price":1.0},
+				{"name":"STASIS EURO","symbol":"EURS","pegType":"peggedEUR","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedUSD":100000000},"circulatingPrevDay":{"peggedUSD":99000000},
+				 "circulatingPrevWeek":{"peggedUSD":98000000},"circulatingPrevMonth":{"peggedUSD":95000000},
+				 "chains":["Ethereum"],"price":1.1}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinsTop(context.Background(), "peggedEUR", 20)
+	if err != nil {
+		t.Fatalf("StablecoinsTop failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 EUR-pegged item, got %d", len(items))
+	}
+	if items[0].Symbol != "EURS" || items[0].PegType != "peggedEUR" {
+		t.Fatalf("unexpected filtered result: %+v", items[0])
+	}
+}
+
+func TestStablecoinsTopNullPrice(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoins", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"peggedAssets":[
+				{"name":"NoPrice","symbol":"NP","pegType":"peggedUSD","pegMechanism":"algo",
+				 "circulating":{"peggedUSD":1000},"circulatingPrevDay":{"peggedUSD":1000},
+				 "circulatingPrevWeek":{"peggedUSD":1000},"circulatingPrevMonth":{"peggedUSD":1000},
+				 "chains":["Ethereum"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinsTop(context.Background(), "", 20)
+	if err != nil {
+		t.Fatalf("StablecoinsTop failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+	if items[0].Price != 0 {
+		t.Fatalf("expected zero price for null, got %f", items[0].Price)
+	}
+}
+
 func TestListBridgesRequiresAPIKey(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	_, err := c.ListBridges(context.Background(), providers.BridgeListRequest{Limit: 5, IncludeChains: true})

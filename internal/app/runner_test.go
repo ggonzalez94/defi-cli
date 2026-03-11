@@ -1495,6 +1495,10 @@ func (f fakeMarketProvider) ProtocolsCategories(context.Context) ([]model.Protoc
 	return f.categories, nil
 }
 
+func (f fakeMarketProvider) StablecoinsTop(context.Context, string, int) ([]model.Stablecoin, error) {
+	return nil, nil
+}
+
 type fakeSwapProvider struct {
 	name    string
 	calls   int

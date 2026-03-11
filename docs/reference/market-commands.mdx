@@ -1,6 +1,6 @@
 ---
 title: Market Commands
-description: Reference for providers, chains, protocols, and assets commands.
+description: Reference for providers, chains, protocols, stablecoins, and assets commands.
 ---
 
 ## `providers list`
@@ -70,6 +70,22 @@ List categories with protocol counts and TVL.
 ```bash
 defi protocols categories --results-only
 ```
+
+## `stablecoins top`
+
+Top stablecoins by circulating market cap. Includes price, chain count, and day/week/month supply change deltas.
+
+```bash
+defi stablecoins top --limit 10 --results-only
+defi stablecoins top --peg-type peggedUSD --limit 20 --results-only
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+- `--peg-type string` (optional filter, e.g. `peggedUSD`, `peggedEUR`)
+
+No API key required; data sourced from DefiLlama stablecoins API.
 
 ## `assets resolve`
 

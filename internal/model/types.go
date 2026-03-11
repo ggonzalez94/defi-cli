@@ -111,6 +111,20 @@ type ProtocolCategory struct {
 	TVLUSD    float64 `json:"tvl_usd"`
 }
 
+type Stablecoin struct {
+	Rank           int     `json:"rank"`
+	Name           string  `json:"name"`
+	Symbol         string  `json:"symbol"`
+	PegType        string  `json:"peg_type"`
+	PegMechanism   string  `json:"peg_mechanism"`
+	CirculatingUSD float64 `json:"circulating_usd"`
+	Price          float64 `json:"price"`
+	Chains         int     `json:"chains"`
+	DayChangeUSD   float64 `json:"day_change_usd"`
+	WeekChangeUSD  float64 `json:"week_change_usd"`
+	MonthChangeUSD float64 `json:"month_change_usd"`
+}
+
 type AssetResolution struct {
 	Input       string `json:"input"`
 	ChainID     string `json:"chain_id"`

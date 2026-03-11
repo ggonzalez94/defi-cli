@@ -44,6 +44,15 @@ defi protocols categories --results-only
 
 Category ranking is deterministic: `tvl_usd`, then protocol count, then name.
 
+## Stablecoin market data
+
+```bash
+defi stablecoins top --limit 10 --results-only --select rank,symbol,circulating_usd,price
+defi stablecoins top --peg-type peggedUSD --limit 20 --results-only
+```
+
+Returns circulating market cap, current price, chain count, and day/week/month supply change deltas. Useful for stablecoin selection and depeg monitoring.
+
 ## Resolve assets to canonical IDs
 
 ```bash

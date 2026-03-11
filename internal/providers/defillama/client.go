@@ -20,25 +20,28 @@ import (
 )
 
 const (
-	defaultAPIBase      = "https://api.llama.fi"
-	defaultBridgeAPIURL = "https://pro-api.llama.fi"
+	defaultAPIBase           = "https://api.llama.fi"
+	defaultBridgeAPIURL      = "https://pro-api.llama.fi"
+	defaultStablecoinsAPIURL = "https://stablecoins.llama.fi"
 )
 
 type Client struct {
-	http          *httpx.Client
-	apiBase       string
-	bridgeBaseURL string
-	apiKey        string
-	now           func() time.Time
+	http              *httpx.Client
+	apiBase           string
+	bridgeBaseURL     string
+	stablecoinsAPIURL string
+	apiKey            string
+	now               func() time.Time
 }
 
 func New(httpClient *httpx.Client, apiKey string) *Client {
 	return &Client{
-		http:          httpClient,
-		apiBase:       defaultAPIBase,
-		bridgeBaseURL: defaultBridgeAPIURL,
-		apiKey:        strings.TrimSpace(apiKey),
-		now:           time.Now,
+		http:              httpClient,
+		apiBase:           defaultAPIBase,
+		bridgeBaseURL:     defaultBridgeAPIURL,
+		stablecoinsAPIURL: defaultStablecoinsAPIURL,
+		apiKey:            strings.TrimSpace(apiKey),
+		now:               time.Now,
 	}
 }
 
@@ -52,6 +55,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"chains.assets",
 			"protocols.top",
 			"protocols.categories",
+			"stablecoins.top",
 			"bridge.list",
 			"bridge.details",
 		},
@@ -266,6 +270,78 @@ func (c *Client) ProtocolsCategories(ctx context.Context) ([]model.ProtocolCateg
 		}
 		return strings.Compare(strings.ToLower(out[i].Name), strings.ToLower(out[j].Name)) < 0
 	})
+	return out, nil
+}
+
+type stablecoinResp struct {
+	Name           string           `json:"name"`
+	Symbol         string           `json:"symbol"`
+	PegType        string           `json:"pegType"`
+	PegMechanism   string           `json:"pegMechanism"`
+	Circulating    peggedAmount     `json:"circulating"`
+	CircPrevDay    peggedAmount     `json:"circulatingPrevDay"`
+	CircPrevWeek   peggedAmount     `json:"circulatingPrevWeek"`
+	CircPrevMonth  peggedAmount     `json:"circulatingPrevMonth"`
+	Chains         []string         `json:"chains"`
+	Price          *float64         `json:"price"`
+}
+
+type peggedAmount struct {
+	PeggedUSD float64 `json:"peggedUSD"`
+}
+
+type stablecoinsEnvelope struct {
+	PeggedAssets []stablecoinResp `json:"peggedAssets"`
+}
+
+func (c *Client) StablecoinsTop(ctx context.Context, pegType string, limit int) ([]model.Stablecoin, error) {
+	endpoint := c.stablecoinsAPIURL + "/stablecoins?includePrices=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "build stablecoins request", err)
+	}
+	var resp stablecoinsEnvelope
+	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	normPeg := strings.ToLower(strings.TrimSpace(pegType))
+	filtered := make([]stablecoinResp, 0, len(resp.PeggedAssets))
+	for _, s := range resp.PeggedAssets {
+		if normPeg != "" && strings.ToLower(s.PegType) != normPeg {
+			continue
+		}
+		filtered = append(filtered, s)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return filtered[i].Circulating.PeggedUSD > filtered[j].Circulating.PeggedUSD
+	})
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+
+	out := make([]model.Stablecoin, 0, limit)
+	for i := 0; i < limit; i++ {
+		item := filtered[i]
+		price := 0.0
+		if item.Price != nil {
+			price = *item.Price
+		}
+		out = append(out, model.Stablecoin{
+			Rank:           i + 1,
+			Name:           item.Name,
+			Symbol:         item.Symbol,
+			PegType:        item.PegType,
+			PegMechanism:   item.PegMechanism,
+			CirculatingUSD: item.Circulating.PeggedUSD,
+			Price:          price,
+			Chains:         len(item.Chains),
+			DayChangeUSD:   item.Circulating.PeggedUSD - item.CircPrevDay.PeggedUSD,
+			WeekChangeUSD:  item.Circulating.PeggedUSD - item.CircPrevWeek.PeggedUSD,
+			MonthChangeUSD: item.Circulating.PeggedUSD - item.CircPrevMonth.PeggedUSD,
+		})
+	}
 	return out, nil
 }
 

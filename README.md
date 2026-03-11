@@ -15,7 +15,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics (volume, chain breakdown), and execute Across/LiFi bridge plans.
 - **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
 - **Approvals, transfers & rewards** — create and execute ERC-20 approvals/transfers plus Aave rewards claim/compound flows.
-- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, resolve asset identifiers.
+- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, track stablecoin market caps, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input for mutation workflows, and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
 
 ## Documentation Site (Mintlify)
@@ -91,6 +91,7 @@ defi chains gas --chain 1 --results-only
 defi chains gas --chain 1,10,137,8453,42161 --results-only   # multi-chain batch
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
+defi stablecoins top --limit 10 --results-only --select rank,symbol,circulating_usd,price
 defi assets resolve --chain base --symbol USDC --results-only
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi lend rates --provider morpho --chain 1 --asset USDC --results-only
@@ -291,7 +292,7 @@ providers:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/stablecoins/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
