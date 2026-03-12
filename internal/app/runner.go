@@ -564,6 +564,25 @@ func (s *runtimeState) newStablecoinsCommand() *cobra.Command {
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of stablecoins to return")
 	cmd.Flags().StringVar(&pegType, "peg-type", "", "Filter by peg type (e.g. peggedUSD, peggedEUR)")
 	root.AddCommand(cmd)
+
+	var chainsLimit int
+	chainsCmd := &cobra.Command{
+		Use:   "chains",
+		Short: "Chains ranked by total stablecoin market cap",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"limit": chainsLimit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.StablecoinChains(ctx, chainsLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	chainsCmd.Flags().IntVar(&chainsLimit, "limit", 20, "Number of chains to return")
+	root.AddCommand(chainsCmd)
+
 	return root
 }
 

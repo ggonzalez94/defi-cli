@@ -92,6 +92,7 @@ defi chains gas --chain 1,10,137,8453,42161 --results-only   # multi-chain batch
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
 defi stablecoins top --limit 10 --results-only --select rank,symbol,circulating_usd,price
+defi stablecoins chains --limit 10 --results-only --select rank,chain,circulating_usd
 defi assets resolve --chain base --symbol USDC --results-only
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi lend rates --provider morpho --chain 1 --asset USDC --results-only

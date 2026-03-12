@@ -20,6 +20,7 @@ type MarketDataProvider interface {
 	ProtocolsTop(ctx context.Context, category string, limit int) ([]model.ProtocolTVL, error)
 	ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error)
 	StablecoinsTop(ctx context.Context, pegType string, limit int) ([]model.Stablecoin, error)
+	StablecoinChains(ctx context.Context, limit int) ([]model.StablecoinChain, error)
 }
 
 type LendingProvider interface {

@@ -350,6 +350,96 @@ func TestStablecoinsTopNullPrice(t *testing.T) {
 	}
 }
 
+func TestStablecoinChainsSortsAndLimits(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoinchains", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"gecko_id":"ethereum","totalCirculatingUSD":{"peggedUSD":90000000000,"peggedEUR":500000000},"tokenSymbol":"ETH","name":"Ethereum"},
+			{"gecko_id":"tron","totalCirculatingUSD":{"peggedUSD":60000000000},"tokenSymbol":"TRX","name":"Tron"},
+			{"gecko_id":"binancecoin","totalCirculatingUSD":{"peggedUSD":8000000000,"peggedEUR":200000000},"tokenSymbol":"BNB","name":"BSC"},
+			{"gecko_id":"solana","totalCirculatingUSD":{"peggedUSD":12000000000},"tokenSymbol":"SOL","name":"Solana"}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinChains(context.Background(), 3)
+	if err != nil {
+		t.Fatalf("StablecoinChains failed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+	if items[0].Chain != "Ethereum" || items[0].Rank != 1 {
+		t.Fatalf("expected Ethereum first, got %+v", items[0])
+	}
+	if items[0].CirculatingUSD != 90500000000 {
+		t.Fatalf("expected aggregated USD+EUR for Ethereum, got %f", items[0].CirculatingUSD)
+	}
+	if items[0].DominantPegType != "peggedUSD" {
+		t.Fatalf("expected peggedUSD dominant, got %s", items[0].DominantPegType)
+	}
+	if items[1].Chain != "Tron" || items[1].Rank != 2 {
+		t.Fatalf("expected Tron second, got %+v", items[1])
+	}
+	if items[2].Chain != "Solana" || items[2].Rank != 3 {
+		t.Fatalf("expected Solana third, got %+v", items[2])
+	}
+}
+
+func TestStablecoinChainsSkipsZeroSupply(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoinchains", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"gecko_id":"ethereum","totalCirculatingUSD":{"peggedUSD":90000000000},"tokenSymbol":"ETH","name":"Ethereum"},
+			{"gecko_id":"dead","totalCirculatingUSD":{"peggedUSD":0},"tokenSymbol":"DEAD","name":"DeadChain"},
+			{"gecko_id":"empty","totalCirculatingUSD":{},"tokenSymbol":null,"name":"EmptyChain"}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinChains(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("StablecoinChains failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (zero/empty filtered), got %d", len(items))
+	}
+	if items[0].Chain != "Ethereum" {
+		t.Fatalf("expected Ethereum only, got %s", items[0].Chain)
+	}
+}
+
+func TestStablecoinChainsNoLimit(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoinchains", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"gecko_id":"ethereum","totalCirculatingUSD":{"peggedUSD":90000000000},"tokenSymbol":"ETH","name":"Ethereum"},
+			{"gecko_id":"tron","totalCirculatingUSD":{"peggedUSD":60000000000},"tokenSymbol":"TRX","name":"Tron"}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinChains(context.Background(), 0)
+	if err != nil {
+		t.Fatalf("StablecoinChains failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected all 2 items with limit 0, got %d", len(items))
+	}
+}
+
 func TestListBridgesRequiresAPIKey(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	_, err := c.ListBridges(context.Background(), providers.BridgeListRequest{Limit: 5, IncludeChains: true})

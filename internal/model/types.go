@@ -125,6 +125,14 @@ type Stablecoin struct {
 	MonthChangeUSD float64 `json:"month_change_usd"`
 }
 
+type StablecoinChain struct {
+	Rank              int     `json:"rank"`
+	Chain             string  `json:"chain"`
+	ChainID           string  `json:"chain_id"`
+	CirculatingUSD    float64 `json:"circulating_usd"`
+	DominantPegType   string  `json:"dominant_peg_type"`
+}
+
 type AssetResolution struct {
 	Input       string `json:"input"`
 	ChainID     string `json:"chain_id"`

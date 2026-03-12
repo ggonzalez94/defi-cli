@@ -56,6 +56,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"protocols.top",
 			"protocols.categories",
 			"stablecoins.top",
+			"stablecoins.chains",
 			"bridge.list",
 			"bridge.details",
 		},
@@ -341,6 +342,63 @@ func (c *Client) StablecoinsTop(ctx context.Context, pegType string, limit int) 
 			WeekChangeUSD:  item.Circulating.PeggedUSD - item.CircPrevWeek.PeggedUSD,
 			MonthChangeUSD: item.Circulating.PeggedUSD - item.CircPrevMonth.PeggedUSD,
 		})
+	}
+	return out, nil
+}
+
+type stablecoinChainResp struct {
+	GeckoID            string                  `json:"gecko_id"`
+	TotalCirculatingUSD map[string]float64     `json:"totalCirculatingUSD"`
+	TokenSymbol        *string                 `json:"tokenSymbol"`
+	Name               string                  `json:"name"`
+}
+
+func (c *Client) StablecoinChains(ctx context.Context, limit int) ([]model.StablecoinChain, error) {
+	endpoint := c.stablecoinsAPIURL + "/stablecoinchains"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "build stablecoin chains request", err)
+	}
+	var resp []stablecoinChainResp
+	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	out := make([]model.StablecoinChain, 0, len(resp))
+	for _, item := range resp {
+		total := 0.0
+		dominantPeg := ""
+		dominantAmount := 0.0
+		for pegType, amount := range item.TotalCirculatingUSD {
+			total += amount
+			if amount > dominantAmount {
+				dominantAmount = amount
+				dominantPeg = pegType
+			}
+		}
+		if total <= 0 {
+			continue
+		}
+		chainID := ""
+		if chain, parseErr := id.ParseChain(item.Name); parseErr == nil {
+			chainID = chain.CAIP2
+		}
+		out = append(out, model.StablecoinChain{
+			Chain:            item.Name,
+			ChainID:          chainID,
+			CirculatingUSD:   total,
+			DominantPegType:  dominantPeg,
+		})
+	}
+
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].CirculatingUSD > out[j].CirculatingUSD
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	for i := range out {
+		out[i].Rank = i + 1
 	}
 	return out, nil
 }
