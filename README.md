@@ -91,6 +91,7 @@ defi chains gas --chain 1 --results-only
 defi chains gas --chain 1,10,137,8453,42161 --results-only   # multi-chain batch
 defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
 defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
+defi protocols fees --limit 10 --results-only --select rank,protocol,fees_24h_usd,change_1d_pct
 defi stablecoins top --limit 10 --results-only --select rank,symbol,circulating_usd,price
 defi stablecoins chains --limit 10 --results-only --select rank,chain,circulating_usd
 defi assets resolve --chain base --symbol USDC --results-only
@@ -315,6 +316,7 @@ providers:
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
 - `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
 - Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
+- `protocols fees` rankings are sorted by 24h fees descending; protocols with null or zero 24h fees are excluded.
 - `--chain` normalization supports additional aliases/IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).

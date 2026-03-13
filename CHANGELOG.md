@@ -10,6 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Added `protocols fees` command to rank protocols by 24h fee revenue with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama fees API). Supports `--category` filter and `--limit`.
 - Added `stablecoins chains` command to rank chains by total stablecoin market cap with dominant peg type and CAIP-2 chain IDs (no API key required, uses DefiLlama stablecoin chains API). Supports `--limit`.
 - Added `stablecoins top` command to list top stablecoins by circulating market cap with price, chain count, and day/week/month supply changes (no API key required, uses DefiLlama stablecoins API). Supports `--peg-type` filter (e.g. `peggedUSD`, `peggedEUR`) and `--limit`.
 - Added `chains gas` command to query current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection (no keys required, bypasses cache, supports `--rpc-url` override). Accepts comma-separated chains for multi-chain batch queries with parallel RPC fetching and partial-result support.

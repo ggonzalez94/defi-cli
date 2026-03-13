@@ -111,6 +111,19 @@ type ProtocolCategory struct {
 	TVLUSD    float64 `json:"tvl_usd"`
 }
 
+type ProtocolFees struct {
+	Rank          int     `json:"rank"`
+	Protocol      string  `json:"protocol"`
+	Category      string  `json:"category"`
+	Fees24hUSD    float64 `json:"fees_24h_usd"`
+	Fees7dUSD     float64 `json:"fees_7d_usd"`
+	Fees30dUSD    float64 `json:"fees_30d_usd"`
+	Change1dPct   float64 `json:"change_1d_pct"`
+	Change7dPct   float64 `json:"change_7d_pct"`
+	Change1mPct   float64 `json:"change_1m_pct"`
+	Chains        int     `json:"chains"`
+}
+
 type Stablecoin struct {
 	Rank           int     `json:"rank"`
 	Name           string  `json:"name"`

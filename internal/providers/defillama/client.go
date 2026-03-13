@@ -55,6 +55,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"chains.assets",
 			"protocols.top",
 			"protocols.categories",
+			"protocols.fees",
 			"stablecoins.top",
 			"stablecoins.chains",
 			"bridge.list",
@@ -271,6 +272,71 @@ func (c *Client) ProtocolsCategories(ctx context.Context) ([]model.ProtocolCateg
 		}
 		return strings.Compare(strings.ToLower(out[i].Name), strings.ToLower(out[j].Name)) < 0
 	})
+	return out, nil
+}
+
+type feesProtocolResp struct {
+	Name      string   `json:"name"`
+	Category  string   `json:"category"`
+	Total24h  *float64 `json:"total24h"`
+	Total7d   *float64 `json:"total7d"`
+	Total30d  *float64 `json:"total30d"`
+	Change1d  *float64 `json:"change_1d"`
+	Change7d  *float64 `json:"change_7d"`
+	Change1m  *float64 `json:"change_1m"`
+	Chains    []string `json:"chains"`
+}
+
+type feesOverviewResp struct {
+	Protocols []feesProtocolResp `json:"protocols"`
+}
+
+func (c *Client) ProtocolsFees(ctx context.Context, category string, limit int) ([]model.ProtocolFees, error) {
+	endpoint := c.apiBase + "/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "build fees request", err)
+	}
+	var resp feesOverviewResp
+	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	normCategory := strings.ToLower(strings.TrimSpace(category))
+	filtered := make([]feesProtocolResp, 0, len(resp.Protocols))
+	for _, p := range resp.Protocols {
+		if p.Total24h == nil || *p.Total24h <= 0 {
+			continue
+		}
+		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
+	})
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+
+	out := make([]model.ProtocolFees, 0, limit)
+	for i := 0; i < limit; i++ {
+		item := filtered[i]
+		out = append(out, model.ProtocolFees{
+			Rank:        i + 1,
+			Protocol:    item.Name,
+			Category:    item.Category,
+			Fees24hUSD:  valOrZero(item.Total24h),
+			Fees7dUSD:   valOrZero(item.Total7d),
+			Fees30dUSD:  valOrZero(item.Total30d),
+			Change1dPct: valOrZero(item.Change1d),
+			Change7dPct: valOrZero(item.Change7d),
+			Change1mPct: valOrZero(item.Change1m),
+			Chains:      len(item.Chains),
+		})
+	}
 	return out, nil
 }
 

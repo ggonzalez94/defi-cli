@@ -644,6 +644,63 @@ func TestRunnerProtocolsCategories(t *testing.T) {
 	}
 }
 
+func TestRunnerProtocolsFees(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		marketProvider: fakeMarketProvider{
+			protocolFees: []model.ProtocolFees{
+				{Rank: 1, Protocol: "Lido", Category: "Liquid Staking", Fees24hUSD: 8000000, Fees7dUSD: 55000000, Fees30dUSD: 200000000, Chains: 1},
+			},
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newProtocolsCommand())
+	root.SetArgs([]string{"protocols", "fees"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected protocols fees command success, err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if env["success"] != true {
+		t.Fatalf("expected success=true, got %v", env["success"])
+	}
+	data, ok := env["data"].([]any)
+	if !ok {
+		t.Fatalf("expected data to be an array, got %T", env["data"])
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected non-empty fees list")
+	}
+	first, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first item to be object, got %T", data[0])
+	}
+	if _, ok := first["protocol"]; !ok {
+		t.Fatalf("expected 'protocol' field, got %+v", first)
+	}
+	if _, ok := first["fees_24h_usd"]; !ok {
+		t.Fatalf("expected 'fees_24h_usd' field, got %+v", first)
+	}
+}
+
 func TestRunnerChainsAssets(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -1462,6 +1519,7 @@ type fakeMarketProvider struct {
 	categories          []model.ProtocolCategory
 	chainAssets         []model.ChainAssetTVL
 	expectedAssetSymbol string
+	protocolFees        []model.ProtocolFees
 }
 
 func (f fakeMarketProvider) Info() model.ProviderInfo {
@@ -1501,6 +1559,10 @@ func (f fakeMarketProvider) StablecoinsTop(context.Context, string, int) ([]mode
 
 func (f fakeMarketProvider) StablecoinChains(context.Context, int) ([]model.StablecoinChain, error) {
 	return nil, nil
+}
+
+func (f fakeMarketProvider) ProtocolsFees(context.Context, string, int) ([]model.ProtocolFees, error) {
+	return f.protocolFees, nil
 }
 
 type fakeSwapProvider struct {
