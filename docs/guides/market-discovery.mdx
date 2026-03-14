@@ -44,6 +44,15 @@ defi protocols categories --results-only
 
 Category ranking is deterministic: `tvl_usd`, then protocol count, then name.
 
+## DEX volume rankings
+
+```bash
+defi dexes volume --limit 10 --results-only --select rank,protocol,volume_24h_usd,change_1d_pct
+defi dexes volume --chain Arbitrum --limit 5 --results-only
+```
+
+Rankings are sorted by 24h volume descending. Use `--chain` to filter DEXes active on a specific chain. No API key required.
+
 ## Stablecoin market data
 
 ```bash

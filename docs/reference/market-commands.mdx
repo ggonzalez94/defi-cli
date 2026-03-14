@@ -1,6 +1,6 @@
 ---
 title: Market Commands
-description: Reference for providers, chains, protocols, stablecoins, and assets commands.
+description: Reference for providers, chains, protocols, dexes, stablecoins, and assets commands.
 ---
 
 ## `providers list`
@@ -70,6 +70,38 @@ List categories with protocol counts and TVL.
 ```bash
 defi protocols categories --results-only
 ```
+
+## `protocols fees`
+
+Top protocols by 24h fee revenue. Includes 7d/30d totals and 1d/7d/1m percentage changes.
+
+```bash
+defi protocols fees --limit 10 --results-only
+defi protocols fees --category Dexs --limit 20 --results-only
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+- `--category string` (optional filter, e.g. `Dexs`, `Lending`)
+
+No API key required; data sourced from DefiLlama fees API.
+
+## `dexes volume`
+
+Top DEXes by 24h trading volume. Includes 7d/30d totals and 1d/7d/1m percentage changes.
+
+```bash
+defi dexes volume --limit 10 --results-only
+defi dexes volume --chain Arbitrum --limit 5 --results-only
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+- `--chain string` (optional filter by chain presence, e.g. `Ethereum`, `Arbitrum`)
+
+No API key required; data sourced from DefiLlama DEX volume API.
 
 ## `stablecoins top`
 

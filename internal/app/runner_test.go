@@ -1565,6 +1565,10 @@ func (f fakeMarketProvider) ProtocolsFees(context.Context, string, int) ([]model
 	return f.protocolFees, nil
 }
 
+func (f fakeMarketProvider) DexesVolume(context.Context, string, int) ([]model.DexVolume, error) {
+	return nil, nil
+}
+
 type fakeSwapProvider struct {
 	name    string
 	calls   int

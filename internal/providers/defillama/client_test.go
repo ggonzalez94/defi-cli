@@ -539,6 +539,105 @@ func TestProtocolsFeesSkipsNullAndZero(t *testing.T) {
 	}
 }
 
+func TestDexesVolumeSortsAndLimits(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/dexs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","total24h":5000000,"total7d":30000000,"total30d":120000000,"change_1d":5.2,"change_7d":-2.1,"change_1m":10.5,"chains":["Ethereum","Arbitrum","Base"]},
+				{"name":"Curve","total24h":2000000,"total7d":12000000,"total30d":50000000,"change_1d":1.5,"change_7d":3.0,"change_1m":-5.0,"chains":["Ethereum","Polygon"]},
+				{"name":"PancakeSwap","total24h":8000000,"total7d":55000000,"total30d":200000000,"change_1d":-1.0,"change_7d":0.5,"change_1m":15.0,"chains":["BSC"]},
+				{"name":"Dead","total24h":null,"chains":[]},
+				{"name":"Tiny","total24h":0,"chains":["BSC"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.DexesVolume(context.Background(), "", 2)
+	if err != nil {
+		t.Fatalf("DexesVolume failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].Protocol != "PancakeSwap" || items[0].Rank != 1 {
+		t.Fatalf("expected PancakeSwap first, got %+v", items[0])
+	}
+	if items[0].Volume24hUSD != 8000000 || items[0].Chains != 1 {
+		t.Fatalf("unexpected PancakeSwap values: %+v", items[0])
+	}
+	if items[1].Protocol != "Uniswap" || items[1].Rank != 2 {
+		t.Fatalf("expected Uniswap second, got %+v", items[1])
+	}
+}
+
+func TestDexesVolumeFiltersByChain(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/dexs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","total24h":5000000,"chains":["Ethereum","Arbitrum","Base"]},
+				{"name":"PancakeSwap","total24h":8000000,"chains":["BSC"]},
+				{"name":"SushiSwap","total24h":1000000,"chains":["Ethereum","Polygon"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.DexesVolume(context.Background(), "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("DexesVolume with chain filter failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Ethereum items, got %d", len(items))
+	}
+	if items[0].Protocol != "Uniswap" {
+		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
+	}
+	if items[1].Protocol != "SushiSwap" {
+		t.Fatalf("expected SushiSwap second, got %s", items[1].Protocol)
+	}
+}
+
+func TestDexesVolumeSkipsNullAndZero(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/dexs", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"NullVol","total24h":null,"chains":[]},
+				{"name":"ZeroVol","total24h":0,"chains":["Ethereum"]},
+				{"name":"NegVol","total24h":-100,"chains":["Ethereum"]},
+				{"name":"ValidVol","total24h":500,"chains":["Ethereum"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.DexesVolume(context.Background(), "", 0)
+	if err != nil {
+		t.Fatalf("DexesVolume failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 valid item, got %d", len(items))
+	}
+	if items[0].Protocol != "ValidVol" {
+		t.Fatalf("expected ValidVol, got %s", items[0].Protocol)
+	}
+}
+
 func TestListBridgesRequiresAPIKey(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	_, err := c.ListBridges(context.Background(), providers.BridgeListRequest{Limit: 5, IncludeChains: true})

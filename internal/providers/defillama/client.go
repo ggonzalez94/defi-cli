@@ -56,6 +56,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"protocols.top",
 			"protocols.categories",
 			"protocols.fees",
+			"dexes.volume",
 			"stablecoins.top",
 			"stablecoins.chains",
 			"bridge.list",
@@ -338,6 +339,78 @@ func (c *Client) ProtocolsFees(ctx context.Context, category string, limit int) 
 		})
 	}
 	return out, nil
+}
+
+type dexProtocolResp struct {
+	Name     string   `json:"name"`
+	Total24h *float64 `json:"total24h"`
+	Total7d  *float64 `json:"total7d"`
+	Total30d *float64 `json:"total30d"`
+	Change1d *float64 `json:"change_1d"`
+	Change7d *float64 `json:"change_7d"`
+	Change1m *float64 `json:"change_1m"`
+	Chains   []string `json:"chains"`
+}
+
+type dexOverviewResp struct {
+	Protocols []dexProtocolResp `json:"protocols"`
+}
+
+func (c *Client) DexesVolume(ctx context.Context, chain string, limit int) ([]model.DexVolume, error) {
+	endpoint := c.apiBase + "/overview/dexs?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "build dex volume request", err)
+	}
+	var resp dexOverviewResp
+	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	normChain := strings.ToLower(strings.TrimSpace(chain))
+	filtered := make([]dexProtocolResp, 0, len(resp.Protocols))
+	for _, p := range resp.Protocols {
+		if p.Total24h == nil || *p.Total24h <= 0 {
+			continue
+		}
+		if normChain != "" && !containsChain(p.Chains, normChain) {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
+	})
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+
+	out := make([]model.DexVolume, 0, limit)
+	for i := 0; i < limit; i++ {
+		item := filtered[i]
+		out = append(out, model.DexVolume{
+			Rank:         i + 1,
+			Protocol:     item.Name,
+			Volume24hUSD: valOrZero(item.Total24h),
+			Volume7dUSD:  valOrZero(item.Total7d),
+			Volume30dUSD: valOrZero(item.Total30d),
+			Change1dPct:  valOrZero(item.Change1d),
+			Change7dPct:  valOrZero(item.Change7d),
+			Change1mPct:  valOrZero(item.Change1m),
+			Chains:       len(item.Chains),
+		})
+	}
+	return out, nil
+}
+
+func containsChain(chains []string, target string) bool {
+	for _, c := range chains {
+		if strings.ToLower(strings.TrimSpace(c)) == target {
+			return true
+		}
+	}
+	return false
 }
 
 type stablecoinResp struct {

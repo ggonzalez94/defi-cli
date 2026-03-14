@@ -244,6 +244,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 	cmd.AddCommand(s.newProvidersCommand())
 	cmd.AddCommand(s.newChainsCommand())
 	cmd.AddCommand(s.newProtocolsCommand())
+	cmd.AddCommand(s.newDexesCommand())
 	cmd.AddCommand(s.newStablecoinsCommand())
 	cmd.AddCommand(s.newAssetsCommand())
 	cmd.AddCommand(s.newLendCommand())
@@ -559,6 +560,31 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	feesCmd.Flags().IntVar(&feesLimit, "limit", 20, "Number of protocols to return")
 	feesCmd.Flags().StringVar(&feesCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
 	root.AddCommand(feesCmd)
+
+	return root
+}
+
+func (s *runtimeState) newDexesCommand() *cobra.Command {
+	root := &cobra.Command{Use: "dexes", Short: "DEX market data"}
+	var limit int
+	var chain string
+	volCmd := &cobra.Command{
+		Use:   "volume",
+		Short: "Top DEXes by 24h trading volume",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"chain": chain, "limit": limit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.DexesVolume(ctx, chain, limit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	volCmd.Flags().IntVar(&limit, "limit", 20, "Number of DEXes to return")
+	volCmd.Flags().StringVar(&chain, "chain", "", "Filter by chain presence (e.g. Ethereum, Arbitrum)")
+	root.AddCommand(volCmd)
 
 	return root
 }
