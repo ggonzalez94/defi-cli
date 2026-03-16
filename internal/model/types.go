@@ -124,6 +124,19 @@ type ProtocolFees struct {
 	Chains        int     `json:"chains"`
 }
 
+type ProtocolRevenue struct {
+	Rank           int     `json:"rank"`
+	Protocol       string  `json:"protocol"`
+	Category       string  `json:"category"`
+	Revenue24hUSD  float64 `json:"revenue_24h_usd"`
+	Revenue7dUSD   float64 `json:"revenue_7d_usd"`
+	Revenue30dUSD  float64 `json:"revenue_30d_usd"`
+	Change1dPct    float64 `json:"change_1d_pct"`
+	Change7dPct    float64 `json:"change_7d_pct"`
+	Change1mPct    float64 `json:"change_1m_pct"`
+	Chains         int     `json:"chains"`
+}
+
 type DexVolume struct {
 	Rank          int     `json:"rank"`
 	Protocol      string  `json:"protocol"`

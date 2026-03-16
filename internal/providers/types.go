@@ -22,6 +22,7 @@ type MarketDataProvider interface {
 	StablecoinsTop(ctx context.Context, pegType string, limit int) ([]model.Stablecoin, error)
 	StablecoinChains(ctx context.Context, limit int) ([]model.StablecoinChain, error)
 	ProtocolsFees(ctx context.Context, category string, limit int) ([]model.ProtocolFees, error)
+	ProtocolsRevenue(ctx context.Context, category string, limit int) ([]model.ProtocolRevenue, error)
 	DexesVolume(ctx context.Context, chain string, limit int) ([]model.DexVolume, error)
 }
 

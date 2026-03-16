@@ -56,6 +56,7 @@ func (c *Client) Info() model.ProviderInfo {
 			"protocols.top",
 			"protocols.categories",
 			"protocols.fees",
+			"protocols.revenue",
 			"dexes.volume",
 			"stablecoins.top",
 			"stablecoins.chains",
@@ -336,6 +337,55 @@ func (c *Client) ProtocolsFees(ctx context.Context, category string, limit int) 
 			Change7dPct: valOrZero(item.Change7d),
 			Change1mPct: valOrZero(item.Change1m),
 			Chains:      len(item.Chains),
+		})
+	}
+	return out, nil
+}
+
+func (c *Client) ProtocolsRevenue(ctx context.Context, category string, limit int) ([]model.ProtocolRevenue, error) {
+	endpoint := c.apiBase + "/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyRevenue"
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeInternal, "build revenue request", err)
+	}
+	var resp feesOverviewResp
+	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+		return nil, err
+	}
+
+	normCategory := strings.ToLower(strings.TrimSpace(category))
+	filtered := make([]feesProtocolResp, 0, len(resp.Protocols))
+	for _, p := range resp.Protocols {
+		if p.Total24h == nil || *p.Total24h <= 0 {
+			continue
+		}
+		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+
+	sort.Slice(filtered, func(i, j int) bool {
+		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
+	})
+	if limit <= 0 || limit > len(filtered) {
+		limit = len(filtered)
+	}
+
+	out := make([]model.ProtocolRevenue, 0, limit)
+	for i := 0; i < limit; i++ {
+		item := filtered[i]
+		out = append(out, model.ProtocolRevenue{
+			Rank:          i + 1,
+			Protocol:      item.Name,
+			Category:      item.Category,
+			Revenue24hUSD: valOrZero(item.Total24h),
+			Revenue7dUSD:  valOrZero(item.Total7d),
+			Revenue30dUSD: valOrZero(item.Total30d),
+			Change1dPct:   valOrZero(item.Change1d),
+			Change7dPct:   valOrZero(item.Change7d),
+			Change1mPct:   valOrZero(item.Change1m),
+			Chains:        len(item.Chains),
 		})
 	}
 	return out, nil

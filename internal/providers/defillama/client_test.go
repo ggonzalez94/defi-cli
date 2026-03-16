@@ -539,6 +539,108 @@ func TestProtocolsFeesSkipsNullAndZero(t *testing.T) {
 	}
 }
 
+func TestProtocolsRevenueSortsAndLimits(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Query().Get("dataType") != "dailyRevenue" {
+			t.Errorf("expected dataType=dailyRevenue, got %s", r.URL.Query().Get("dataType"))
+		}
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","category":"Dexs","total24h":3000000,"total7d":18000000,"total30d":70000000,"change_1d":4.2,"change_7d":-1.1,"change_1m":8.5,"chains":["Ethereum","Arbitrum","Base"]},
+				{"name":"Aave","category":"Lending","total24h":1000000,"total7d":6000000,"total30d":25000000,"change_1d":2.5,"change_7d":4.0,"change_1m":-3.0,"chains":["Ethereum","Polygon"]},
+				{"name":"Lido","category":"Liquid Staking","total24h":5000000,"total7d":35000000,"total30d":130000000,"change_1d":-0.5,"change_7d":1.5,"change_1m":12.0,"chains":["Ethereum"]},
+				{"name":"Dead","category":"Dexs","total24h":null,"chains":[]},
+				{"name":"Tiny","category":"Dexs","total24h":0,"chains":["BSC"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsRevenue(context.Background(), "", 2)
+	if err != nil {
+		t.Fatalf("ProtocolsRevenue failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	if items[0].Protocol != "Lido" || items[0].Rank != 1 {
+		t.Fatalf("expected Lido first, got %+v", items[0])
+	}
+	if items[0].Revenue24hUSD != 5000000 || items[0].Chains != 1 {
+		t.Fatalf("unexpected Lido values: %+v", items[0])
+	}
+	if items[1].Protocol != "Uniswap" || items[1].Rank != 2 {
+		t.Fatalf("expected Uniswap second, got %+v", items[1])
+	}
+}
+
+func TestProtocolsRevenueFiltersByCategory(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","category":"Dexs","total24h":3000000,"chains":["Ethereum"]},
+				{"name":"Aave","category":"Lending","total24h":1000000,"chains":["Ethereum"]},
+				{"name":"Curve","category":"Dexs","total24h":500000,"chains":["Ethereum"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsRevenue(context.Background(), "Dexs", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsRevenue with category filter failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Dexs items, got %d", len(items))
+	}
+	if items[0].Protocol != "Uniswap" {
+		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
+	}
+	if items[1].Protocol != "Curve" {
+		t.Fatalf("expected Curve second, got %s", items[1].Protocol)
+	}
+}
+
+func TestProtocolsRevenueSkipsNullAndZero(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"NullRev","category":"Dexs","total24h":null,"chains":[]},
+				{"name":"ZeroRev","category":"Dexs","total24h":0,"chains":["Ethereum"]},
+				{"name":"NegRev","category":"Dexs","total24h":-100,"chains":["Ethereum"]},
+				{"name":"ValidRev","category":"Dexs","total24h":500,"chains":["Ethereum"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsRevenue(context.Background(), "", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsRevenue failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected 1 valid item, got %d", len(items))
+	}
+	if items[0].Protocol != "ValidRev" {
+		t.Fatalf("expected ValidRev, got %s", items[0].Protocol)
+	}
+}
+
 func TestDexesVolumeSortsAndLimits(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/overview/dexs", func(w http.ResponseWriter, r *http.Request) {

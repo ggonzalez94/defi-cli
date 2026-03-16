@@ -10,6 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Added `protocols revenue` command to rank protocols by 24h revenue (protocol-retained fees) with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama revenue API). Supports `--category` filter and `--limit`.
 - Added `dexes volume` command to rank DEXes by 24h trading volume with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama DEX volume API). Supports `--chain` filter for chain presence and `--limit`.
 - Added `protocols fees` command to rank protocols by 24h fee revenue with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama fees API). Supports `--category` filter and `--limit`.
 - Added `stablecoins chains` command to rank chains by total stablecoin market cap with dominant peg type and CAIP-2 chain IDs (no API key required, uses DefiLlama stablecoin chains API). Supports `--limit`.

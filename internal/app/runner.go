@@ -561,6 +561,26 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	feesCmd.Flags().StringVar(&feesCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
 	root.AddCommand(feesCmd)
 
+	var revLimit int
+	var revCategory string
+	revCmd := &cobra.Command{
+		Use:   "revenue",
+		Short: "Top protocols by 24h revenue",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"category": revCategory, "limit": revLimit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ProtocolsRevenue(ctx, revCategory, revLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	revCmd.Flags().IntVar(&revLimit, "limit", 20, "Number of protocols to return")
+	revCmd.Flags().StringVar(&revCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
+	root.AddCommand(revCmd)
+
 	return root
 }
 
