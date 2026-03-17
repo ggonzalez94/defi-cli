@@ -103,6 +103,7 @@ type ProtocolTVL struct {
 	Protocol string  `json:"protocol"`
 	Category string  `json:"category"`
 	TVLUSD   float64 `json:"tvl_usd"`
+	Chains   int     `json:"chains"`
 }
 
 type ProtocolCategory struct {

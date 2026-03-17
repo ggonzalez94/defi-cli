@@ -1603,7 +1603,7 @@ func (f fakeMarketProvider) ChainsAssets(ctx context.Context, chain id.Chain, as
 	return f.chainAssets, nil
 }
 
-func (f fakeMarketProvider) ProtocolsTop(context.Context, string, int) ([]model.ProtocolTVL, error) {
+func (f fakeMarketProvider) ProtocolsTop(context.Context, string, string, int) ([]model.ProtocolTVL, error) {
 	return nil, nil
 }
 

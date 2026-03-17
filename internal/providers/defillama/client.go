@@ -185,12 +185,14 @@ func (c *Client) ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asse
 }
 
 type protocolResp struct {
-	Name     string  `json:"name"`
-	Category string  `json:"category"`
-	TVL      float64 `json:"tvl"`
+	Name      string             `json:"name"`
+	Category  string             `json:"category"`
+	TVL       float64            `json:"tvl"`
+	Chains    []string           `json:"chains"`
+	ChainTvls map[string]float64 `json:"chainTvls"`
 }
 
-func (c *Client) ProtocolsTop(ctx context.Context, category string, limit int) ([]model.ProtocolTVL, error) {
+func (c *Client) ProtocolsTop(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolTVL, error) {
 	url := c.apiBase + "/protocols"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -202,16 +204,32 @@ func (c *Client) ProtocolsTop(ctx context.Context, category string, limit int) (
 	}
 
 	normCategory := strings.ToLower(strings.TrimSpace(category))
-	filtered := make([]protocolResp, 0, len(resp))
+	normChain := strings.ToLower(strings.TrimSpace(chain))
+
+	type ranked struct {
+		protocolResp
+		tvl float64
+	}
+	filtered := make([]ranked, 0, len(resp))
 	for _, p := range resp {
 		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
 			continue
 		}
-		filtered = append(filtered, p)
+		if normChain != "" && !containsChain(p.Chains, normChain) {
+			continue
+		}
+		tvl := p.TVL
+		if normChain != "" {
+			tvl = chainTVL(p.ChainTvls, normChain)
+			if tvl <= 0 {
+				tvl = p.TVL
+			}
+		}
+		filtered = append(filtered, ranked{protocolResp: p, tvl: tvl})
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].TVL > filtered[j].TVL
+		return filtered[i].tvl > filtered[j].tvl
 	})
 	if limit <= 0 || limit > len(filtered) {
 		limit = len(filtered)
@@ -220,9 +238,30 @@ func (c *Client) ProtocolsTop(ctx context.Context, category string, limit int) (
 	out := make([]model.ProtocolTVL, 0, limit)
 	for i := 0; i < limit; i++ {
 		item := filtered[i]
-		out = append(out, model.ProtocolTVL{Rank: i + 1, Protocol: item.Name, Category: item.Category, TVLUSD: item.TVL})
+		out = append(out, model.ProtocolTVL{
+			Rank:     i + 1,
+			Protocol: item.Name,
+			Category: item.Category,
+			TVLUSD:   item.tvl,
+			Chains:   len(item.Chains),
+		})
 	}
 	return out, nil
+}
+
+// chainTVL returns the TVL for a specific chain from the chainTvls map.
+// DefiLlama chainTvls keys include plain chain names and suffixed variants
+// (e.g. "Ethereum-staking", "Ethereum-borrowed"); only the plain key is used.
+func chainTVL(chainTvls map[string]float64, normChain string) float64 {
+	for k, v := range chainTvls {
+		if strings.Contains(k, "-") {
+			continue
+		}
+		if strings.ToLower(strings.TrimSpace(k)) == normChain {
+			return v
+		}
+	}
+	return 0
 }
 
 func (c *Client) ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error) {

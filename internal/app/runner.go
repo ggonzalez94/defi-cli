@@ -508,15 +508,16 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "protocols", Short: "Protocol market data"}
 	var limit int
 	var category string
+	var chain string
 	cmd := &cobra.Command{
 		Use:   "top",
 		Short: "Top protocols by TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := map[string]any{"category": category, "limit": limit}
+			req := map[string]any{"category": category, "chain": chain, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
-				data, err := s.marketProvider.ProtocolsTop(ctx, category, limit)
+				data, err := s.marketProvider.ProtocolsTop(ctx, category, chain, limit)
 				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 				return data, status, nil, false, err
 			})
@@ -524,6 +525,7 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of protocols to return")
 	cmd.Flags().StringVar(&category, "category", "", "Filter by protocol category (e.g. lending)")
+	cmd.Flags().StringVar(&chain, "chain", "", "Filter by chain presence (e.g. Ethereum, Arbitrum)")
 	root.AddCommand(cmd)
 
 	catCmd := &cobra.Command{

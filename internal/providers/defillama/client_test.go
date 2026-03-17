@@ -140,6 +140,148 @@ func TestYieldSortDeterministic(t *testing.T) {
 	}
 }
 
+func TestProtocolsTopSortsDescending(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"Aave","category":"Lending","tvl":10000,"chains":["Ethereum","Polygon"],"chainTvls":{"Ethereum":7000,"Polygon":3000}},
+			{"name":"Lido","category":"Liquid Staking","tvl":30000,"chains":["Ethereum"],"chainTvls":{"Ethereum":30000}},
+			{"name":"Uniswap","category":"Dexes","tvl":20000,"chains":["Ethereum","Arbitrum","Base"],"chainTvls":{"Ethereum":12000,"Arbitrum":5000,"Base":3000}}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+	items, err := c.ProtocolsTop(context.Background(), "", "", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsTop failed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+	if items[0].Protocol != "Lido" || items[0].Rank != 1 || items[0].TVLUSD != 30000 {
+		t.Fatalf("expected Lido first with TVL 30000, got %+v", items[0])
+	}
+	if items[0].Chains != 1 {
+		t.Fatalf("expected 1 chain for Lido, got %d", items[0].Chains)
+	}
+	if items[1].Protocol != "Uniswap" || items[1].Chains != 3 {
+		t.Fatalf("expected Uniswap second with 3 chains, got %+v", items[1])
+	}
+}
+
+func TestProtocolsTopFiltersByChain(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"Aave","category":"Lending","tvl":10000,"chains":["Ethereum","Polygon"],"chainTvls":{"Ethereum":7000,"Polygon":3000,"Ethereum-staking":500}},
+			{"name":"Lido","category":"Liquid Staking","tvl":30000,"chains":["Ethereum"],"chainTvls":{"Ethereum":30000}},
+			{"name":"PancakeSwap","category":"Dexes","tvl":8000,"chains":["BSC"],"chainTvls":{"BSC":8000}},
+			{"name":"Uniswap","category":"Dexes","tvl":20000,"chains":["Ethereum","Arbitrum","Base"],"chainTvls":{"Ethereum":12000,"Arbitrum":5000,"Base":3000}}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsTop(context.Background(), "", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsTop failed: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 Ethereum items, got %d", len(items))
+	}
+	// Sorted by chain-specific TVL: Lido (30000), Uniswap (12000), Aave (7000)
+	if items[0].Protocol != "Lido" || items[0].TVLUSD != 30000 {
+		t.Fatalf("expected Lido first with chain TVL 30000, got %+v", items[0])
+	}
+	if items[1].Protocol != "Uniswap" || items[1].TVLUSD != 12000 {
+		t.Fatalf("expected Uniswap second with chain TVL 12000, got %+v", items[1])
+	}
+	if items[2].Protocol != "Aave" || items[2].TVLUSD != 7000 {
+		t.Fatalf("expected Aave third with chain TVL 7000, got %+v", items[2])
+	}
+}
+
+func TestProtocolsTopChainAndCategoryFilter(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"Aave","category":"Lending","tvl":10000,"chains":["Ethereum","Polygon"],"chainTvls":{"Ethereum":7000,"Polygon":3000}},
+			{"name":"Lido","category":"Liquid Staking","tvl":30000,"chains":["Ethereum"],"chainTvls":{"Ethereum":30000}},
+			{"name":"Morpho","category":"Lending","tvl":5000,"chains":["Ethereum","Base"],"chainTvls":{"Ethereum":4000,"Base":1000}}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsTop(context.Background(), "Lending", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsTop failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Lending+Ethereum items, got %d", len(items))
+	}
+	if items[0].Protocol != "Aave" || items[0].TVLUSD != 7000 {
+		t.Fatalf("expected Aave first with chain TVL 7000, got %+v", items[0])
+	}
+	if items[1].Protocol != "Morpho" || items[1].TVLUSD != 4000 {
+		t.Fatalf("expected Morpho second with chain TVL 4000, got %+v", items[1])
+	}
+}
+
+func TestProtocolsTopChainFilterCaseInsensitive(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"Aave","category":"Lending","tvl":10000,"chains":["Ethereum"],"chainTvls":{"Ethereum":10000}},
+			{"name":"PancakeSwap","category":"Dexes","tvl":8000,"chains":["BSC"],"chainTvls":{"BSC":8000}}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsTop(context.Background(), "", "ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsTop failed: %v", err)
+	}
+	if len(items) != 1 || items[0].Protocol != "Aave" {
+		t.Fatalf("expected only Aave for 'ethereum' filter, got %+v", items)
+	}
+}
+
+func TestProtocolsTopChainFallbackToTotalTVL(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"OldProtocol","category":"Lending","tvl":5000,"chains":["Ethereum"],"chainTvls":{}}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsTop(context.Background(), "", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsTop failed: %v", err)
+	}
+	if len(items) != 1 || items[0].TVLUSD != 5000 {
+		t.Fatalf("expected fallback to total TVL 5000, got %+v", items)
+	}
+}
+
 func TestProtocolsCategoriesAggregation(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
