@@ -601,7 +601,7 @@ func TestProtocolsFeesSortsAndLimits(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	c.apiBase = srv.URL
 
-	items, err := c.ProtocolsFees(context.Background(), "", 2)
+	items, err := c.ProtocolsFees(context.Background(), "", "", 2)
 	if err != nil {
 		t.Fatalf("ProtocolsFees failed: %v", err)
 	}
@@ -636,12 +636,77 @@ func TestProtocolsFeesFiltersByCategory(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	c.apiBase = srv.URL
 
-	items, err := c.ProtocolsFees(context.Background(), "Dexs", 0)
+	items, err := c.ProtocolsFees(context.Background(), "Dexs", "", 0)
 	if err != nil {
 		t.Fatalf("ProtocolsFees with category filter failed: %v", err)
 	}
 	if len(items) != 2 {
 		t.Fatalf("expected 2 Dexs items, got %d", len(items))
+	}
+	if items[0].Protocol != "Uniswap" {
+		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
+	}
+	if items[1].Protocol != "Curve" {
+		t.Fatalf("expected Curve second, got %s", items[1].Protocol)
+	}
+}
+
+func TestProtocolsFeesFiltersByChain(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","category":"Dexs","total24h":5000000,"chains":["Ethereum","Arbitrum","Base"]},
+				{"name":"PancakeSwap","category":"Dexs","total24h":8000000,"chains":["BSC"]},
+				{"name":"Aave","category":"Lending","total24h":2000000,"chains":["Ethereum","Polygon"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsFees(context.Background(), "", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsFees with chain filter failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Ethereum items, got %d", len(items))
+	}
+	if items[0].Protocol != "Uniswap" {
+		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
+	}
+	if items[1].Protocol != "Aave" {
+		t.Fatalf("expected Aave second, got %s", items[1].Protocol)
+	}
+}
+
+func TestProtocolsFeesFiltersByCategoryAndChain(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","category":"Dexs","total24h":5000000,"chains":["Ethereum","Arbitrum"]},
+				{"name":"Aave","category":"Lending","total24h":2000000,"chains":["Ethereum","Polygon"]},
+				{"name":"Curve","category":"Dexs","total24h":1000000,"chains":["Ethereum"]},
+				{"name":"PancakeSwap","category":"Dexs","total24h":8000000,"chains":["BSC"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsFees(context.Background(), "Dexs", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsFees with category+chain filter failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Dexs+Ethereum items, got %d", len(items))
 	}
 	if items[0].Protocol != "Uniswap" {
 		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
@@ -669,7 +734,7 @@ func TestProtocolsFeesSkipsNullAndZero(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	c.apiBase = srv.URL
 
-	items, err := c.ProtocolsFees(context.Background(), "", 0)
+	items, err := c.ProtocolsFees(context.Background(), "", "", 0)
 	if err != nil {
 		t.Fatalf("ProtocolsFees failed: %v", err)
 	}
@@ -703,7 +768,7 @@ func TestProtocolsRevenueSortsAndLimits(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	c.apiBase = srv.URL
 
-	items, err := c.ProtocolsRevenue(context.Background(), "", 2)
+	items, err := c.ProtocolsRevenue(context.Background(), "", "", 2)
 	if err != nil {
 		t.Fatalf("ProtocolsRevenue failed: %v", err)
 	}
@@ -738,12 +803,77 @@ func TestProtocolsRevenueFiltersByCategory(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	c.apiBase = srv.URL
 
-	items, err := c.ProtocolsRevenue(context.Background(), "Dexs", 0)
+	items, err := c.ProtocolsRevenue(context.Background(), "Dexs", "", 0)
 	if err != nil {
 		t.Fatalf("ProtocolsRevenue with category filter failed: %v", err)
 	}
 	if len(items) != 2 {
 		t.Fatalf("expected 2 Dexs items, got %d", len(items))
+	}
+	if items[0].Protocol != "Uniswap" {
+		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
+	}
+	if items[1].Protocol != "Curve" {
+		t.Fatalf("expected Curve second, got %s", items[1].Protocol)
+	}
+}
+
+func TestProtocolsRevenueFiltersByChain(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","category":"Dexs","total24h":3000000,"chains":["Ethereum","Arbitrum","Base"]},
+				{"name":"PancakeSwap","category":"Dexs","total24h":5000000,"chains":["BSC"]},
+				{"name":"Aave","category":"Lending","total24h":1000000,"chains":["Ethereum","Polygon"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsRevenue(context.Background(), "", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsRevenue with chain filter failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Ethereum items, got %d", len(items))
+	}
+	if items[0].Protocol != "Uniswap" {
+		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
+	}
+	if items[1].Protocol != "Aave" {
+		t.Fatalf("expected Aave second, got %s", items[1].Protocol)
+	}
+}
+
+func TestProtocolsRevenueFiltersByCategoryAndChain(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/overview/fees", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{
+			"protocols":[
+				{"name":"Uniswap","category":"Dexs","total24h":3000000,"chains":["Ethereum","Arbitrum"]},
+				{"name":"Aave","category":"Lending","total24h":1000000,"chains":["Ethereum"]},
+				{"name":"PancakeSwap","category":"Dexs","total24h":5000000,"chains":["BSC"]},
+				{"name":"Curve","category":"Dexs","total24h":500000,"chains":["Ethereum"]}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsRevenue(context.Background(), "Dexs", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsRevenue with category+chain filter failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 Dexs+Ethereum items, got %d", len(items))
 	}
 	if items[0].Protocol != "Uniswap" {
 		t.Fatalf("expected Uniswap first, got %s", items[0].Protocol)
@@ -771,7 +901,7 @@ func TestProtocolsRevenueSkipsNullAndZero(t *testing.T) {
 	c := New(httpx.New(2*time.Second, 0), "")
 	c.apiBase = srv.URL
 
-	items, err := c.ProtocolsRevenue(context.Background(), "", 0)
+	items, err := c.ProtocolsRevenue(context.Background(), "", "", 0)
 	if err != nil {
 		t.Fatalf("ProtocolsRevenue failed: %v", err)
 	}

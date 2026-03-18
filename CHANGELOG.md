@@ -10,6 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Added `--chain` filter to `protocols fees` and `protocols revenue` to filter by chain presence (e.g. `protocols fees --chain Ethereum`). Supports combined `--category` and `--chain` filtering, consistent with `dexes volume --chain` behavior.
 - Added `--chain` filter to `protocols top` to rank protocols by chain-specific TVL (e.g. `protocols top --chain Ethereum`). When specified, TVL reflects the protocol's value locked on that chain rather than total TVL. Supports combined `--category` and `--chain` filtering. Output now includes `chains` count.
 - Added `protocols revenue` command to rank protocols by 24h revenue (protocol-retained fees) with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama revenue API). Supports `--category` filter and `--limit`.
 - Added `dexes volume` command to rank DEXes by 24h trading volume with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama DEX volume API). Supports `--chain` filter for chain presence and `--limit`.

@@ -332,7 +332,7 @@ type feesOverviewResp struct {
 	Protocols []feesProtocolResp `json:"protocols"`
 }
 
-func (c *Client) ProtocolsFees(ctx context.Context, category string, limit int) ([]model.ProtocolFees, error) {
+func (c *Client) ProtocolsFees(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolFees, error) {
 	endpoint := c.apiBase + "/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -344,12 +344,16 @@ func (c *Client) ProtocolsFees(ctx context.Context, category string, limit int) 
 	}
 
 	normCategory := strings.ToLower(strings.TrimSpace(category))
+	normChain := strings.ToLower(strings.TrimSpace(chain))
 	filtered := make([]feesProtocolResp, 0, len(resp.Protocols))
 	for _, p := range resp.Protocols {
 		if p.Total24h == nil || *p.Total24h <= 0 {
 			continue
 		}
 		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
+			continue
+		}
+		if normChain != "" && !containsChain(p.Chains, normChain) {
 			continue
 		}
 		filtered = append(filtered, p)
@@ -381,7 +385,7 @@ func (c *Client) ProtocolsFees(ctx context.Context, category string, limit int) 
 	return out, nil
 }
 
-func (c *Client) ProtocolsRevenue(ctx context.Context, category string, limit int) ([]model.ProtocolRevenue, error) {
+func (c *Client) ProtocolsRevenue(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolRevenue, error) {
 	endpoint := c.apiBase + "/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyRevenue"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {
@@ -393,12 +397,16 @@ func (c *Client) ProtocolsRevenue(ctx context.Context, category string, limit in
 	}
 
 	normCategory := strings.ToLower(strings.TrimSpace(category))
+	normChain := strings.ToLower(strings.TrimSpace(chain))
 	filtered := make([]feesProtocolResp, 0, len(resp.Protocols))
 	for _, p := range resp.Protocols {
 		if p.Total24h == nil || *p.Total24h <= 0 {
 			continue
 		}
 		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
+			continue
+		}
+		if normChain != "" && !containsChain(p.Chains, normChain) {
 			continue
 		}
 		filtered = append(filtered, p)

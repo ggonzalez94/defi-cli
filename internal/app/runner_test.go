@@ -1619,11 +1619,11 @@ func (f fakeMarketProvider) StablecoinChains(context.Context, int) ([]model.Stab
 	return nil, nil
 }
 
-func (f fakeMarketProvider) ProtocolsFees(context.Context, string, int) ([]model.ProtocolFees, error) {
+func (f fakeMarketProvider) ProtocolsFees(context.Context, string, string, int) ([]model.ProtocolFees, error) {
 	return f.protocolFees, nil
 }
 
-func (f fakeMarketProvider) ProtocolsRevenue(context.Context, string, int) ([]model.ProtocolRevenue, error) {
+func (f fakeMarketProvider) ProtocolsRevenue(context.Context, string, string, int) ([]model.ProtocolRevenue, error) {
 	return f.protocolRevenue, nil
 }
 
