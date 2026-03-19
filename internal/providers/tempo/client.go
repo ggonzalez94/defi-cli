@@ -239,6 +239,10 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 		expected = map[string]string{"amount_in_max": maxAmountIn.String(), "amount_out": amount.String()}
 	}
 
+	// Build a single batched step with Calls. If approval is needed, the
+	// approve call precedes the swap call in the same Tempo transaction.
+	var calls []execution.StepCall
+
 	allowance, err := readAllowance(ctx, client, tokenIn, senderAddr, dexAddr)
 	if err != nil {
 		return execution.Action{}, err
@@ -248,18 +252,18 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack tempo approve calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "approve-token-in",
-			Type:        execution.StepTypeApproval,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Approve token spending for Tempo Stablecoin DEX",
-			Target:      tokenIn.Hex(),
-			Data:        "0x" + common.Bytes2Hex(approveData),
-			Value:       "0",
+		calls = append(calls, execution.StepCall{
+			Target: tokenIn.Hex(),
+			Data:   "0x" + common.Bytes2Hex(approveData),
+			Value:  "0",
 		})
 	}
+
+	calls = append(calls, execution.StepCall{
+		Target: dexAddr.Hex(),
+		Data:   "0x" + common.Bytes2Hex(swapData),
+		Value:  "0",
+	})
 
 	action.Steps = append(action.Steps, execution.ActionStep{
 		StepID:          stepID,
@@ -268,9 +272,10 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 		ChainID:         req.Chain.CAIP2,
 		RPCURL:          rpcURL,
 		Description:     description,
-		Target:          dexAddr.Hex(),
-		Data:            "0x" + common.Bytes2Hex(swapData),
+		Target:          "",
+		Data:            "",
 		Value:           "0",
+		Calls:           calls,
 		ExpectedOutputs: expected,
 	})
 	return action, nil

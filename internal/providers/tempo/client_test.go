@@ -101,7 +101,7 @@ func TestQuoteSwapExactOutput(t *testing.T) {
 	}
 }
 
-func TestBuildSwapActionAddsApprovalForExactInput(t *testing.T) {
+func TestBuildSwapActionBatchesApproveAndSwapForExactInput(t *testing.T) {
 	server := newMockRPCServer(t, mockRPCConfig{allowance: big.NewInt(0)})
 	defer server.Close()
 
@@ -127,14 +127,65 @@ func TestBuildSwapActionAddsApprovalForExactInput(t *testing.T) {
 	if action.Provider != "tempo" {
 		t.Fatalf("unexpected provider: %s", action.Provider)
 	}
-	if len(action.Steps) != 2 {
-		t.Fatalf("expected approval + swap steps, got %d", len(action.Steps))
+	if len(action.Steps) != 1 {
+		t.Fatalf("expected 1 batched step, got %d", len(action.Steps))
 	}
-	if action.Steps[0].Type != "approval" {
-		t.Fatalf("expected first step approval, got %s", action.Steps[0].Type)
+	step := action.Steps[0]
+	if step.StepID != "tempo-swap-exact-input" {
+		t.Fatalf("unexpected swap step id: %s", step.StepID)
 	}
-	if action.Steps[1].StepID != "tempo-swap-exact-input" {
-		t.Fatalf("unexpected swap step id: %s", action.Steps[1].StepID)
+	if step.Type != "swap" {
+		t.Fatalf("expected swap step type, got %s", step.Type)
+	}
+	if len(step.Calls) != 2 {
+		t.Fatalf("expected 2 calls (approve + swap), got %d", len(step.Calls))
+	}
+	// First call is the ERC-20 approve.
+	if !strings.HasPrefix(step.Calls[0].Data, "0x095ea7b3") {
+		t.Fatalf("expected approve selector in first call, got %s", step.Calls[0].Data[:10])
+	}
+	// Second call is the swap.
+	if step.Calls[1].Target == "" {
+		t.Fatal("expected non-empty target in swap call")
+	}
+}
+
+func TestBuildSwapActionSingleCallWhenApproved(t *testing.T) {
+	// Set allowance high enough so no approve call is needed.
+	server := newMockRPCServer(t, mockRPCConfig{allowance: big.NewInt(9999999)})
+	defer server.Close()
+
+	c := New()
+	chain, _ := id.ParseChain("tempo")
+	fromAsset, _ := id.ParseAsset("pathUSD", chain)
+	toAsset, _ := id.ParseAsset("USDC.e", chain)
+	action, err := c.BuildSwapAction(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       fromAsset,
+		ToAsset:         toAsset,
+		AmountBaseUnits: "1000000",
+		AmountDecimal:   "1",
+	}, providers.SwapExecutionOptions{
+		Sender:      "0x00000000000000000000000000000000000000AA",
+		SlippageBps: 100,
+		Simulate:    true,
+		RPCURL:      server.URL,
+	})
+	if err != nil {
+		t.Fatalf("BuildSwapAction failed: %v", err)
+	}
+	if len(action.Steps) != 1 {
+		t.Fatalf("expected 1 step, got %d", len(action.Steps))
+	}
+	step := action.Steps[0]
+	if len(step.Calls) != 1 {
+		t.Fatalf("expected 1 call (swap only), got %d", len(step.Calls))
+	}
+	if step.Target != "" {
+		t.Fatalf("expected empty Target for batched step, got %s", step.Target)
+	}
+	if step.Data != "" {
+		t.Fatalf("expected empty Data for batched step, got %s", step.Data)
 	}
 }
 
@@ -165,8 +216,16 @@ func TestBuildSwapActionExactOutputUsesMaxInput(t *testing.T) {
 	if action.InputAmount != "1020201" {
 		t.Fatalf("expected max input amount 1020201, got %s", action.InputAmount)
 	}
-	if action.Steps[len(action.Steps)-1].StepID != "tempo-swap-exact-output" {
-		t.Fatalf("unexpected swap step id: %s", action.Steps[len(action.Steps)-1].StepID)
+	if len(action.Steps) != 1 {
+		t.Fatalf("expected 1 batched step, got %d", len(action.Steps))
+	}
+	step := action.Steps[0]
+	if step.StepID != "tempo-swap-exact-output" {
+		t.Fatalf("unexpected swap step id: %s", step.StepID)
+	}
+	// With zero allowance, should have approve + swap calls.
+	if len(step.Calls) != 2 {
+		t.Fatalf("expected 2 calls (approve + swap), got %d", len(step.Calls))
 	}
 }
 
