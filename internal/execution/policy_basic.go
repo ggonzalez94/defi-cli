@@ -15,10 +15,13 @@ import (
 var (
 	policyERC20ABI           = mustPolicyABI(registry.ERC20MinimalABI)
 	policyUniswapV3RouterABI = mustPolicyABI(registry.UniswapV3RouterABI)
+	policyTempoDEXABI        = mustPolicyABI(registry.TempoStablecoinDEXABI)
 
 	policyApproveSelector     = policyERC20ABI.Methods["approve"].ID
 	policyTransferSelector    = policyERC20ABI.Methods["transfer"].ID
 	policyUniswapV3SwapMethod = policyUniswapV3RouterABI.Methods["exactInputSingle"].ID
+	policyTempoSwapExactIn    = policyTempoDEXABI.Methods["swapExactAmountIn"].ID
+	policyTempoSwapExactOut   = policyTempoDEXABI.Methods["swapExactAmountOut"].ID
 )
 
 func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []byte, opts ExecuteOptions) error {
@@ -127,19 +130,34 @@ func validateTransferPolicy(action *Action, step *ActionStep, data []byte) error
 }
 
 func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []byte) error {
-	if action == nil || !strings.EqualFold(strings.TrimSpace(action.Provider), "taikoswap") {
+	if action == nil {
 		return nil
 	}
-	if len(data) < 4 || !bytes.Equal(data[:4], policyUniswapV3SwapMethod) {
-		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step must call exactInputSingle")
-	}
-	_, router, ok := registry.UniswapV3Contracts(chainID)
-	if !ok {
-		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step has unsupported chain")
-	}
-	expectedRouter := common.HexToAddress(router).Hex()
-	if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedRouter) {
-		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step target does not match canonical router")
+	switch strings.ToLower(strings.TrimSpace(action.Provider)) {
+	case "taikoswap":
+		if len(data) < 4 || !bytes.Equal(data[:4], policyUniswapV3SwapMethod) {
+			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step must call exactInputSingle")
+		}
+		_, router, ok := registry.UniswapV3Contracts(chainID)
+		if !ok {
+			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step has unsupported chain")
+		}
+		expectedRouter := common.HexToAddress(router).Hex()
+		if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedRouter) {
+			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step target does not match canonical router")
+		}
+	case "tempo":
+		if len(data) < 4 || (!bytes.Equal(data[:4], policyTempoSwapExactIn) && !bytes.Equal(data[:4], policyTempoSwapExactOut)) {
+			return clierr.New(clierr.CodeActionPlan, "tempo swap step must call swapExactAmountIn or swapExactAmountOut")
+		}
+		dexAddr, ok := registry.TempoStablecoinDEX(chainID)
+		if !ok {
+			return clierr.New(clierr.CodeActionPlan, "tempo swap step has unsupported chain")
+		}
+		expectedDEX := common.HexToAddress(dexAddr).Hex()
+		if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedDEX) {
+			return clierr.New(clierr.CodeActionPlan, "tempo swap step target does not match canonical stablecoin dex")
+		}
 	}
 	return nil
 }

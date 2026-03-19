@@ -57,11 +57,12 @@ Reason: this route uses DefiLlama bridge analytics endpoints that are provider-g
 ```bash
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
 defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --results-only
 ```
 
 Flags:
 
-- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee|taikoswap`) required
+- `--provider string` (`1inch|uniswap|tempo|jupiter|fibrous|bungee|taikoswap`) required
 - `--chain string` required
 - `--from-asset string` required
 - `--to-asset string` required
@@ -76,6 +77,7 @@ Flags:
 Type support:
 
 - `uniswap`: `exact-input`, `exact-output`
+- `tempo`: `exact-input`, `exact-output`
 - `1inch`, `jupiter`, `fibrous`, `bungee`, `taikoswap`: `exact-input` only
 
 Auth requirements:
@@ -83,7 +85,7 @@ Auth requirements:
 - `1inch` -> `DEFI_1INCH_API_KEY`
 - `uniswap` -> `DEFI_UNISWAP_API_KEY`
 - `jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
-- `fibrous`, `bungee`, `taikoswap` -> keyless by default
+- `tempo`, `fibrous`, `bungee`, `taikoswap` -> keyless by default
 
 These requirements are driven by provider APIs. `defi-cli` passes through provider auth requirements per route/provider pair.
 
@@ -130,16 +132,25 @@ defi bridge submit --action-id <action_id> --step-timeout 15m --timeout 20m --al
 ## `swap plan|submit|status`
 
 ```bash
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --from-address 0xYourEOA --results-only
 defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap submit --action-id <action_id> --results-only
 defi swap status --action-id <action_id> --results-only
 ```
 
-Execution provider today: `taikoswap`.
+Execution providers: `tempo|taikoswap`.
 
 `plan` and `submit` also accept `--input-json` and `--input-file` with the same precedence rules as bridge plans.
 
 `submit` supports signer, polling, gas, simulation, and policy override flags consistent with other execution commands (`--simulate`, signer inputs, `--poll-interval`, `--step-timeout`, `--gas-multiplier`, `--max-fee-gwei`, `--max-priority-fee-gwei`, `--allow-max-approval`, `--unsafe-provider-tx`).
+
+Tempo execution notes:
+
+- Tempo DEX planning supports `exact-input` and `exact-output`.
+- Tempo DEX currently supports USD-denominated TIP-20 assets only and auto-routes supported pairs through quote-token relationships on-chain.
+- Tempo DEX swaps settle to the caller, so `--recipient` must be omitted or match `--from-address`.
+- `actions estimate` is intentionally unsupported for Tempo actions for now because fee accounting is fee-token based rather than native-gas EIP-1559 pricing.
 
 ## `transfer plan|submit|status`
 
@@ -200,3 +211,5 @@ defi actions estimate --action-id <action_id> --results-only
 ```
 
 Inspect persisted actions. `actions estimate` computes per-step gas projections using `eth_estimateGas` and EIP-1559 fee resolution.
+
+Tempo note: `actions estimate` currently rejects Tempo actions until fee-token-aware estimation is implemented.
