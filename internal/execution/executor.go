@@ -33,6 +33,7 @@ type ExecuteOptions struct {
 	MaxPriorityFeeGwei string
 	AllowMaxApproval   bool
 	UnsafeProviderTx   bool
+	FeeToken           string // optional; Tempo-only, defaults to chain's primary USDC
 }
 
 var (
@@ -92,8 +93,23 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 		}
 		return nil
 	}
+
+	// Resolve the chain ID from the first step to select the executor.
+	firstChainID := strings.TrimSpace(action.Steps[0].ChainID)
+	if firstChainID == "" {
+		firstChainID = strings.TrimSpace(action.ChainID)
+	}
+	numericChainID, err := ParseEVMChainID(firstChainID)
+	if err != nil {
+		return clierr.Wrap(clierr.CodeUsage, "parse chain id for executor selection", err)
+	}
+	executor := ResolveStepExecutor(numericChainID, txSigner)
+	if evmExec, ok := executor.(*EVMStepExecutor); ok {
+		defer evmExec.Close()
+	}
+
 	action.Status = ActionStatusRunning
-	action.FromAddress = txSigner.Address().Hex()
+	action.FromAddress = executor.EffectiveSender().Hex()
 	if err := persist(); err != nil {
 		return err
 	}
@@ -136,6 +152,8 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			}
 			return clierr.New(clierr.CodeUsage, "invalid target address for action step")
 		}
+
+		// Ensure an RPC client is available for head-wait checks.
 		client := rpcClients[stepRPCURL]
 		if client == nil {
 			var err error
@@ -163,8 +181,7 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			}
 		}
 
-		confirmedBlock, err := executeStep(ctx, client, txSigner, action, step, opts, persist)
-		if err != nil {
+		if err := executor.ExecuteStep(ctx, store, action, step, opts); err != nil {
 			if step.Status != StepStatusFailed {
 				markStepFailed(action, step, err.Error())
 			}
@@ -174,9 +191,12 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			return err
 		}
 
-		if confirmedBlock != nil {
-			if current := requiredHeadByRPC[stepRPCURL]; current == nil || current.Cmp(confirmedBlock) < 0 {
-				requiredHeadByRPC[stepRPCURL] = confirmedBlock
+		// Track confirmed block for cross-step head ordering.
+		if blockStr, ok := step.ExpectedOutputs["_confirmed_block_number"]; ok {
+			if confirmedBlock, ok := new(big.Int).SetString(blockStr, 10); ok {
+				if current := requiredHeadByRPC[stepRPCURL]; current == nil || current.Cmp(confirmedBlock) < 0 {
+					requiredHeadByRPC[stepRPCURL] = confirmedBlock
+				}
 			}
 		}
 		if err := persist(); err != nil {
@@ -190,111 +210,6 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 	return nil
 }
 
-func executeStep(ctx context.Context, client *ethclient.Client, txSigner signer.Signer, action *Action, step *ActionStep, opts ExecuteOptions, persist func() error) (*big.Int, error) {
-	chainID, err := client.ChainID(ctx)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "read chain id", err)
-	}
-	if step.ChainID != "" {
-		expected := fmt.Sprintf("eip155:%d", chainID.Int64())
-		if !strings.EqualFold(strings.TrimSpace(step.ChainID), expected) {
-			return nil, clierr.New(clierr.CodeActionPlan, fmt.Sprintf("step chain mismatch: expected %s, got %s", expected, step.ChainID))
-		}
-	}
-	if !common.IsHexAddress(step.Target) {
-		return nil, clierr.New(clierr.CodeUsage, "invalid step target address")
-	}
-	target := common.HexToAddress(step.Target)
-	step.Target = target.Hex()
-	data, err := decodeHex(step.Data)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUsage, "decode step calldata", err)
-	}
-	if err := validateStepPolicy(action, step, chainID.Int64(), data, opts); err != nil {
-		return nil, err
-	}
-	value, ok := new(big.Int).SetString(step.Value, 10)
-	if !ok {
-		return nil, clierr.New(clierr.CodeUsage, "invalid step value")
-	}
-	msg := ethereum.CallMsg{From: txSigner.Address(), To: &target, Value: value, Data: data}
-	if txHash, ok := normalizeStepTxHash(step.TxHash); ok {
-		step.Status = StepStatusSubmitted
-		step.Error = ""
-		if err := safePersist(persist); err != nil {
-			return nil, err
-		}
-		return waitForStepConfirmation(ctx, client, step, msg, txHash, opts, persist)
-	}
-
-	if opts.Simulate {
-		if _, err := client.CallContract(ctx, msg, nil); err != nil {
-			return nil, wrapEVMExecutionError(clierr.CodeActionSim, "simulate step (eth_call)", err)
-		}
-		step.Status = StepStatusSimulated
-		step.Error = ""
-		if err := safePersist(persist); err != nil {
-			return nil, err
-		}
-	}
-
-	gasLimit, err := client.EstimateGas(ctx, msg)
-	if err != nil {
-		return nil, wrapEVMExecutionError(clierr.CodeActionSim, "estimate gas", err)
-	}
-	gasLimit = uint64(float64(gasLimit) * opts.GasMultiplier)
-	if gasLimit == 0 {
-		return nil, clierr.New(clierr.CodeActionSim, "estimate gas returned zero")
-	}
-
-	tipCap, err := resolveTipCap(ctx, client, opts.MaxPriorityFeeGwei)
-	if err != nil {
-		return nil, err
-	}
-	header, err := client.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "fetch latest header", err)
-	}
-	baseFee := header.BaseFee
-	if baseFee == nil {
-		baseFee = big.NewInt(1_000_000_000)
-	}
-	feeCap, err := resolveFeeCap(baseFee, tipCap, opts.MaxFeeGwei)
-	if err != nil {
-		return nil, err
-	}
-	unlockNonce := acquireSignerNonceLock(chainID, txSigner.Address())
-	defer unlockNonce()
-	nonce, err := client.PendingNonceAt(ctx, txSigner.Address())
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "fetch nonce", err)
-	}
-
-	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID:   chainID,
-		Nonce:     nonce,
-		GasTipCap: tipCap,
-		GasFeeCap: feeCap,
-		Gas:       gasLimit,
-		To:        &target,
-		Value:     value,
-		Data:      data,
-	})
-	signed, err := txSigner.SignTx(chainID, tx)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeSigner, "sign transaction", err)
-	}
-	if err := client.SendTransaction(ctx, signed); err != nil {
-		return nil, wrapEVMExecutionError(clierr.CodeUnavailable, "broadcast transaction", err)
-	}
-	step.Status = StepStatusSubmitted
-	step.TxHash = signed.Hash().Hex()
-	step.Error = ""
-	if err := safePersist(persist); err != nil {
-		return nil, err
-	}
-	return waitForStepConfirmation(ctx, client, step, msg, signed.Hash(), opts, persist)
-}
 
 func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step *ActionStep, msg ethereum.CallMsg, txHash common.Hash, opts ExecuteOptions, persist func() error) (*big.Int, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, opts.StepTimeout)
