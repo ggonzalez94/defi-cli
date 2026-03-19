@@ -107,6 +107,9 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 	if evmExec, ok := executor.(*EVMStepExecutor); ok {
 		defer evmExec.Close()
 	}
+	if tempoExec, ok := executor.(*TempoStepExecutor); ok {
+		defer tempoExec.Close()
+	}
 
 	action.Status = ActionStatusRunning
 	action.FromAddress = executor.EffectiveSender().Hex()
@@ -138,19 +141,23 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 			}
 			return clierr.New(clierr.CodeUsage, "missing rpc url for action step")
 		}
-		if strings.TrimSpace(step.Target) == "" {
-			markStepFailed(action, step, "missing target")
-			if err := persist(); err != nil {
-				return err
+		// Batched steps (Calls populated) may have empty Target/Data; skip
+		// the single-target validation for those.
+		if len(step.Calls) == 0 {
+			if strings.TrimSpace(step.Target) == "" {
+				markStepFailed(action, step, "missing target")
+				if err := persist(); err != nil {
+					return err
+				}
+				return clierr.New(clierr.CodeUsage, "missing target for action step")
 			}
-			return clierr.New(clierr.CodeUsage, "missing target for action step")
-		}
-		if !common.IsHexAddress(step.Target) {
-			markStepFailed(action, step, "invalid target address")
-			if err := persist(); err != nil {
-				return err
+			if !common.IsHexAddress(step.Target) {
+				markStepFailed(action, step, "invalid target address")
+				if err := persist(); err != nil {
+					return err
+				}
+				return clierr.New(clierr.CodeUsage, "invalid target address for action step")
 			}
-			return clierr.New(clierr.CodeUsage, "invalid target address for action step")
 		}
 
 		// Ensure an RPC client is available for head-wait checks.

@@ -74,11 +74,10 @@ func ParseEVMChainID(caip2 string) (int64, error) {
 }
 
 // ResolveStepExecutor returns the appropriate StepExecutor for the given chain.
-// For Tempo chains it will panic until TempoStepExecutor is implemented.
+// Tempo chains get a TempoStepExecutor; all others get the EVM executor.
 func ResolveStepExecutor(chainID int64, txSigner signer.Signer) StepExecutor {
 	if IsTempoChain(chainID) {
-		// Stub for now — will be implemented in a later task.
-		panic("TempoStepExecutor not yet implemented")
+		return NewTempoStepExecutor(txSigner)
 	}
 	return NewEVMStepExecutor(txSigner)
 }
