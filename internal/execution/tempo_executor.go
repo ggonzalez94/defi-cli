@@ -39,11 +39,15 @@ type TempoStepExecutor struct {
 }
 
 // NewTempoStepExecutor creates a TempoStepExecutor. If the provided signer
-// exposes a PrivateKey(), a tempo-go signer is derived automatically.
-// Otherwise ExecuteStep will return an error at signing time.
+// implements TempoSigner (e.g. TempoWalletSigner), its TempoGoSigner() is
+// used directly. Otherwise, if the signer exposes a PrivateKey(), a tempo-go
+// signer is derived automatically. ExecuteStep will return an error at signing
+// time if neither path produces a tempo signer.
 func NewTempoStepExecutor(txSigner signer.Signer) *TempoStepExecutor {
 	var ts *temposigner.Signer
-	if pkp, ok := txSigner.(privateKeyProvider); ok {
+	if tempoS, ok := txSigner.(signer.TempoSigner); ok {
+		ts = tempoS.TempoGoSigner()
+	} else if pkp, ok := txSigner.(privateKeyProvider); ok {
 		if pk := pkp.PrivateKey(); pk != nil {
 			ts = temposigner.NewSignerFromKey(pk)
 		}
@@ -55,8 +59,13 @@ func NewTempoStepExecutor(txSigner signer.Signer) *TempoStepExecutor {
 	}
 }
 
-// EffectiveSender returns the address that will sign and send transactions.
+// EffectiveSender returns the address that will act as the on-chain sender.
+// For TempoSigner (smart-wallet), this is the wallet address, not the signing
+// key address.
 func (e *TempoStepExecutor) EffectiveSender() common.Address {
+	if ts, ok := e.txSigner.(signer.TempoSigner); ok {
+		return ts.WalletAddress()
+	}
 	return e.txSigner.Address()
 }
 
