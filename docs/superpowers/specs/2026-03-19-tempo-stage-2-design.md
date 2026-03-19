@@ -64,32 +64,64 @@ Extract execution into a pluggable interface to keep EVM and Tempo paths cleanly
 
 ```go
 // internal/execution/step_executor.go
+
+// StepGasEstimate holds per-step gas estimation results.
+// For EVM chains, FeeUnit is "ETH" and FeeToken is empty.
+// For Tempo chains, FeeUnit is the fee token symbol and FeeToken is the token address.
+type StepGasEstimate struct {
+    GasEstimate   uint64
+    LikelyFee     string // human-readable decimal in fee token units
+    WorstCaseFee  string
+    FeeUnit       string // e.g., "ETH", "USDC.e"
+    FeeToken      string // token address (empty for native gas chains)
+}
+
 type StepExecutor interface {
+    // ExecuteStep submits a single step on-chain. It handles tx construction,
+    // signing, broadcast, and receipt polling. It does NOT handle action-level
+    // orchestration (status lifecycle, persistence, approval state visibility).
     ExecuteStep(ctx context.Context, store *Store, action *Action, step *ActionStep, opts ExecuteOptions) error
-    EstimateStep(ctx context.Context, action *Action, step *ActionStep) (GasEstimate, error)
+
+    // EstimateStep returns gas and fee estimates for a single step.
+    EstimateStep(ctx context.Context, action *Action, step *ActionStep) (StepGasEstimate, error)
+
+    // EffectiveSender returns the address that will be the tx sender (msg.sender).
+    // For EVM: the signer's derived address. For Tempo agent wallets: the wallet address.
+    EffectiveSender() common.Address
 }
 ```
 
 Two implementations:
-- `EVMStepExecutor` — current logic extracted unchanged, uses go-ethereum + local signer
-- `TempoStepExecutor` — new, uses `github.com/tempoxyz/tempo-go`, handles `Calls` batching, fee-token, Keychain signing
+- `EVMStepExecutor` — current logic extracted unchanged, uses go-ethereum + local signer. `EffectiveSender()` returns `signer.Address()`.
+- `TempoStepExecutor` — new, uses `github.com/tempoxyz/tempo-go`, handles `Calls` batching, fee-token, Keychain signing. `EffectiveSender()` returns `TempoSigner.WalletAddress()` when available, otherwise `signer.Address()`.
 
 Resolver:
 ```go
-func ResolveStepExecutor(chainID int64, signer signer.Signer) StepExecutor {
+func ResolveStepExecutor(chainID int64, txSigner signer.Signer) StepExecutor {
     if IsTempoChain(chainID) {
-        return NewTempoStepExecutor(signer)
+        return NewTempoStepExecutor(txSigner)
     }
-    return NewEVMStepExecutor(signer)
+    return NewEVMStepExecutor(txSigner)
 }
 ```
 
-Top-level `ExecuteAction` stays chain-agnostic: iterates steps, updates status, persists to store, delegates submission to the resolved executor. Shared orchestration (status lifecycle, persistence, timeout) lives once.
+`ExecuteAction` changes:
+- Resolves the executor once per action (all steps in an action share the same chain)
+- Uses `executor.EffectiveSender()` to stamp `action.FromAddress` (instead of the current `txSigner.Address().Hex()`)
+- Delegates step submission to `executor.ExecuteStep()`
+- Retains ownership of: status lifecycle, persistence, timeout, and EVM-specific post-step hooks
+
+EVM-specific post-step hooks (approval state visibility via `ensurePostConfirmationStateVisible`, bridge settlement via `verifyBridgeSettlement`) remain in `ExecuteAction` guarded by step type checks. These do not apply to Tempo batched steps because:
+- Tempo batched steps embed approvals inside `Calls` — they execute atomically, so no post-approval visibility wait is needed
+- Tempo has no bridge steps (Tempo is not a bridge destination chain)
+
+If future Tempo step types need post-step hooks, they can be added to the `StepExecutor` interface as optional methods.
 
 Benefits:
 - EVM path untouched — zero regression risk
 - Each executor is a focused, testable unit
 - Adding a third chain type = new implementation, not a new branch
+- `EffectiveSender()` cleanly solves the key-address vs wallet-address divergence
 
 ### 4.2 Action Model Extension
 
@@ -144,14 +176,18 @@ Per step:
 
 ### 4.5 Fee-token Gas Estimation
 
-Remove the hardcoded Tempo rejection in `actions estimate`. The Tempo estimate path:
+The current `EstimateActionGas` in `internal/execution/estimate.go` rejects Tempo actions upfront and uses `step.Target`/`step.Data` to build `ethereum.CallMsg`. Both need to change:
 
-1. `eth_estimateGas` → gas units
-2. `eth_gasPrice` → fee rate (18-decimal USD)
-3. `gas * feeRate` → fee in 18-decimal USD
-4. Read `decimals()` from fee token contract → convert to token base units via `10^(18 - decimals)`
+**Estimation dispatch**: `EstimateActionGas` delegates per-step estimation to `StepExecutor.EstimateStep()` instead of building call messages directly. The `EVMStepExecutor.EstimateStep()` contains the current logic (unchanged). The `TempoStepExecutor.EstimateStep()` handles batched `Calls`:
+- For steps with `Calls`: estimate gas for the full batched call set (using `eth_estimateGas` with the combined calldata, or per-call estimation summed — validated during spike)
+- Compute fee in fee-token units using `gasEstimate * gasPrice / 10^(18 - tokenDecimals)`
 
-Response extension (additive, backwards-compatible):
+**Aggregate totals**: The existing `ActionGasEstimateChainTotal` uses `likely_fee_wei` and `worst_case_fee_wei` field names. For Tempo chains, these fields contain fee-token base units (not wei). To avoid breaking existing consumers:
+- Add `fee_unit` and `fee_token` fields to `ActionGasEstimateChainTotal` (omitted for EVM chains)
+- When `fee_unit` is present, consumers know `*_fee_wei` values are in the fee token's base units, not ETH wei
+- The field names are kept for JSON stability; the semantic change is documented in the `fee_unit` field's presence
+
+**Per-step response** (from `StepGasEstimate`):
 
 ```json
 {
@@ -170,7 +206,18 @@ Standard EVM chains: `fee_unit` = `"ETH"` (or native token), `fee_token` omitted
 - `TempoFeeToken(chainID int64) (string, bool)` — default fee token per Tempo chain
 - `IsTempoChain(chainID int64) bool` — chain detection for executor routing
 
-Existing entries (`TempoStablecoinDEX`, RPC map) unchanged.
+Tempo chain IDs (already registered in stage 1 branch at `cca9373`):
+- `4217` — Tempo mainnet (`tempo`, `presto`)
+- `42431` — Tempo Moderato testnet (`moderato`, `tempo testnet`)
+- `31318` — Tempo devnet (`tempo devnet`)
+
+Stage 1 already added to the registry (in branch `cca9373`, not yet on `main`):
+- `TempoStablecoinDEX(chainID) (string, bool)` — DEX contract address per chain
+- RPC entries for all three chain IDs
+- Bootstrap token entries in `internal/id/id.go`
+- Tempo ABI fragments in `internal/registry/abis.go`
+
+These remain unchanged. Stage 2 adds only `TempoFeeToken` and `IsTempoChain`.
 
 ### 4.7 Policy Updates
 
@@ -218,12 +265,15 @@ Keychain { user_address: walletAddr, signature: { Secp256k1: sig } }
 
 If `tempo-go`'s `signer.NewSigner` handles this automatically when the key is registered as an access key, we use it directly. If not, we wrap manually after signing. This is an implementation detail to validate during the spike.
 
-### 5.4 Signer Precedence
+### 5.4 Signer Precedence and Error Handling
 
 When `--signer tempo`:
 - `tempo wallet -j whoami` is the sole source
-- `--private-key`, `DEFI_PRIVATE_KEY`, and other local signer env vars are rejected (mixing models is confusing)
-- Error messages guide users to `tempo wallet login` and fund flows
+- `--private-key`, `DEFI_PRIVATE_KEY`, and other local signer env vars are rejected with exit code `2` (usage error): `"--signer tempo cannot be combined with --private-key or local key env vars; tempo wallet manages keys automatically"`
+- If `tempo` CLI not found: exit code `24` (signer unavailable): `"tempo CLI is required for --signer tempo. Install: curl -fsSL https://tempo.xyz/install | sh"`
+- If `ready: false`: exit code `24`: `"tempo wallet is not logged in; run 'tempo wallet login' to set up your agent wallet"`
+- If `key.expires_at` has passed: exit code `24`: `"tempo wallet access key has expired; run 'tempo wallet login' to refresh"`
+- If `spending_limit.remaining` is below a threshold: emit a warning in the response envelope but proceed
 
 ## 6. Phasing
 
@@ -271,7 +321,8 @@ Three unknowns to validate early:
 - `internal/providers/tempo/client.go` — `BuildSwapAction` produces batched steps
 - `internal/registry/contracts.go` — `TempoFeeToken()`, `IsTempoChain()`
 - `internal/app/runner.go` — `--signer tempo` flag, `--fee-token` flag, executor wiring
-- `internal/app/runner_actions_test.go` — remove Tempo estimate rejection, add fee-token estimate tests
+- `internal/execution/estimate.go` — delegate per-step estimation to `StepExecutor.EstimateStep()`, add `fee_unit`/`fee_token` to chain totals
+- `internal/app/runner_actions_test.go` — add fee-token estimate tests for Tempo steps
 - `go.mod` / `go.sum` — add `github.com/tempoxyz/tempo-go`
 
 ### Unchanged
