@@ -9,6 +9,25 @@ Format:
 
 ## [Unreleased]
 
+### Added
+- Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.
+- Added the `tempo` swap provider with on-chain quote and execution planning against the Tempo Stablecoin DEX, including `exact-input` and `exact-output` support.
+- Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
+
+### Changed
+- `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
+- `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
+- `actions estimate` now rejects Tempo actions until fee-token-aware estimation is implemented, instead of returning misleading EIP-1559-native gas output.
+- Tempo swap planning/quotes now validate TIP-20 currency metadata up front and return `unsupported` for non-USD assets or DEX reverts such as missing pairs, instead of reporting them as transient provider outages.
+
+### Fixed
+- None yet.
+
+### Docs
+- Documented Tempo chain aliases, provider support, native DEX caveats, and execution examples across README, AGENTS, and Mintlify docs.
+- Updated Tempo swap examples to use supported USD TIP-20 pairs and documented that the DEX auto-routes supported pairs through quote-token relationships.
+
+### Security
 - None yet.
 
 ## [v0.4.0] - 2026-03-07

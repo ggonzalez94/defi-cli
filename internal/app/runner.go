@@ -38,6 +38,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
 	"github.com/ggonzalez94/defi-cli/internal/providers/oneinch"
 	"github.com/ggonzalez94/defi-cli/internal/providers/taikoswap"
+	"github.com/ggonzalez94/defi-cli/internal/providers/tempo"
 	"github.com/ggonzalez94/defi-cli/internal/providers/uniswap"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/ggonzalez94/defi-cli/internal/version"
@@ -149,6 +150,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				morphoProvider := morpho.New(httpClient)
 				kaminoProvider := kamino.New(httpClient)
 				jupiterProvider := jupiter.New(httpClient, settings.JupiterAPIKey)
+				tempoProvider := tempo.New()
 				taikoSwapProvider := taikoswap.New()
 				s.marketProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
@@ -173,6 +175,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				s.swapProviders = map[string]providers.SwapProvider{
 					"1inch":     oneinch.New(httpClient, settings.OneInchAPIKey),
 					"uniswap":   uniswap.New(httpClient, settings.UniswapAPIKey),
+					"tempo":     tempoProvider,
 					"taikoswap": taikoSwapProvider,
 					"jupiter":   jupiterProvider,
 					"bungee":    bungee.NewSwap(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
@@ -188,6 +191,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					s.bridgeProviders["bungee"].Info(),
 					s.swapProviders["1inch"].Info(),
 					s.swapProviders["uniswap"].Info(),
+					s.swapProviders["tempo"].Info(),
 					s.swapProviders["taikoswap"].Info(),
 					s.swapProviders["jupiter"].Info(),
 					s.swapProviders["bungee"].Info(),
@@ -817,7 +821,32 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 func (s *runtimeState) newSwapCommand() *cobra.Command {
 	root := &cobra.Command{Use: "swap", Short: "Swap quote and execution commands"}
 
-	parseSwapRequest := func(chainArg, fromAssetArg, toAssetArg, amountBase, amountDecimal, rpcURL string) (providers.SwapQuoteRequest, error) {
+	normalizeTradeType := func(raw string) (providers.SwapTradeType, error) {
+		tradeType := providers.SwapTradeType(strings.ToLower(strings.TrimSpace(raw)))
+		switch tradeType {
+		case "", providers.SwapTradeTypeExactInput:
+			return providers.SwapTradeTypeExactInput, nil
+		case providers.SwapTradeTypeExactOutput:
+			return providers.SwapTradeTypeExactOutput, nil
+		default:
+			return "", clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
+		}
+	}
+
+	swapProviderSupportsExactOutput := func(providerName string) bool {
+		switch providers.NormalizeSwapProvider(providerName) {
+		case "uniswap", "tempo":
+			return true
+		default:
+			return false
+		}
+	}
+
+	parseSwapRequest := func(
+		chainArg, fromAssetArg, toAssetArg string,
+		tradeType providers.SwapTradeType,
+		amountBase, amountDecimal, amountOutBase, amountOutDecimal, rpcURL string,
+	) (providers.SwapQuoteRequest, error) {
 		chain, err := id.ParseChain(chainArg)
 		if err != nil {
 			return providers.SwapQuoteRequest{}, err
@@ -830,14 +859,40 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		if err != nil {
 			return providers.SwapQuoteRequest{}, err
 		}
-		decimals := fromAsset.Decimals
-		if decimals <= 0 {
-			decimals = 18
+
+		var base, decimal string
+		switch tradeType {
+		case providers.SwapTradeTypeExactInput:
+			if amountOutBase != "" || amountOutDecimal != "" {
+				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "--amount-out/--amount-out-decimal are only valid with --type exact-output")
+			}
+			decimals := fromAsset.Decimals
+			if decimals <= 0 {
+				decimals = 18
+			}
+			base, decimal, err = id.NormalizeAmount(amountBase, amountDecimal, decimals)
+			if err != nil {
+				return providers.SwapQuoteRequest{}, err
+			}
+		case providers.SwapTradeTypeExactOutput:
+			if amountBase != "" || amountDecimal != "" {
+				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "--amount/--amount-decimal are only valid with --type exact-input")
+			}
+			if amountOutBase == "" && amountOutDecimal == "" {
+				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "exact-output requires --amount-out or --amount-out-decimal")
+			}
+			decimals := toAsset.Decimals
+			if decimals <= 0 {
+				decimals = 18
+			}
+			base, decimal, err = id.NormalizeAmount(amountOutBase, amountOutDecimal, decimals)
+			if err != nil {
+				return providers.SwapQuoteRequest{}, err
+			}
+		default:
+			return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
 		}
-		base, decimal, err := id.NormalizeAmount(amountBase, amountDecimal, decimals)
-		if err != nil {
-			return providers.SwapQuoteRequest{}, err
-		}
+
 		return providers.SwapQuoteRequest{
 			Chain:           chain,
 			FromAsset:       fromAsset,
@@ -845,7 +900,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			AmountBaseUnits: base,
 			AmountDecimal:   decimal,
 			RPCURL:          strings.TrimSpace(rpcURL),
-			TradeType:       providers.SwapTradeTypeExactInput,
+			TradeType:       tradeType,
 		}, nil
 	}
 
@@ -857,68 +912,20 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		Use:   "quote",
 		Short: "Get swap quote",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := strings.ToLower(strings.TrimSpace(quoteProviderArg))
+			providerName := providers.NormalizeSwapProvider(quoteProviderArg)
 			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required (1inch|uniswap|taikoswap|jupiter|fibrous|bungee)")
+				return clierr.New(clierr.CodeUsage, "--provider is required (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
 			}
 			provider, ok := s.swapProviders[providerName]
 			if !ok {
 				return clierr.New(clierr.CodeUnsupported, "unsupported swap provider")
 			}
-			chain, err := id.ParseChain(quoteChainArg)
+			tradeType, err := normalizeTradeType(quoteTradeTypeArg)
 			if err != nil {
 				return err
 			}
-			fromAsset, err := id.ParseAsset(quoteFromAssetArg, chain)
-			if err != nil {
-				return err
-			}
-			toAsset, err := id.ParseAsset(quoteToAssetArg, chain)
-			if err != nil {
-				return err
-			}
-
-			tradeType := providers.SwapTradeType(strings.ToLower(strings.TrimSpace(quoteTradeTypeArg)))
-			switch tradeType {
-			case "", providers.SwapTradeTypeExactInput:
-				tradeType = providers.SwapTradeTypeExactInput
-			case providers.SwapTradeTypeExactOutput:
-			default:
-				return clierr.New(clierr.CodeUsage, "--type must be exact-input or exact-output")
-			}
-			if tradeType == providers.SwapTradeTypeExactOutput && providerName != "uniswap" {
-				return clierr.New(clierr.CodeUnsupported, "exact-output swap quotes currently support only --provider uniswap")
-			}
-
-			var base, decimal string
-			switch tradeType {
-			case providers.SwapTradeTypeExactInput:
-				if quoteAmountOutBase != "" || quoteAmountOutDecimal != "" {
-					return clierr.New(clierr.CodeUsage, "--amount-out/--amount-out-decimal are only valid with --type exact-output")
-				}
-				decimals := fromAsset.Decimals
-				if decimals <= 0 {
-					decimals = 18
-				}
-				base, decimal, err = id.NormalizeAmount(quoteAmountBase, quoteAmountDecimal, decimals)
-				if err != nil {
-					return err
-				}
-			case providers.SwapTradeTypeExactOutput:
-				if quoteAmountBase != "" || quoteAmountDecimal != "" {
-					return clierr.New(clierr.CodeUsage, "--amount/--amount-decimal are only valid with --type exact-input")
-				}
-				if quoteAmountOutBase == "" && quoteAmountOutDecimal == "" {
-					return clierr.New(clierr.CodeUsage, "exact-output requires --amount-out or --amount-out-decimal")
-				}
-				decimals := toAsset.Decimals
-				if decimals <= 0 {
-					decimals = 18
-				}
-				base, decimal, err = id.NormalizeAmount(quoteAmountOutBase, quoteAmountOutDecimal, decimals)
-				if err != nil {
-					return err
-				}
+			if tradeType == providers.SwapTradeTypeExactOutput && !swapProviderSupportsExactOutput(providerName) {
+				return clierr.New(clierr.CodeUnsupported, "exact-output swap quotes currently support only --provider uniswap or --provider tempo")
 			}
 
 			var slippagePtr *float64
@@ -942,17 +949,22 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return clierr.New(clierr.CodeUsage, "--from-address is required for --provider uniswap")
 			}
 
-			reqStruct := providers.SwapQuoteRequest{
-				Chain:           chain,
-				FromAsset:       fromAsset,
-				ToAsset:         toAsset,
-				AmountBaseUnits: base,
-				AmountDecimal:   decimal,
-				RPCURL:          strings.TrimSpace(quoteRPCURL),
-				TradeType:       tradeType,
-				SlippagePct:     slippagePtr,
-				Swapper:         swapper,
+			reqStruct, err := parseSwapRequest(
+				quoteChainArg,
+				quoteFromAssetArg,
+				quoteToAssetArg,
+				tradeType,
+				quoteAmountBase,
+				quoteAmountDecimal,
+				quoteAmountOutBase,
+				quoteAmountOutDecimal,
+				quoteRPCURL,
+			)
+			if err != nil {
+				return err
 			}
+			reqStruct.SlippagePct = slippagePtr
+			reqStruct.Swapper = swapper
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
 				"provider":      providerName,
 				"chain":         reqStruct.Chain.CAIP2,
@@ -973,7 +985,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			})
 		},
 	}
-	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|taikoswap|jupiter|fibrous|bungee)")
+	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
 	quoteCmd.Flags().StringVar(&quoteChainArg, "chain", "", "Chain identifier")
 	quoteCmd.Flags().StringVar(&quoteFromAssetArg, "from-asset", "", "Input asset")
 	quoteCmd.Flags().StringVar(&quoteToAssetArg, "to-asset", "", "Output asset")
@@ -1026,17 +1038,20 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	})
 
 	type swapPlanArgs struct {
-		Provider      string `json:"provider" flag:"provider" required:"true" enum:"taikoswap"`
-		ChainArg      string `json:"chain" flag:"chain" required:"true" format:"chain"`
-		FromAssetArg  string `json:"from_asset" flag:"from-asset" required:"true" format:"asset"`
-		ToAssetArg    string `json:"to_asset" flag:"to-asset" required:"true" format:"asset"`
-		AmountBase    string `json:"amount" flag:"amount" format:"base-units"`
-		AmountDecimal string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
-		FromAddress   string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
-		Recipient     string `json:"recipient" flag:"recipient" format:"evm-address"`
-		SlippageBps   int64  `json:"slippage_bps" flag:"slippage-bps"`
-		Simulate      bool   `json:"simulate" flag:"simulate"`
-		RPCURL        string `json:"rpc_url" flag:"rpc-url" format:"url"`
+		Provider         string `json:"provider" flag:"provider" required:"true" enum:"taikoswap,tempo"`
+		ChainArg         string `json:"chain" flag:"chain" required:"true" format:"chain"`
+		FromAssetArg     string `json:"from_asset" flag:"from-asset" required:"true" format:"asset"`
+		ToAssetArg       string `json:"to_asset" flag:"to-asset" required:"true" format:"asset"`
+		TradeType        string `json:"type" flag:"type" enum:"exact-input,exact-output"`
+		AmountBase       string `json:"amount" flag:"amount" format:"base-units"`
+		AmountDecimal    string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
+		AmountOutBase    string `json:"amount_out" flag:"amount-out" format:"base-units"`
+		AmountOutDecimal string `json:"amount_out_decimal" flag:"amount-out-decimal" format:"decimal-amount"`
+		FromAddress      string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		Recipient        string `json:"recipient" flag:"recipient" format:"evm-address"`
+		SlippageBps      int64  `json:"slippage_bps" flag:"slippage-bps"`
+		Simulate         bool   `json:"simulate" flag:"simulate"`
+		RPCURL           string `json:"rpc_url" flag:"rpc-url" format:"url"`
 	}
 	type swapSubmitArgs struct {
 		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
@@ -1058,11 +1073,28 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		Use:   "plan",
 		Short: "Create and persist a swap action plan",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := strings.ToLower(strings.TrimSpace(plan.Provider))
+			providerName := providers.NormalizeSwapProvider(plan.Provider)
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
-			reqStruct, err := parseSwapRequest(plan.ChainArg, plan.FromAssetArg, plan.ToAssetArg, plan.AmountBase, plan.AmountDecimal, "")
+			tradeType, err := normalizeTradeType(plan.TradeType)
+			if err != nil {
+				return err
+			}
+			if tradeType == providers.SwapTradeTypeExactOutput && !swapProviderSupportsExactOutput(providerName) {
+				return clierr.New(clierr.CodeUnsupported, "exact-output swap planning currently supports only --provider tempo")
+			}
+			reqStruct, err := parseSwapRequest(
+				plan.ChainArg,
+				plan.FromAssetArg,
+				plan.ToAssetArg,
+				tradeType,
+				plan.AmountBase,
+				plan.AmountDecimal,
+				plan.AmountOutBase,
+				plan.AmountOutDecimal,
+				plan.RPCURL,
+			)
 			if err != nil {
 				return err
 			}
@@ -1095,12 +1127,15 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Swap execution provider (taikoswap)")
+	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Swap execution provider (taikoswap|tempo)")
 	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.FromAssetArg, "from-asset", "", "Input asset")
 	planCmd.Flags().StringVar(&plan.ToAssetArg, "to-asset", "", "Output asset")
-	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
-	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.TradeType, "type", string(providers.SwapTradeTypeExactInput), "Swap type (exact-input|exact-output)")
+	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Exact-input amount in base units")
+	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Exact-input amount in decimal units")
+	planCmd.Flags().StringVar(&plan.AmountOutBase, "amount-out", "", "Exact-output amount in base units")
+	planCmd.Flags().StringVar(&plan.AmountOutDecimal, "amount-out-decimal", "", "Exact-output amount in decimal units")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	planCmd.Flags().Int64Var(&plan.SlippageBps, "slippage-bps", 50, "Max slippage in basis points")
@@ -1284,6 +1319,9 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 			action, err := s.actionStore.Get(actionID)
 			if err != nil {
 				return clierr.Wrap(clierr.CodeUsage, "load action", err)
+			}
+			if actionUsesTempoChain(action) {
+				return clierr.New(clierr.CodeUnsupported, "actions estimate is not supported for Tempo actions yet; Tempo fees are fee-token based rather than EIP-1559 native gas")
 			}
 			opts, err := parseActionEstimateOptions(
 				estimateStepIDs,
@@ -2470,6 +2508,27 @@ func resolveActionID(actionID string) (string, error) {
 		return "", clierr.New(clierr.CodeUsage, "action id must match act_<32 hex chars>")
 	}
 	return actionID, nil
+}
+
+func actionUsesTempoChain(action execution.Action) bool {
+	if isTempoActionChain(action.ChainID) {
+		return true
+	}
+	for _, step := range action.Steps {
+		if isTempoActionChain(step.ChainID) {
+			return true
+		}
+	}
+	return false
+}
+
+func isTempoActionChain(chainID string) bool {
+	switch strings.ToLower(strings.TrimSpace(chainID)) {
+	case "eip155:4217", "eip155:42431", "eip155:31318":
+		return true
+	default:
+		return false
+	}
 }
 
 func newExecutionSigner(signerBackend, keySource, privateKey string) (execsigner.Signer, error) {

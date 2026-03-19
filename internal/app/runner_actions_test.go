@@ -617,6 +617,35 @@ func TestRunnerActionsStatusRejected(t *testing.T) {
 	}
 }
 
+func TestRunnerActionsEstimateRejectsTempoActions(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	store, err := execution.OpenStore(actionStorePath, actionLockPath)
+	if err != nil {
+		t.Fatalf("open action store: %v", err)
+	}
+	defer store.Close()
+
+	action := execution.NewAction("act_0123456789abcdef0123456789abcdef", "swap", "eip155:4217", execution.Constraints{Simulate: true})
+	if err := store.Save(action); err != nil {
+		t.Fatalf("save action: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"actions", "estimate", "--action-id", action.ActionID})
+	if code != 13 {
+		t.Fatalf("expected unsupported exit code 13, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "Tempo actions") {
+		t.Fatalf("expected Tempo estimate rejection, got stderr=%s", stderr.String())
+	}
+}
+
 func TestRunnerExecutionStatusBypassesCacheOpen(t *testing.T) {
 	setUnopenableCacheEnv(t)
 

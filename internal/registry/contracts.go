@@ -38,3 +38,18 @@ func AavePoolAddressProvider(chainID int64) (string, bool) {
 	value, ok := aavePoolAddressProviderByChainID[chainID]
 	return value, ok
 }
+
+const tempoStablecoinDEXAddress = "0xdec0000000000000000000000000000000000000"
+
+var tempoChainIDs = map[int64]struct{}{
+	31318: {},
+	4217:  {},
+	42431: {},
+}
+
+func TempoStablecoinDEX(chainID int64) (string, bool) {
+	if _, ok := tempoChainIDs[chainID]; !ok {
+		return "", false
+	}
+	return tempoStablecoinDEXAddress, true
+}

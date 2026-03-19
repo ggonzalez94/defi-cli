@@ -154,6 +154,18 @@ func TestValidateSwapPolicyTaikoRouter(t *testing.T) {
 	}
 }
 
+func TestValidateSwapPolicyTempoDEX(t *testing.T) {
+	action := &Action{Provider: "tempo"}
+	step := &ActionStep{
+		Type:   StepTypeSwap,
+		Target: "0x00000000000000000000000000000000000000cd",
+	}
+	err := validateStepPolicy(action, step, 4217, policyTempoSwapExactIn, ExecuteOptions{})
+	if err == nil {
+		t.Fatal("expected tempo dex target mismatch to fail")
+	}
+}
+
 func TestValidateBridgePolicyEndpointGuard(t *testing.T) {
 	action := &Action{Provider: "lifi"}
 	step := &ActionStep{
