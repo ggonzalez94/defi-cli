@@ -38,6 +38,13 @@ type Constraints struct {
 	Simulate    bool   `json:"simulate"`
 }
 
+// StepCall represents a single call within a batched action step.
+type StepCall struct {
+	Target string `json:"target"`
+	Data   string `json:"data"`
+	Value  string `json:"value"`
+}
+
 type ActionStep struct {
 	StepID          string            `json:"step_id"`
 	Type            StepType          `json:"type"`
@@ -48,6 +55,7 @@ type ActionStep struct {
 	Target          string            `json:"target"`
 	Data            string            `json:"data"`
 	Value           string            `json:"value"`
+	Calls           []StepCall        `json:"calls,omitempty"`
 	ExpectedOutputs map[string]string `json:"expected_outputs,omitempty"`
 	TxHash          string            `json:"tx_hash,omitempty"`
 	Error           string            `json:"error,omitempty"`
