@@ -31,13 +31,13 @@ func TestResolveActionID(t *testing.T) {
 }
 
 func TestParseExecuteOptionsRejectsGasMultiplierLTEOne(t *testing.T) {
-	if _, err := parseExecuteOptions(true, "2s", "2m", 1, "", "", false, false); err == nil {
+	if _, err := parseExecuteOptions(true, "2s", "2m", 1, "", "", false, false, ""); err == nil {
 		t.Fatal("expected gas multiplier <= 1 to fail")
 	}
 }
 
 func TestParseExecuteOptionsAcceptsGasMultiplierAboveOne(t *testing.T) {
-	opts, err := parseExecuteOptions(true, "2s", "2m", 1.05, "", "", true, true)
+	opts, err := parseExecuteOptions(true, "2s", "2m", 1.05, "", "", true, true, "")
 	if err != nil {
 		t.Fatalf("expected parseExecuteOptions to succeed, got %v", err)
 	}
@@ -274,8 +274,8 @@ func TestRunnerTransferSubmitSchemaIncludesStructuredInputMetadata(t *testing.T)
 			foundSigner = true
 			schemaDoc, _ := field["schema"].(map[string]any)
 			enumValues, _ := schemaDoc["enum"].([]any)
-			if len(enumValues) != 1 || enumValues[0] != "local" {
-				t.Fatalf("expected signer enum [local], got %#v", schemaDoc["enum"])
+			if len(enumValues) != 2 || enumValues[0] != "local" || enumValues[1] != "tempo" {
+				t.Fatalf("expected signer enum [local, tempo], got %#v", schemaDoc["enum"])
 			}
 		}
 	}
@@ -617,7 +617,7 @@ func TestRunnerActionsStatusRejected(t *testing.T) {
 	}
 }
 
-func TestRunnerActionsEstimateRejectsTempoActions(t *testing.T) {
+func TestRunnerActionsEstimateTempoActionsNoSteps(t *testing.T) {
 	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
 	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
 	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
@@ -629,6 +629,8 @@ func TestRunnerActionsEstimateRejectsTempoActions(t *testing.T) {
 	}
 	defer store.Close()
 
+	// Tempo actions are now estimable; a zero-step action will fail with
+	// "action has no executable steps" rather than an unsupported error.
 	action := execution.NewAction("act_0123456789abcdef0123456789abcdef", "swap", "eip155:4217", execution.Constraints{Simulate: true})
 	if err := store.Save(action); err != nil {
 		t.Fatalf("save action: %v", err)
@@ -638,11 +640,11 @@ func TestRunnerActionsEstimateRejectsTempoActions(t *testing.T) {
 	var stderr bytes.Buffer
 	r := NewRunnerWithWriters(&stdout, &stderr)
 	code := r.Run([]string{"actions", "estimate", "--action-id", action.ActionID})
-	if code != 13 {
-		t.Fatalf("expected unsupported exit code 13, got %d stderr=%s", code, stderr.String())
+	if code == 0 {
+		t.Fatalf("expected non-zero exit code for action with no steps, got 0")
 	}
-	if !strings.Contains(stderr.String(), "Tempo actions") {
-		t.Fatalf("expected Tempo estimate rejection, got stderr=%s", stderr.String())
+	if !strings.Contains(stderr.String(), "no executable steps") {
+		t.Fatalf("expected no-steps error, got stderr=%s", stderr.String())
 	}
 }
 

@@ -1056,7 +1056,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	type swapSubmitArgs struct {
 		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
 		Simulate           bool    `json:"simulate" flag:"simulate"`
-		Signer             string  `json:"signer" flag:"signer" enum:"local"`
+		Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
 		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
 		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
 		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
@@ -1067,6 +1067,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
 		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
 		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
+		FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
 	}
 	var plan swapPlanArgs
 	planCmd := &cobra.Command{
@@ -1175,10 +1176,11 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), txSigner.Address().Hex()) {
+			senderAddr := effectiveSenderAddress(txSigner)
+			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), senderAddr) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
-			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
+			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), senderAddr) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
 			execOpts, err := parseExecuteOptions(
@@ -1190,6 +1192,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				submit.MaxPriorityFeeGwei,
 				submit.AllowMaxApproval,
 				submit.UnsafeProviderTx,
+				submit.FeeToken,
 			)
 			if err != nil {
 				return err
@@ -1202,7 +1205,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	}
 	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by swap plan")
 	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local)")
+	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
 	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
 	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
@@ -1213,6 +1216,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
 	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
 	annotateStructuredSubmitCommand(submitCmd, swapSubmitArgs{})
 
 	var statusActionID string
@@ -1319,9 +1323,6 @@ func (s *runtimeState) newActionsCommand() *cobra.Command {
 			action, err := s.actionStore.Get(actionID)
 			if err != nil {
 				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if actionUsesTempoChain(action) {
-				return clierr.New(clierr.CodeUnsupported, "actions estimate is not supported for Tempo actions yet; Tempo fees are fee-token based rather than EIP-1559 native gas")
 			}
 			opts, err := parseActionEstimateOptions(
 				estimateStepIDs,
@@ -2536,14 +2537,38 @@ func newExecutionSigner(signerBackend, keySource, privateKey string) (execsigner
 	if signerBackend == "" {
 		signerBackend = "local"
 	}
-	if signerBackend != "local" {
-		return nil, clierr.New(clierr.CodeUnsupported, "only local signer is supported")
+	switch signerBackend {
+	case "local":
+		localSigner, err := execsigner.NewLocalSignerFromInputs(keySource, privateKey)
+		if err != nil {
+			return nil, clierr.Wrap(clierr.CodeSigner, "initialize local signer", err)
+		}
+		return localSigner, nil
+	case "tempo":
+		if privateKey != "" {
+			return nil, clierr.New(clierr.CodeUsage, "--signer tempo cannot be combined with --private-key; tempo wallet manages keys automatically")
+		}
+		tempoSigner, warnings, err := execsigner.NewTempoSignerFromCLI()
+		if err != nil {
+			return nil, clierr.Wrap(clierr.CodeSigner, "tempo wallet", err)
+		}
+		for _, w := range warnings {
+			fmt.Fprintf(os.Stderr, "warning: %s\n", w)
+		}
+		return tempoSigner, nil
+	default:
+		return nil, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("unsupported signer backend %q (expected local|tempo)", signerBackend))
 	}
-	localSigner, err := execsigner.NewLocalSignerFromInputs(keySource, privateKey)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeSigner, "initialize local signer", err)
+}
+
+// effectiveSenderAddress returns the on-chain sender address for the given signer.
+// For Tempo smart-wallet signers, this is the wallet address rather than the
+// signing key address.
+func effectiveSenderAddress(txSigner execsigner.Signer) string {
+	if ts, ok := txSigner.(execsigner.TempoSigner); ok {
+		return ts.WalletAddress().Hex()
 	}
-	return localSigner, nil
+	return txSigner.Address().Hex()
 }
 
 func parseExecuteOptions(
@@ -2553,6 +2578,7 @@ func parseExecuteOptions(
 	maxFeeGwei, maxPriorityFeeGwei string,
 	allowMaxApproval bool,
 	unsafeProviderTx bool,
+	feeToken string,
 ) (execution.ExecuteOptions, error) {
 	opts := execution.DefaultExecuteOptions()
 	opts.Simulate = simulate
@@ -2584,6 +2610,7 @@ func parseExecuteOptions(
 	opts.MaxPriorityFeeGwei = strings.TrimSpace(maxPriorityFeeGwei)
 	opts.AllowMaxApproval = allowMaxApproval
 	opts.UnsafeProviderTx = unsafeProviderTx
+	opts.FeeToken = strings.TrimSpace(feeToken)
 	return opts, nil
 }
 
