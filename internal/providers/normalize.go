@@ -15,3 +15,13 @@ func NormalizeLendingProvider(input string) string {
 		return strings.ToLower(strings.TrimSpace(input))
 	}
 }
+
+// NormalizeSwapProvider canonicalizes supported swap provider aliases.
+func NormalizeSwapProvider(input string) string {
+	switch strings.ToLower(strings.TrimSpace(input)) {
+	case "tempo", "tempo-dex", "tempodex":
+		return "tempo"
+	default:
+		return strings.ToLower(strings.TrimSpace(input))
+	}
+}

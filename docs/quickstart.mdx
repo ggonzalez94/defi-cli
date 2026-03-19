@@ -49,6 +49,7 @@ defi yield history --chain 1 --asset USDC --providers aave,morpho --metrics apy_
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
 defi bridge quote --provider bungee --from hyperevm --to 8453 --asset USDC --amount 1000000 --results-only
 
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --results-only
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
 defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
 ```
@@ -56,6 +57,7 @@ defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset S
 ## 7. Plan an execution (dry-run)
 
 ```bash
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
 defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 ```

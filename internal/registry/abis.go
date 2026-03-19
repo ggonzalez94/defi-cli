@@ -22,6 +22,18 @@ const (
 		{"name":"exactInputSingle","type":"function","stateMutability":"payable","inputs":[{"name":"params","type":"tuple","components":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"fee","type":"uint24"},{"name":"recipient","type":"address"},{"name":"amountIn","type":"uint256"},{"name":"amountOutMinimum","type":"uint256"},{"name":"sqrtPriceLimitX96","type":"uint160"}]}],"outputs":[{"name":"amountOut","type":"uint256"}]}
 	]`
 
+	TempoStablecoinDEXABI = `[
+		{"name":"quoteSwapExactAmountIn","type":"function","stateMutability":"view","inputs":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountIn","type":"uint128"}],"outputs":[{"name":"amountOut","type":"uint128"}]},
+		{"name":"quoteSwapExactAmountOut","type":"function","stateMutability":"view","inputs":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountOut","type":"uint128"}],"outputs":[{"name":"amountIn","type":"uint128"}]},
+		{"name":"swapExactAmountIn","type":"function","stateMutability":"nonpayable","inputs":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountIn","type":"uint128"},{"name":"minAmountOut","type":"uint128"}],"outputs":[{"name":"amountOut","type":"uint128"}]},
+		{"name":"swapExactAmountOut","type":"function","stateMutability":"nonpayable","inputs":[{"name":"tokenIn","type":"address"},{"name":"tokenOut","type":"address"},{"name":"amountOut","type":"uint128"},{"name":"maxAmountIn","type":"uint128"}],"outputs":[{"name":"amountIn","type":"uint128"}]}
+	]`
+
+	TempoTIP20MetadataABI = `[
+		{"name":"currency","type":"function","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"string"}]},
+		{"name":"quoteToken","type":"function","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]}
+	]`
+
 	AavePoolAddressProviderABI = `[
 		{"name":"getPool","type":"function","stateMutability":"view","inputs":[],"outputs":[{"name":"","type":"address"}]},
 		{"name":"getAddress","type":"function","stateMutability":"view","inputs":[{"name":"id","type":"bytes32"}],"outputs":[{"name":"","type":"address"}]}
