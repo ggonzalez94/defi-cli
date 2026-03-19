@@ -344,6 +344,144 @@ func TestEstimateActionGasFallsBackWhenSequentialSimulationUnavailable(t *testin
 	}
 }
 
+func TestEstimateActionGasTempoFeeToken(t *testing.T) {
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var req estimateRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch req.Method {
+		case "eth_chainId":
+			// Tempo mainnet chain ID 4217 = 0x1079
+			writeEstimateRPCResult(t, w, req.ID, "0x1079")
+		case "eth_estimateGas":
+			writeEstimateRPCResult(t, w, req.ID, "0x5208") // 21000
+		case "eth_maxPriorityFeePerGas":
+			writeEstimateRPCResult(t, w, req.ID, "0x0") // 0 tip on Tempo
+		case "eth_getBlockByNumber":
+			// Tempo baseFee is in 18-decimal USD: e.g. 1e12 wei = 0.000001 USD
+			writeEstimateRPCResult(t, w, req.ID, map[string]any{
+				"baseFeePerGas": "0xe8d4a51000", // 1_000_000_000_000 = 1e12
+			})
+		default:
+			writeEstimateRPCError(w, req.ID, -32601, fmt.Sprintf("method not supported in test: %s", req.Method))
+		}
+	}))
+	defer rpc.Close()
+
+	action := Action{
+		ActionID:    "act_tempo_fee",
+		FromAddress: "0x00000000000000000000000000000000000000aa",
+		Steps: []ActionStep{{
+			StepID:  "swap-step",
+			Type:    StepTypeSwap,
+			Status:  StepStatusPending,
+			ChainID: "eip155:4217",
+			RPCURL:  rpc.URL,
+			Target:  "0x00000000000000000000000000000000000000bb",
+			Data:    "0x",
+			Value:   "0",
+		}},
+	}
+
+	estimate, err := EstimateActionGas(context.Background(), action, DefaultEstimateOptions())
+	if err != nil {
+		t.Fatalf("EstimateActionGas failed: %v", err)
+	}
+	if len(estimate.Steps) != 1 {
+		t.Fatalf("expected one step, got %d", len(estimate.Steps))
+	}
+	step := estimate.Steps[0]
+	if step.FeeUnit != "USDC.e" {
+		t.Fatalf("expected fee_unit USDC.e, got %q", step.FeeUnit)
+	}
+	if step.FeeToken == "" {
+		t.Fatal("expected non-empty fee_token for Tempo step")
+	}
+
+	// Verify that chain totals also carry fee metadata.
+	if len(estimate.TotalsByChain) != 1 {
+		t.Fatalf("expected one chain total, got %d", len(estimate.TotalsByChain))
+	}
+	total := estimate.TotalsByChain[0]
+	if total.FeeUnit != "USDC.e" {
+		t.Fatalf("expected chain total fee_unit USDC.e, got %q", total.FeeUnit)
+	}
+	if total.FeeToken == "" {
+		t.Fatal("expected non-empty chain total fee_token")
+	}
+
+	// Gas: rawGas=21000, gasLimit=21000*1.2=25200
+	// BaseFee=1e12 (on Tempo), tipCap=0, effectiveGasPrice=1e12, feeCap=2*1e12+0=2e12
+	// likelyFeeWei = 25200 * 1e12 = 25200000000000000
+	// After dividing by 10^12 (token conversion): 25200
+	if step.LikelyFeeWei != "25200" {
+		t.Fatalf("expected likely fee 25200 (USDC.e base units), got %s", step.LikelyFeeWei)
+	}
+}
+
+func TestEstimateActionGasTempoBatchedCalls(t *testing.T) {
+	rpc := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defer r.Body.Close()
+		var req estimateRPCRequest
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch req.Method {
+		case "eth_chainId":
+			writeEstimateRPCResult(t, w, req.ID, "0x1079") // 4217
+		case "eth_estimateGas":
+			writeEstimateRPCResult(t, w, req.ID, "0x5208") // 21000
+		case "eth_maxPriorityFeePerGas":
+			writeEstimateRPCResult(t, w, req.ID, "0x0")
+		case "eth_getBlockByNumber":
+			writeEstimateRPCResult(t, w, req.ID, map[string]any{
+				"baseFeePerGas": "0xe8d4a51000",
+			})
+		default:
+			writeEstimateRPCError(w, req.ID, -32601, fmt.Sprintf("method not supported in test: %s", req.Method))
+		}
+	}))
+	defer rpc.Close()
+
+	// Step with batched Calls (empty Target) — Tempo-style.
+	action := Action{
+		ActionID:    "act_tempo_batch",
+		FromAddress: "0x00000000000000000000000000000000000000aa",
+		Steps: []ActionStep{{
+			StepID:  "batch-step",
+			Type:    StepTypeSwap,
+			Status:  StepStatusPending,
+			ChainID: "eip155:4217",
+			RPCURL:  rpc.URL,
+			Target:  "",
+			Calls: []StepCall{
+				{Target: "0x00000000000000000000000000000000000000bb", Data: "0x", Value: "0"},
+				{Target: "0x00000000000000000000000000000000000000cc", Data: "0x", Value: "0"},
+			},
+		}},
+	}
+
+	estimate, err := EstimateActionGas(context.Background(), action, DefaultEstimateOptions())
+	if err != nil {
+		t.Fatalf("EstimateActionGas failed: %v", err)
+	}
+	if len(estimate.Steps) != 1 {
+		t.Fatalf("expected one step, got %d", len(estimate.Steps))
+	}
+	// Two calls each estimating 21000 gas => raw gas = 42000
+	step := estimate.Steps[0]
+	if step.GasEstimateRaw != "42000" {
+		t.Fatalf("expected raw gas 42000 for batched calls, got %s", step.GasEstimateRaw)
+	}
+	if step.FeeUnit != "USDC.e" {
+		t.Fatalf("expected fee_unit USDC.e, got %q", step.FeeUnit)
+	}
+}
+
 func newEstimateRPCServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

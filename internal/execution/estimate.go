@@ -16,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ethereum/go-ethereum/rpc"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
 type EstimateBlockTag string
@@ -54,17 +55,22 @@ type ActionGasEstimateStep struct {
 	EffectiveGasPriceWei    string     `json:"effective_gas_price_wei"`
 	LikelyFeeWei            string     `json:"likely_fee_wei"`
 	WorstCaseFeeWei         string     `json:"worst_case_fee_wei"`
+	FeeUnit                 string     `json:"fee_unit,omitempty"`
+	FeeToken                string     `json:"fee_token,omitempty"`
 }
 
 type ActionGasEstimateChainTotal struct {
 	ChainID         string `json:"chain_id"`
 	LikelyFeeWei    string `json:"likely_fee_wei"`
 	WorstCaseFeeWei string `json:"worst_case_fee_wei"`
+	FeeUnit         string `json:"fee_unit,omitempty"`
+	FeeToken        string `json:"fee_token,omitempty"`
 }
 
 type preparedEstimateStep struct {
 	Step     ActionStep
-	Msg      ethereum.CallMsg
+	Msg      ethereum.CallMsg   // primary call msg (first call for batched steps)
+	Msgs     []ethereum.CallMsg // all call msgs (len > 1 for batched Tempo steps)
 	ChainKey string
 	Client   *ethclient.Client
 }
@@ -141,8 +147,13 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 		if strings.TrimSpace(step.RPCURL) == "" {
 			return ActionGasEstimate{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("step %s is missing rpc_url", step.StepID))
 		}
-		if strings.TrimSpace(step.Target) == "" || !common.IsHexAddress(strings.TrimSpace(step.Target)) {
-			return ActionGasEstimate{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("step %s has invalid target address", step.StepID))
+
+		// Tempo steps use batched Calls; EVM steps use single Target/Data.
+		hasCalls := len(step.Calls) > 0
+		if !hasCalls {
+			if strings.TrimSpace(step.Target) == "" || !common.IsHexAddress(strings.TrimSpace(step.Target)) {
+				return ActionGasEstimate{}, clierr.New(clierr.CodeUsage, fmt.Sprintf("step %s has invalid target address", step.StepID))
+			}
 		}
 
 		client := rpcClients[strings.TrimSpace(step.RPCURL)]
@@ -155,11 +166,6 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 			rpcClients[strings.TrimSpace(step.RPCURL)] = client
 		}
 
-		msg, err := actionStepCallMsg(step, fromAddress)
-		if err != nil {
-			return ActionGasEstimate{}, err
-		}
-
 		chainID, err := client.ChainID(ctx)
 		if err != nil {
 			return ActionGasEstimate{}, clierr.Wrap(clierr.CodeUnavailable, "read chain id", err)
@@ -170,9 +176,29 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 				return ActionGasEstimate{}, clierr.New(clierr.CodeActionPlan, fmt.Sprintf("step chain mismatch: expected %s, got %s", chainKey, step.ChainID))
 			}
 		}
+
+		// Build call messages: for batched Calls, build one per call; otherwise single.
+		var msgs []ethereum.CallMsg
+		if hasCalls {
+			for _, c := range step.Calls {
+				m, mErr := stepCallToCallMsg(c, fromAddress)
+				if mErr != nil {
+					return ActionGasEstimate{}, mErr
+				}
+				msgs = append(msgs, m)
+			}
+		} else {
+			msg, mErr := actionStepCallMsg(step, fromAddress)
+			if mErr != nil {
+				return ActionGasEstimate{}, mErr
+			}
+			msgs = []ethereum.CallMsg{msg}
+		}
+
 		prepared = append(prepared, preparedEstimateStep{
 			Step:     step,
-			Msg:      msg,
+			Msg:      msgs[0], // primary call msg (used for sequential simulation)
+			Msgs:     msgs,    // all call msgs (used for per-call estimation on Tempo)
 			ChainKey: chainKey,
 			Client:   client,
 		})
@@ -185,6 +211,8 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 
 	byChainLikely := map[string]*big.Int{}
 	byChainWorst := map[string]*big.Int{}
+	byChainFeeUnit := map[string]string{}
+	byChainFeeToken := map[string]string{}
 	estimatedSteps := make([]ActionGasEstimateStep, 0, len(prepared))
 
 	for _, preparedStep := range prepared {
@@ -193,12 +221,29 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 		chainKey := preparedStep.ChainKey
 		msg := preparedStep.Msg
 
-		rawGas := rawGasFromSimulation[strings.ToLower(strings.TrimSpace(step.StepID))]
-		if rawGas == 0 {
-			var err error
-			rawGas, err = estimateGasWithBlockTag(ctx, client, msg, blockTag)
-			if err != nil {
-				return ActionGasEstimate{}, wrapEVMExecutionError(clierr.CodeActionSim, "estimate gas", err)
+		// Parse numeric chain ID from chainKey for Tempo detection.
+		numericChainID, _ := ParseEVMChainID(chainKey)
+		isTempo := IsTempoChain(numericChainID)
+
+		// Estimate raw gas.
+		var rawGas uint64
+		if isTempo && len(preparedStep.Msgs) > 1 {
+			// For batched Tempo steps, estimate each call and sum.
+			for _, m := range preparedStep.Msgs {
+				gas, gasErr := estimateGasWithBlockTag(ctx, client, m, blockTag)
+				if gasErr != nil {
+					return ActionGasEstimate{}, wrapEVMExecutionError(clierr.CodeActionSim, "estimate gas", gasErr)
+				}
+				rawGas += gas
+			}
+		} else {
+			rawGas = rawGasFromSimulation[strings.ToLower(strings.TrimSpace(step.StepID))]
+			if rawGas == 0 {
+				var err error
+				rawGas, err = estimateGasWithBlockTag(ctx, client, msg, blockTag)
+				if err != nil {
+					return ActionGasEstimate{}, wrapEVMExecutionError(clierr.CodeActionSim, "estimate gas", err)
+				}
 			}
 		}
 		gasLimit := uint64(float64(rawGas) * opts.GasMultiplier)
@@ -228,6 +273,23 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 		likelyFee := new(big.Int).Mul(new(big.Int).Set(gasLimitBI), effectiveGasPrice)
 		worstFee := new(big.Int).Mul(new(big.Int).Set(gasLimitBI), feeCap)
 
+		// For Tempo chains, convert fee from 18-decimal gas price to fee-token base units.
+		// On Tempo, gasPrice is in 18-decimal USD and fee token (USDC.e) has 6 decimals,
+		// so: fee_token_units = fee_wei / 10^(18-6) = fee_wei / 10^12
+		var feeUnit, feeToken string
+		if isTempo {
+			if ft, ok := registry.TempoFeeToken(numericChainID); ok {
+				feeToken = ft
+				feeUnit = tempoFeeTokenSymbol(ft)
+			}
+			if feeUnit != "" {
+				// Convert 18-decimal denominated fees to 6-decimal token units.
+				divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(12), nil) // 10^(18-6)
+				likelyFee = new(big.Int).Div(likelyFee, divisor)
+				worstFee = new(big.Int).Div(worstFee, divisor)
+			}
+		}
+
 		estimatedSteps = append(estimatedSteps, ActionGasEstimateStep{
 			StepID:                  step.StepID,
 			Type:                    step.Type,
@@ -241,6 +303,8 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 			EffectiveGasPriceWei:    effectiveGasPrice.String(),
 			LikelyFeeWei:            likelyFee.String(),
 			WorstCaseFeeWei:         worstFee.String(),
+			FeeUnit:                 feeUnit,
+			FeeToken:                feeToken,
 		})
 
 		if _, ok := byChainLikely[chainKey]; !ok {
@@ -251,6 +315,12 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 		}
 		byChainLikely[chainKey].Add(byChainLikely[chainKey], likelyFee)
 		byChainWorst[chainKey].Add(byChainWorst[chainKey], worstFee)
+		if feeUnit != "" {
+			byChainFeeUnit[chainKey] = feeUnit
+		}
+		if feeToken != "" {
+			byChainFeeToken[chainKey] = feeToken
+		}
 	}
 
 	totals := make([]ActionGasEstimateChainTotal, 0, len(byChainLikely))
@@ -264,6 +334,8 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 			ChainID:         chainID,
 			LikelyFeeWei:    byChainLikely[chainID].String(),
 			WorstCaseFeeWei: byChainWorst[chainID].String(),
+			FeeUnit:         byChainFeeUnit[chainID],
+			FeeToken:        byChainFeeToken[chainID],
 		})
 	}
 
@@ -588,4 +660,39 @@ func baseFeeAtBlockTag(ctx context.Context, client *ethclient.Client, blockTag E
 
 func strconvUint64(v uint64) string {
 	return new(big.Int).SetUint64(v).String()
+}
+
+// stepCallToCallMsg converts a StepCall into an ethereum.CallMsg for gas estimation.
+func stepCallToCallMsg(c StepCall, from common.Address) (ethereum.CallMsg, error) {
+	if strings.TrimSpace(c.Target) == "" || !common.IsHexAddress(strings.TrimSpace(c.Target)) {
+		return ethereum.CallMsg{}, clierr.New(clierr.CodeUsage, "batched call has invalid target address")
+	}
+	target := common.HexToAddress(strings.TrimSpace(c.Target))
+	data, err := decodeHex(c.Data)
+	if err != nil {
+		return ethereum.CallMsg{}, clierr.Wrap(clierr.CodeUsage, "decode call data", err)
+	}
+	value, err := parseNonNegativeBaseUnits(c.Value)
+	if err != nil {
+		return ethereum.CallMsg{}, clierr.Wrap(clierr.CodeUsage, "parse call value", err)
+	}
+	return ethereum.CallMsg{
+		From:  from,
+		To:    &target,
+		Value: value,
+		Data:  data,
+	}, nil
+}
+
+// tempoFeeTokenSymbol returns a human-readable symbol for known Tempo fee token addresses.
+func tempoFeeTokenSymbol(addr string) string {
+	// All known Tempo fee token addresses are USDC.e variants.
+	// This can be extended with on-chain symbol() calls if needed.
+	switch strings.ToLower(strings.TrimSpace(addr)) {
+	case "0x20c000000000000000000000b9537d11c60e8b50", // mainnet
+		"0x20c0000000000000000000000000000000000001": // testnet/devnet
+		return "USDC.e"
+	default:
+		return "USDC.e"
+	}
 }
