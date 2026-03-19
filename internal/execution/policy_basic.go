@@ -28,7 +28,10 @@ func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []
 	if step == nil {
 		return clierr.New(clierr.CodeInternal, "missing action step")
 	}
-	if !common.IsHexAddress(step.Target) {
+	// Batched steps (Calls populated) may have empty Target/Data. Skip the
+	// single-target address check for those; the provider-specific handler
+	// will validate each call's target individually.
+	if len(step.Calls) == 0 && !common.IsHexAddress(step.Target) {
 		return clierr.New(clierr.CodeUsage, "invalid step target address")
 	}
 
@@ -147,6 +150,11 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step target does not match canonical router")
 		}
 	case "tempo":
+		// Batched calls: validate each call individually.
+		if len(step.Calls) > 0 && strings.TrimSpace(step.Data) == "" {
+			return validateTempoSwapCalls(chainID, step.Calls)
+		}
+		// Legacy single-target validation.
 		if len(data) < 4 || (!bytes.Equal(data[:4], policyTempoSwapExactIn) && !bytes.Equal(data[:4], policyTempoSwapExactOut)) {
 			return clierr.New(clierr.CodeActionPlan, "tempo swap step must call swapExactAmountIn or swapExactAmountOut")
 		}
@@ -157,6 +165,39 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 		expectedDEX := common.HexToAddress(dexAddr).Hex()
 		if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedDEX) {
 			return clierr.New(clierr.CodeActionPlan, "tempo swap step target does not match canonical stablecoin dex")
+		}
+	}
+	return nil
+}
+
+// validateTempoSwapCalls validates each call in a batched Tempo swap step.
+// Recognized selectors are ERC-20 approve and Tempo DEX swap methods.
+func validateTempoSwapCalls(chainID int64, calls []StepCall) error {
+	dexAddr, ok := registry.TempoStablecoinDEX(chainID)
+	if !ok {
+		return clierr.New(clierr.CodeActionPlan, "tempo swap step has unsupported chain")
+	}
+	expectedDEX := common.HexToAddress(dexAddr).Hex()
+
+	for i, call := range calls {
+		data, err := decodeHex(call.Data)
+		if err != nil {
+			return clierr.Wrap(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid data", i), err)
+		}
+		if len(data) < 4 {
+			return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has insufficient calldata", i))
+		}
+		selector := data[:4]
+		switch {
+		case bytes.Equal(selector, policyApproveSelector):
+			// ERC-20 approve is allowed on any token target.
+		case bytes.Equal(selector, policyTempoSwapExactIn), bytes.Equal(selector, policyTempoSwapExactOut):
+			// Swap calls must target the canonical DEX.
+			if !strings.EqualFold(common.HexToAddress(call.Target).Hex(), expectedDEX) {
+				return clierr.New(clierr.CodeActionPlan, "tempo swap call target does not match canonical stablecoin dex")
+			}
+		default:
+			return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has unrecognized selector 0x%x", i, selector))
 		}
 	}
 	return nil
