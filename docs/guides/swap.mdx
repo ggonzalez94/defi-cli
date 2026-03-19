@@ -71,6 +71,21 @@ defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset W
 defi swap submit --action-id <action_id> --results-only
 ```
 
+### Tempo execution
+
+Tempo swaps use native type 0x76 transactions that batch approve+swap into a single atomic call. Fee payment is in a fee token (defaults to USDC.e on mainnet).
+
+```bash
+# Plan a Tempo swap
+defi swap plan --provider tempo --chain tempo --from-asset USDC.e --to-asset pathUSD --amount 1000000 --from-address 0xYourWallet --results-only
+
+# Submit with agent wallet
+defi swap submit --action-id <id> --signer tempo --results-only
+
+# Or submit with local key
+defi swap submit --action-id <id> --results-only
+```
+
 ## Notes
 
 - `swap quote` requires an explicit `--provider`.
@@ -82,6 +97,6 @@ defi swap submit --action-id <action_id> --results-only
 - `--slippage-pct` is optional and currently applies to Uniswap quotes only.
 - Tempo DEX currently supports USD-denominated TIP-20s only and auto-routes supported pairs through quote-token relationships.
 - Tempo DEX swap execution settles to the caller, so `--recipient` must be omitted or match `--from-address`.
-- `actions estimate` is intentionally unsupported for Tempo actions until fee-token-aware estimation exists.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
 - Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.

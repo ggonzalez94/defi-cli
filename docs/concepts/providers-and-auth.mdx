@@ -60,4 +60,5 @@ If either is missing, bungee quotes use public backend.
 - Across may omit native USD fee fields for some routes; when missing, `estimated_fee_usd` can fall back to a stable-asset approximation while token-unit fees remain in `fee_breakdown`.
 - Tempo Stablecoin DEX currently supports USD-denominated TIP-20 assets only; supported pairs are auto-routed on-chain through quote-token relationships.
 - Tempo DEX swap execution settles to the caller; `--recipient` must match `--from-address` (or be omitted).
-- `actions estimate` is intentionally unsupported for Tempo actions until fee-token-aware estimation is implemented.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks. Requires the Tempo CLI installed.

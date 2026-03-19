@@ -13,11 +13,17 @@ Format:
 - Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.
 - Added the `tempo` swap provider with on-chain quote and execution planning against the Tempo Stablecoin DEX, including `exact-input` and `exact-output` support.
 - Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
+- Tempo native execution: `swap submit` now broadcasts Tempo type 0x76 transactions with fee-token payments and batched calls on Tempo mainnet, testnet, and devnet.
+- Batched approve+swap in a single atomic Tempo transaction (no separate approval step).
+- `--signer tempo` for agent wallet support via the Tempo CLI, with delegated access keys, spending limits, and expiry checks.
+- `--fee-token` flag for execution commands (Tempo-only, defaults to USDC.e on mainnet).
+- `actions estimate` now supports Tempo actions with fee-token-denominated gas estimates (`fee_unit`, `fee_token` fields).
+- `StepExecutor` interface for chain-specific execution; EVM path extracted unchanged, Tempo path added.
 
 ### Changed
 - `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
 - `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
-- `actions estimate` now rejects Tempo actions until fee-token-aware estimation is implemented, instead of returning misleading EIP-1559-native gas output.
+- `actions estimate` now returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields, instead of rejecting them.
 - Tempo swap planning/quotes now validate TIP-20 currency metadata up front and return `unsupported` for non-USD assets or DEX reverts such as missing pairs, instead of reporting them as transient provider outages.
 
 ### Fixed

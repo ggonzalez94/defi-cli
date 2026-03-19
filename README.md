@@ -13,7 +13,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Lending** — query markets/rates from Aave/Morpho/Kamino, account positions from Aave/Morpho, and execute loan actions (`lend supply|withdraw|borrow|repay`).
 - **Yield** — compare opportunities, query positions, fetch historical series, and execute deposit/withdraw flows (Aave, Morpho).
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics, and execute bridge plans (Across, LiFi).
-- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee) and execute swap plans (Tempo, TaikoSwap).
+- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee) and execute swap plans (Tempo with native type 0x76 transactions and batched calls, TaikoSwap).
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
 - **Chains & protocols** — browse chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
@@ -153,7 +153,12 @@ If a keyed provider is used without a key, CLI exits with code `10`.
 
 ## Execution Signer Inputs (Submit Commands)
 
-Execution `submit` commands currently support a local key signer.
+Execution `submit` commands support a local key signer and (on Tempo) an agent wallet signer.
+
+Signer selection:
+
+- `--signer tempo` — use the Tempo CLI agent wallet (`tempo wallet -j whoami`); requires the Tempo CLI installed and configured with delegated access keys.
+- Local key signer (default) — uses the key input precedence below.
 
 Key input precedence:
 
@@ -242,7 +247,7 @@ providers:
 - Uniswap requires `--from-address`; `--slippage-pct` is optional (default: provider auto).
 - Tempo DEX currently supports USD-denominated TIP-20 swaps only and auto-routes supported pairs through quote-token relationships; non-USD assets such as `EURC.e` are rejected.
 - Tempo swap execution settles to the sender only; omit `--recipient` or keep it equal to `--from-address`.
-- `actions estimate` is intentionally unavailable for Tempo actions for now because Tempo fees are fee-token based rather than native-gas EIP-1559 pricing.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields instead of native-gas EIP-1559 pricing).
 - `fibrous` currently supports `base`, `hyperevm`, and `citrea`.
 - Bungee dedicated backend requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 
@@ -255,6 +260,7 @@ providers:
 - Pre-sign checks enforce bounded ERC-20 approvals by default; use `--allow-max-approval` to opt in to larger approvals.
 - Bridge pre-sign checks validate settlement endpoints; use `--unsafe-provider-tx` to bypass.
 - All `submit` commands broadcast signed transactions.
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks.
 - `--provider` is required for multi-provider flows (no implicit defaults).
 
 ## Exit Codes

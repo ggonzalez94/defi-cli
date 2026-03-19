@@ -114,7 +114,10 @@ README.md                         # user-facing usage + caveats
 - Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap and Tempo (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
 - Swap planning supports Tempo exact-output execution; TaikoSwap remains exact-input only.
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
-- `actions estimate` is not supported for Tempo actions yet because the current estimator is EIP-1559-native-gas based while Tempo fees are fee-token based.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on EVM chains).
+- `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys, spending limits, and expiry.
+- Tempo execution uses type 0x76 transactions with batched calls (approve+swap are atomic in a single transaction).
+- `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
