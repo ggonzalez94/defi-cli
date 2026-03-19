@@ -168,7 +168,7 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 	var totalGas uint64
 	for _, c := range txCalls {
 		msg := ethereum.CallMsg{
-			From:  e.txSigner.Address(),
+			From:  e.EffectiveSender(),
 			To:    c.To,
 			Value: c.Value,
 			Data:  c.Data,
@@ -204,7 +204,7 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 
 	// Nonce.
 	tempoClient := tempoclient.New(rpcURL)
-	nonce, err := tempoClient.GetTransactionCount(ctx, e.txSigner.Address().Hex())
+	nonce, err := tempoClient.GetTransactionCount(ctx, e.EffectiveSender().Hex())
 	if err != nil {
 		return clierr.Wrap(clierr.CodeUnavailable, "fetch tempo nonce", err)
 	}
