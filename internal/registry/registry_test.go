@@ -145,11 +145,19 @@ func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
 	if !IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE") {
 		t.Fatal("expected canonical lifi target to be allowed on base")
 	}
+	// Case-insensitive: all-lowercase form of the same LiFi diamond address must also pass.
+	if !IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae") {
+		t.Fatal("expected lowercase lifi target to be allowed (case-insensitive)")
+	}
 	if IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1111111111111111111111111111111111111111") {
 		t.Fatal("did not expect unknown lifi target to be allowed")
 	}
 	if !IsAllowedBridgeExecutionTarget("across", 1, "0x767e4c20F521a829dE4Ffc40C25176676878147f") {
 		t.Fatal("expected canonical across target to be allowed on mainnet")
+	}
+	// Case-insensitive: all-uppercase hex also matches.
+	if !IsAllowedBridgeExecutionTarget("across", 1, "0x767E4C20F521A829DE4FFC40C25176676878147F") {
+		t.Fatal("expected uppercase across target to be allowed (case-insensitive)")
 	}
 	if IsAllowedBridgeExecutionTarget("across", 1, "not-an-address") {
 		t.Fatal("did not expect malformed target to be allowed")
@@ -159,5 +167,9 @@ func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
 	}
 	if IsAllowedBridgeExecutionTarget("across", 1, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
 		t.Fatal("did not expect unrelated provider target to be allowed")
+	}
+	// Empty target must not be allowed.
+	if IsAllowedBridgeExecutionTarget("lifi", 1, "") {
+		t.Fatal("did not expect empty target to be allowed")
 	}
 }
