@@ -127,12 +127,55 @@ func TestIsAllowedBridgeSettlementURL(t *testing.T) {
 }
 
 func TestHasBridgeExecutionTargetPolicy(t *testing.T) {
-	if !HasBridgeExecutionTargetPolicy("lifi", 8453) {
-		t.Fatal("expected lifi target policy coverage for base")
+	// LiFi must cover all major EVM chains where the Diamond is deployed.
+	lifiChains := []struct {
+		chainID int64
+		name    string
+	}{
+		{1, "Ethereum"},
+		{10, "Optimism"},
+		{56, "BSC"},
+		{100, "Gnosis"},
+		{137, "Polygon"},
+		{146, "Sonic"},
+		{252, "Fraxtal"},
+		{324, "zkSync"},
+		{480, "World Chain"},
+		{5000, "Mantle"},
+		{8453, "Base"},
+		{42161, "Arbitrum"},
+		{42220, "Celo"},
+		{43114, "Avalanche"},
+		{57073, "Ink"},
+		{59144, "Linea"},
+		{80094, "Berachain"},
+		{81457, "Blast"},
+		{167000, "Taiko"},
+		{534352, "Scroll"},
 	}
-	if !HasBridgeExecutionTargetPolicy("across", 1) {
-		t.Fatal("expected across target policy coverage for mainnet")
+	for _, tc := range lifiChains {
+		if !HasBridgeExecutionTargetPolicy("lifi", tc.chainID) {
+			t.Fatalf("expected lifi target policy coverage for %s (chain %d)", tc.name, tc.chainID)
+		}
 	}
+
+	// Across must cover its supported chains.
+	acrossChains := []struct {
+		chainID int64
+		name    string
+	}{
+		{1, "Ethereum"},
+		{10, "Optimism"},
+		{137, "Polygon"},
+		{8453, "Base"},
+		{42161, "Arbitrum"},
+	}
+	for _, tc := range acrossChains {
+		if !HasBridgeExecutionTargetPolicy("across", tc.chainID) {
+			t.Fatalf("expected across target policy coverage for %s (chain %d)", tc.name, tc.chainID)
+		}
+	}
+
 	if HasBridgeExecutionTargetPolicy("across", 43114) {
 		t.Fatal("did not expect across target policy coverage for unsupported chain")
 	}
@@ -142,9 +185,34 @@ func TestHasBridgeExecutionTargetPolicy(t *testing.T) {
 }
 
 func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
-	if !IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE") {
-		t.Fatal("expected canonical lifi target to be allowed on base")
+	// The standard LiFi Diamond address is shared across most major chains.
+	lifiDiamond := "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+	standardLiFiChains := []struct {
+		chainID int64
+		name    string
+	}{
+		{1, "Ethereum"},
+		{10, "Optimism"},
+		{56, "BSC"},
+		{100, "Gnosis"},
+		{137, "Polygon"},
+		{146, "Sonic"},
+		{252, "Fraxtal"},
+		{480, "World Chain"},
+		{5000, "Mantle"},
+		{8453, "Base"},
+		{42161, "Arbitrum"},
+		{42220, "Celo"},
+		{43114, "Avalanche"},
+		{81457, "Blast"},
+		{534352, "Scroll"},
 	}
+	for _, tc := range standardLiFiChains {
+		if !IsAllowedBridgeExecutionTarget("lifi", tc.chainID, lifiDiamond) {
+			t.Fatalf("expected canonical lifi diamond to be allowed on %s (chain %d)", tc.name, tc.chainID)
+		}
+	}
+
 	// Case-insensitive: all-lowercase form of the same LiFi diamond address must also pass.
 	if !IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae") {
 		t.Fatal("expected lowercase lifi target to be allowed (case-insensitive)")
@@ -152,6 +220,16 @@ func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
 	if IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1111111111111111111111111111111111111111") {
 		t.Fatal("did not expect unknown lifi target to be allowed")
 	}
+
+	// Chains with non-standard LiFi Diamond addresses should accept their specific address.
+	if !IsAllowedBridgeExecutionTarget("lifi", 324, "0x341e94069f53234fE6DabeF707aD424830525715") {
+		t.Fatal("expected lifi zkSync-specific diamond to be allowed")
+	}
+	// Standard diamond must NOT be accepted on chains with non-standard addresses.
+	if IsAllowedBridgeExecutionTarget("lifi", 324, lifiDiamond) {
+		t.Fatal("did not expect standard lifi diamond on zkSync (uses different address)")
+	}
+
 	if !IsAllowedBridgeExecutionTarget("across", 1, "0x767e4c20F521a829dE4Ffc40C25176676878147f") {
 		t.Fatal("expected canonical across target to be allowed on mainnet")
 	}
