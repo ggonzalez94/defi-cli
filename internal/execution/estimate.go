@@ -204,7 +204,18 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 		})
 	}
 
-	rawGasFromSimulation, err := estimateGasSequentialWhereSupported(ctx, prepared, blockTag)
+	// Filter out Tempo steps (batched Calls) from sequential simulation;
+	// eth_simulateV1 only sees the first call in Msg and can fail, blocking
+	// the Tempo per-call estimation fallback.
+	nonTempoSteps := make([]preparedEstimateStep, 0, len(prepared))
+	for _, ps := range prepared {
+		numCID, _ := ParseEVMChainID(ps.ChainKey)
+		if IsTempoChain(numCID) || len(ps.Msgs) > 1 {
+			continue
+		}
+		nonTempoSteps = append(nonTempoSteps, ps)
+	}
+	rawGasFromSimulation, err := estimateGasSequentialWhereSupported(ctx, nonTempoSteps, blockTag)
 	if err != nil {
 		return ActionGasEstimate{}, wrapEVMExecutionError(clierr.CodeActionSim, "simulate action (eth_simulateV1)", err)
 	}
@@ -685,14 +696,20 @@ func stepCallToCallMsg(c StepCall, from common.Address) (ethereum.CallMsg, error
 }
 
 // tempoFeeTokenSymbol returns a human-readable symbol for known Tempo fee token addresses.
+// Unknown addresses are returned as a truncated hex string (e.g. "0x20c0...0b50").
 func tempoFeeTokenSymbol(addr string) string {
 	// All known Tempo fee token addresses are USDC.e variants.
 	// This can be extended with on-chain symbol() calls if needed.
-	switch strings.ToLower(strings.TrimSpace(addr)) {
+	normalized := strings.ToLower(strings.TrimSpace(addr))
+	switch normalized {
 	case "0x20c000000000000000000000b9537d11c60e8b50", // mainnet
 		"0x20c0000000000000000000000000000000000001": // testnet/devnet
 		return "USDC.e"
 	default:
-		return "USDC.e"
+		// Return a truncated address to avoid misleading labels.
+		if len(normalized) >= 10 {
+			return normalized[:6] + "..." + normalized[len(normalized)-4:]
+		}
+		return normalized
 	}
 }

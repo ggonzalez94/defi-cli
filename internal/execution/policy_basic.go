@@ -41,7 +41,7 @@ func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []
 	case StepTypeTransfer:
 		return validateTransferPolicy(action, step, data)
 	case StepTypeSwap:
-		return validateSwapPolicy(action, step, chainID, data)
+		return validateSwapPolicy(action, step, chainID, data, opts)
 	case StepTypeBridge:
 		return validateBridgePolicy(action, step, opts)
 	default:
@@ -132,7 +132,7 @@ func validateTransferPolicy(action *Action, step *ActionStep, data []byte) error
 	return nil
 }
 
-func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []byte) error {
+func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []byte, opts ExecuteOptions) error {
 	if action == nil {
 		return nil
 	}
@@ -152,7 +152,7 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 	case "tempo":
 		// Batched calls: validate each call individually.
 		if len(step.Calls) > 0 && strings.TrimSpace(step.Data) == "" {
-			return validateTempoSwapCalls(chainID, step.Calls)
+			return validateTempoSwapCalls(chainID, step.Calls, action, opts)
 		}
 		// Legacy single-target validation.
 		if len(data) < 4 || (!bytes.Equal(data[:4], policyTempoSwapExactIn) && !bytes.Equal(data[:4], policyTempoSwapExactOut)) {
@@ -172,7 +172,7 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 
 // validateTempoSwapCalls validates each call in a batched Tempo swap step.
 // Recognized selectors are ERC-20 approve and Tempo DEX swap methods.
-func validateTempoSwapCalls(chainID int64, calls []StepCall) error {
+func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opts ExecuteOptions) error {
 	dexAddr, ok := registry.TempoStablecoinDEX(chainID)
 	if !ok {
 		return clierr.New(clierr.CodeActionPlan, "tempo swap step has unsupported chain")
@@ -190,7 +190,36 @@ func validateTempoSwapCalls(chainID int64, calls []StepCall) error {
 		selector := data[:4]
 		switch {
 		case bytes.Equal(selector, policyApproveSelector):
-			// ERC-20 approve is allowed on any token target.
+			// Validate spender and amount for approve calls.
+			args, abiErr := policyERC20ABI.Methods["approve"].Inputs.Unpack(data[4:])
+			if abiErr != nil || len(args) != 2 {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid approve calldata", i))
+			}
+			spender, spenderOK := toAddress(args[0])
+			if !spenderOK || spender == (common.Address{}) {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid approve spender", i))
+			}
+			if !strings.EqualFold(spender.Hex(), expectedDEX) {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d approve spender does not match canonical stablecoin dex", i))
+			}
+			if !opts.AllowMaxApproval {
+				amount, amountOK := toBigInt(args[1])
+				if !amountOK || amount.Sign() <= 0 {
+					return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid approve amount", i))
+				}
+				if action != nil {
+					requested, reqOK := parsePositiveBaseUnits(action.InputAmount)
+					if !reqOK {
+						return clierr.New(clierr.CodeActionPlan, "cannot validate approval bounds for non-numeric input amount; use --allow-max-approval to override")
+					}
+					if amount.Cmp(requested) > 0 {
+						return clierr.New(
+							clierr.CodeActionPlan,
+							fmt.Sprintf("tempo swap call %d approval amount %s exceeds requested input amount %s; use --allow-max-approval to override", i, amount.String(), requested.String()),
+						)
+					}
+				}
+			}
 		case bytes.Equal(selector, policyTempoSwapExactIn), bytes.Equal(selector, policyTempoSwapExactOut):
 			// Swap calls must target the canonical DEX.
 			if !strings.EqualFold(common.HexToAddress(call.Target).Hex(), expectedDEX) {

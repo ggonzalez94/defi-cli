@@ -185,7 +185,7 @@ func TestValidateTempoSwapBatchedCallsPass(t *testing.T) {
 		t.Fatalf("pack swap calldata: %v", err)
 	}
 
-	action := &Action{Provider: "tempo"}
+	action := &Action{Provider: "tempo", InputAmount: "1000"}
 	step := &ActionStep{
 		Type:   StepTypeSwap,
 		Target: "",
@@ -197,7 +197,7 @@ func TestValidateTempoSwapBatchedCallsPass(t *testing.T) {
 	}
 
 	// Chain 4217 is Tempo mainnet.
-	if err := validateSwapPolicy(action, step, 4217, nil); err != nil {
+	if err := validateSwapPolicy(action, step, 4217, nil, ExecuteOptions{}); err != nil {
 		t.Fatalf("expected batched tempo swap to pass, got err=%v", err)
 	}
 }
@@ -226,7 +226,7 @@ func TestValidateTempoSwapBatchedCallsRejectsWrongDEX(t *testing.T) {
 		},
 	}
 
-	err = validateSwapPolicy(action, step, 4217, nil)
+	err = validateSwapPolicy(action, step, 4217, nil, ExecuteOptions{})
 	if err == nil {
 		t.Fatal("expected wrong DEX target to fail")
 	}
@@ -246,7 +246,7 @@ func TestValidateTempoSwapBatchedCallsRejectsUnknownSelector(t *testing.T) {
 		},
 	}
 
-	err := validateSwapPolicy(action, step, 4217, nil)
+	err := validateSwapPolicy(action, step, 4217, nil, ExecuteOptions{})
 	if err == nil {
 		t.Fatal("expected unknown selector to fail")
 	}

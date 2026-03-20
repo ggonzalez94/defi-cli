@@ -2511,26 +2511,6 @@ func resolveActionID(actionID string) (string, error) {
 	return actionID, nil
 }
 
-func actionUsesTempoChain(action execution.Action) bool {
-	if isTempoActionChain(action.ChainID) {
-		return true
-	}
-	for _, step := range action.Steps {
-		if isTempoActionChain(step.ChainID) {
-			return true
-		}
-	}
-	return false
-}
-
-func isTempoActionChain(chainID string) bool {
-	switch strings.ToLower(strings.TrimSpace(chainID)) {
-	case "eip155:4217", "eip155:42431", "eip155:31318":
-		return true
-	default:
-		return false
-	}
-}
 
 func newExecutionSigner(signerBackend, keySource, privateKey string) (execsigner.Signer, error) {
 	signerBackend = strings.ToLower(strings.TrimSpace(signerBackend))

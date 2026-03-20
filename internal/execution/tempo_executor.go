@@ -110,6 +110,33 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 		return err
 	}
 
+	// Build a persist callback.
+	persist := func() error {
+		action.Touch()
+		if store != nil {
+			if err := store.Save(*action); err != nil {
+				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
+			}
+		}
+		return nil
+	}
+
+	// If the step already has a tx hash (retry scenario), skip building a new
+	// transaction and jump straight to receipt polling.
+	if txHash, ok := normalizeStepTxHash(step.TxHash); ok {
+		step.Status = StepStatusSubmitted
+		step.Error = ""
+		if err := safePersist(persist); err != nil {
+			return err
+		}
+		confirmedBlock, err := waitForTempoReceipt(ctx, ethClient, step, txHash, opts, persist)
+		if err != nil {
+			return err
+		}
+		storeConfirmedBlock(step, confirmedBlock)
+		return nil
+	}
+
 	chainID, err := ParseEVMChainID(step.ChainID)
 	if err != nil {
 		return clierr.Wrap(clierr.CodeUsage, "parse step chain id", err)
@@ -152,9 +179,10 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 		value := big.NewInt(0)
 		if strings.TrimSpace(c.Value) != "" {
 			v, ok := new(big.Int).SetString(strings.TrimSpace(c.Value), 10)
-			if ok {
-				value = v
+			if !ok {
+				return clierr.New(clierr.CodeUsage, fmt.Sprintf("call value %q is not a valid integer", c.Value))
 			}
+			value = v
 		}
 		txCalls = append(txCalls, transaction.Call{
 			To:    &target,
@@ -226,17 +254,6 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 	serialized, err := transaction.Serialize(tx, nil)
 	if err != nil {
 		return clierr.Wrap(clierr.CodeInternal, "serialize tempo transaction", err)
-	}
-
-	// Build a persist callback.
-	persist := func() error {
-		action.Touch()
-		if store != nil {
-			if err := store.Save(*action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
-			}
-		}
-		return nil
 	}
 
 	// Broadcast.
@@ -322,7 +339,7 @@ func validateStepPolicyCalls(action *Action, step *ActionStep, chainID int64, ca
 
 	// Batched calls: validate each call individually.
 	if step.Type == StepTypeSwap && action != nil && strings.EqualFold(strings.TrimSpace(action.Provider), "tempo") {
-		return validateTempoSwapCalls(chainID, calls)
+		return validateTempoSwapCalls(chainID, calls, action, opts)
 	}
 
 	return nil
