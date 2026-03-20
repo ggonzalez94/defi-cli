@@ -150,7 +150,7 @@ Tempo execution notes:
 - Tempo DEX planning supports `exact-input` and `exact-output`.
 - Tempo DEX currently supports USD-denominated TIP-20 assets only and auto-routes supported pairs through quote-token relationships on-chain.
 - Tempo DEX swaps settle to the caller, so `--recipient` must be omitted or match `--from-address`.
-- `actions estimate` is intentionally unsupported for Tempo actions for now because fee accounting is fee-token based rather than native-gas EIP-1559 pricing.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on standard EVM chains). If a step requires an ERC-20 approval that has not been granted on-chain, estimation may fail with a simulation error.
 
 ## `transfer plan|submit|status`
 
@@ -181,7 +181,7 @@ defi transfer status --action-id <action_id> --results-only
 - `--simulate bool` optional (default `true`)
 - `--input-json string` optional structured payload
 - `--input-file string` optional structured payload file or `-` for stdin
-- `--signer string` (`local`)
+- `--signer string` (`local`). Note: `--signer tempo` is available for swap submit commands on Tempo chains; other execution commands currently support `local` only.
 - `--key-source string` (`auto|env|file|keystore`)
 - `--private-key string` optional one-off override
 - `--poll-interval string` (default `2s`)
@@ -212,4 +212,4 @@ defi actions estimate --action-id <action_id> --results-only
 
 Inspect persisted actions. `actions estimate` computes per-step gas projections using `eth_estimateGas` and EIP-1559 fee resolution.
 
-Tempo note: `actions estimate` currently rejects Tempo actions until fee-token-aware estimation is implemented.
+Tempo note: `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing). If a Tempo step requires an ERC-20 approval that has not been granted on-chain, estimation may fail with a simulation error.

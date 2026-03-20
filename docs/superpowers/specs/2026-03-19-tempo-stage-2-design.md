@@ -171,7 +171,7 @@ Per step:
    - `tx.MaxFeePerGas`, `tx.MaxPriorityFeePerGas` from RPC
    - `tx.Gas` from estimation with multiplier
 8. Sign with `tempo-go` signer (`transaction.SignTransaction`)
-9. Broadcast via `tempo-go` client (`client.SendTransaction`)
+9. Broadcast via `tempo-go` client (`client.SendRawTransaction`)
 10. Poll `eth_getTransactionReceipt` until confirmed/failed/timeout
 
 ### 4.5 Fee-token Gas Estimation
@@ -181,6 +181,8 @@ The current `EstimateActionGas` in `internal/execution/estimate.go` rejects Temp
 **Estimation dispatch**: `EstimateActionGas` delegates per-step estimation to `StepExecutor.EstimateStep()` instead of building call messages directly. The `EVMStepExecutor.EstimateStep()` contains the current logic (unchanged). The `TempoStepExecutor.EstimateStep()` handles batched `Calls`:
 - For steps with `Calls`: estimate gas for the full batched call set (using `eth_estimateGas` with the combined calldata, or per-call estimation summed — validated during spike)
 - Compute fee in fee-token units using `gasEstimate * gasPrice / 10^(18 - tokenDecimals)`
+
+> **Implementation note**: The current implementation keeps estimation logic inline in `EstimateActionGas` (in `estimate.go`) rather than delegating to `StepExecutor.EstimateStep()`. Both `EVMStepExecutor.EstimateStep()` and `TempoStepExecutor.EstimateStep()` are stubs that return "not implemented" errors. The Tempo fee-token estimation path is handled directly in `EstimateActionGas`.
 
 **Aggregate totals**: The existing `ActionGasEstimateChainTotal` uses `likely_fee_wei` and `worst_case_fee_wei` field names. For Tempo chains, these fields contain fee-token base units (not wei). To avoid breaking existing consumers:
 - Add `fee_unit` and `fee_token` fields to `ActionGasEstimateChainTotal` (omitted for EVM chains)
@@ -269,11 +271,11 @@ If `tempo-go`'s `signer.NewSigner` handles this automatically when the key is re
 
 When `--signer tempo`:
 - `tempo wallet -j whoami` is the sole source
-- `--private-key`, `DEFI_PRIVATE_KEY`, and other local signer env vars are rejected with exit code `2` (usage error): `"--signer tempo cannot be combined with --private-key or local key env vars; tempo wallet manages keys automatically"`
+- `--private-key` flag is actively rejected with exit code `2` (usage error): `"--signer tempo cannot be combined with --private-key; tempo wallet manages keys automatically"`; other local signer env vars (`DEFI_PRIVATE_KEY`, etc.) are silently bypassed rather than rejected
 - If `tempo` CLI not found: exit code `24` (signer unavailable): `"tempo CLI is required for --signer tempo. Install: curl -fsSL https://tempo.xyz/install | sh"`
 - If `ready: false`: exit code `24`: `"tempo wallet is not logged in; run 'tempo wallet login' to set up your agent wallet"`
 - If `key.expires_at` has passed: exit code `24`: `"tempo wallet access key has expired; run 'tempo wallet login' to refresh"`
-- If `spending_limit.remaining` is below a threshold: emit a warning in the response envelope but proceed
+- If `spending_limit.remaining` is below a threshold: emit a warning in the response envelope but proceed (not yet implemented; the field is parsed but not evaluated)
 
 ## 6. Phasing
 

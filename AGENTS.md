@@ -75,7 +75,7 @@ README.md                         # user-facing usage + caveats
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
-- Tempo quote/planning does not require an API key; Phase 1 execution uses the existing EVM submit path and currently settles Tempo DEX swaps back to the sender only.
+- Tempo quote/planning does not require an API key; execution uses native Tempo type 0x76 transactions via the TempoStepExecutor and currently settles Tempo DEX swaps back to the sender only.
 - Tempo Stablecoin DEX swaps are currently USD TIP-20 only; the DEX auto-routes supported pairs through quote-token relationships, so non-USD assets should fail as `unsupported` rather than `unavailable`.
 - TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
 - `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
@@ -115,7 +115,7 @@ README.md                         # user-facing usage + caveats
 - Swap planning supports Tempo exact-output execution; TaikoSwap remains exact-input only.
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on EVM chains).
-- `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys, spending limits, and expiry.
+- `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys and expiry checks.
 - Tempo execution uses type 0x76 transactions with batched calls (approve+swap are atomic in a single transaction).
 - `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
