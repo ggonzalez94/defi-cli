@@ -2590,21 +2590,24 @@ func fetchGasPrice(ctx context.Context, chain id.Chain, rpcURL string, now func(
 
 	eip1559 := header.BaseFee != nil
 	var baseFee, priorityFee *big.Int
+	var warnings []string
 	if eip1559 {
 		baseFee = header.BaseFee
 		priorityFee, err = client.SuggestGasTipCap(ctx)
 		if err != nil {
 			priorityFee = new(big.Int)
+			warnings = append(warnings, fmt.Sprintf("priority fee unavailable: %v", err))
 		}
 	}
 
 	result := model.GasPrice{
-		ChainID:     chain.CAIP2,
-		ChainName:   chain.Name,
-		BlockNumber: header.Number.Int64(),
-		EIP1559:     eip1559,
+		ChainID:      chain.CAIP2,
+		ChainName:    chain.Name,
+		BlockNumber:  header.Number.Int64(),
+		EIP1559:      eip1559,
 		GasPriceGwei: weiToGwei(gasPrice),
-		FetchedAt:   now().UTC().Format(time.RFC3339),
+		Warnings:     warnings,
+		FetchedAt:    now().UTC().Format(time.RFC3339),
 	}
 	if eip1559 {
 		result.BaseFeeGwei = weiToGwei(baseFee)

@@ -117,6 +117,7 @@ func TestNativeAssetID(t *testing.T) {
 		{name: "celo", chain: id.Chain{CAIP2: "eip155:42220", EVMChainID: 42220}, wantID: "eip155:42220/slip44:52752", wantSym: "CELO"},
 		{name: "berachain", chain: id.Chain{CAIP2: "eip155:80094", EVMChainID: 80094}, wantID: "eip155:80094/slip44:8008", wantSym: "BERA"},
 		{name: "hyperevm", chain: id.Chain{CAIP2: "eip155:999", EVMChainID: 999}, wantID: "eip155:999/slip44:2457", wantSym: "HYPE"},
+		{name: "mantle", chain: id.Chain{CAIP2: "eip155:5000", EVMChainID: 5000}, wantID: "eip155:5000/slip44:614", wantSym: "MNT"},
 		{name: "tempo", chain: id.Chain{CAIP2: "eip155:4217", EVMChainID: 4217}, wantID: "eip155:4217/slip44:60", wantSym: "ETH"},
 		{name: "tempo-moderato", chain: id.Chain{CAIP2: "eip155:42431", EVMChainID: 42431}, wantID: "eip155:42431/slip44:60", wantSym: "ETH"},
 		{name: "tempo-devnet", chain: id.Chain{CAIP2: "eip155:31318", EVMChainID: 31318}, wantID: "eip155:31318/slip44:60", wantSym: "ETH"},

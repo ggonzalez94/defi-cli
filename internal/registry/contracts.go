@@ -50,17 +50,6 @@ func MoonwellComptroller(chainID int64) (string, bool) {
 	return value, ok
 }
 
-// Canonical Moonwell MultiRewardDistributor contracts per chain.
-var moonwellRewardDistributorByChainID = map[int64]string{
-	8453: "0xe9005b078701e2A0948D2EaC43010D35870Ad9d2", // Base
-	10:   "0xF9524bfa18C19C3E605FbfE8DFd05C6e967574Aa", // Optimism
-}
-
-func MoonwellRewardDistributor(chainID int64) (string, bool) {
-	value, ok := moonwellRewardDistributorByChainID[chainID]
-	return value, ok
-}
-
 const tempoStablecoinDEXAddress = "0xdec0000000000000000000000000000000000000"
 
 var tempoChainIDs = map[int64]struct{}{

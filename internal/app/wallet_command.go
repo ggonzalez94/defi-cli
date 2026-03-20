@@ -253,7 +253,7 @@ func nativeAssetInfo(chain id.Chain) (symbol string, slip44Ref string) {
 	case 4114:
 		return "cBTC", "60"
 	case 5000:
-		return "MNT", "60"
+		return "MNT", "614"
 	case 42220:
 		return "CELO", "52752"
 	case 43114:

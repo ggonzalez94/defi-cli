@@ -73,9 +73,21 @@ func Open(path, lockPath string, maxStale time.Duration) (*Store, error) {
 	store := &Store{db: db, lock: lock}
 	// Prune entries that are past both TTL and max_stale on startup to
 	// prevent unbounded growth while preserving the stale fallback window.
+	// Use a floor so that a --max-stale 0s invocation does not purge all stale rows.
 	// Best-effort: a prune failure should not prevent cache usage.
-	_ = store.pruneUnlocked(maxStale)
+	_ = store.pruneUnlocked(pruneMaxStale(maxStale))
 	return store, nil
+}
+
+// pruneMaxStale returns maxStale with a minimum floor of 1 hour so that
+// startup auto-prune never discards stale data too aggressively even when
+// the caller passes a small or zero --max-stale value.
+func pruneMaxStale(maxStale time.Duration) time.Duration {
+	const pruneFloor = time.Hour
+	if maxStale < pruneFloor {
+		return pruneFloor
+	}
+	return maxStale
 }
 
 func (s *Store) Close() error {

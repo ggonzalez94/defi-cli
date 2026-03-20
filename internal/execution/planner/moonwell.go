@@ -315,10 +315,13 @@ func plannerExecMulticall3(ctx context.Context, client *ethclient.Client, calls 
 	if len(dec) == 0 {
 		return nil, fmt.Errorf("empty aggregate3 response")
 	}
-	rawResults := dec[0].([]struct {
+	rawResults, ok := dec[0].([]struct {
 		Success    bool   `json:"success"`
 		ReturnData []byte `json:"returnData"`
 	})
+	if !ok {
+		return nil, fmt.Errorf("unexpected multicall3 response type: %T", dec[0])
+	}
 	results := make([]plannerMC3Result, len(rawResults))
 	for i, r := range rawResults {
 		results[i].Success = r.Success

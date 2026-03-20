@@ -220,10 +220,13 @@ func (c *Client) ProtocolsTop(ctx context.Context, category string, chain string
 		}
 		tvl := p.TVL
 		if normChain != "" {
-			tvl = chainTVL(p.ChainTvls, normChain)
-			if tvl <= 0 {
-				tvl = p.TVL
+			cTVL, ok := chainTVL(p.ChainTvls, normChain)
+			if !ok {
+				// Protocol lists the chain in Chains but has no chainTvls
+				// entry — skip rather than falling back to global TVL.
+				continue
 			}
+			tvl = cTVL
 		}
 		filtered = append(filtered, ranked{protocolResp: p, tvl: tvl})
 	}
@@ -252,16 +255,17 @@ func (c *Client) ProtocolsTop(ctx context.Context, category string, chain string
 // chainTVL returns the TVL for a specific chain from the chainTvls map.
 // DefiLlama chainTvls keys include plain chain names and suffixed variants
 // (e.g. "Ethereum-staking", "Ethereum-borrowed"); only the plain key is used.
-func chainTVL(chainTvls map[string]float64, normChain string) float64 {
+// The bool return distinguishes "chain not in map" (false) from "chain TVL is 0" (true).
+func chainTVL(chainTvls map[string]float64, normChain string) (float64, bool) {
 	for k, v := range chainTvls {
 		if strings.Contains(k, "-") {
 			continue
 		}
 		if strings.ToLower(strings.TrimSpace(k)) == normChain {
-			return v
+			return v, true
 		}
 	}
-	return 0
+	return 0, false
 }
 
 func (c *Client) ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error) {

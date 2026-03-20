@@ -156,6 +156,62 @@ func TestPrunePreservesStaleWithinMaxStale(t *testing.T) {
 	}
 }
 
+func TestPruneMaxStaleFloor(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    time.Duration
+		expected time.Duration
+	}{
+		{name: "zero gets floored", input: 0, expected: time.Hour},
+		{name: "30s gets floored", input: 30 * time.Second, expected: time.Hour},
+		{name: "59m gets floored", input: 59 * time.Minute, expected: time.Hour},
+		{name: "1h stays", input: time.Hour, expected: time.Hour},
+		{name: "2h stays", input: 2 * time.Hour, expected: 2 * time.Hour},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := pruneMaxStale(tc.input)
+			if got != tc.expected {
+				t.Fatalf("pruneMaxStale(%v) = %v, want %v", tc.input, got, tc.expected)
+			}
+		})
+	}
+}
+
+func TestOpenWithZeroMaxStalePreservesStale(t *testing.T) {
+	tmp := t.TempDir()
+	dbPath := filepath.Join(tmp, "cache.db")
+	lockPath := filepath.Join(tmp, "cache.lock")
+
+	// Open with large maxStale and insert a short-TTL entry.
+	store, err := Open(dbPath, lockPath, 10*time.Minute)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	if err := store.Set("fragile", []byte(`"data"`), 1*time.Second); err != nil {
+		t.Fatalf("Set failed: %v", err)
+	}
+	store.Close()
+
+	// Wait for TTL to expire.
+	time.Sleep(2100 * time.Millisecond)
+
+	// Re-open with maxStale=0. The prune floor should prevent eviction.
+	store2, err := Open(dbPath, lockPath, 0)
+	if err != nil {
+		t.Fatalf("Open (zero maxStale) failed: %v", err)
+	}
+	defer store2.Close()
+
+	res, err := store2.Get("fragile", time.Hour)
+	if err != nil {
+		t.Fatalf("Get fragile failed: %v", err)
+	}
+	if !res.Hit {
+		t.Fatal("expected stale entry to survive startup prune with zero maxStale (floor should apply)")
+	}
+}
+
 func TestCacheConcurrentOpenAndSet(t *testing.T) {
 	tmp := t.TempDir()
 	dbPath := filepath.Join(tmp, "cache.db")

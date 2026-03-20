@@ -112,6 +112,15 @@ func TestFetchGasPriceLegacy(t *testing.T) {
 	if result.PriorityFeeGwei != "" {
 		t.Fatalf("expected empty priority_fee_gwei for legacy chain, got %s", result.PriorityFeeGwei)
 	}
+	// With omitempty, verify these fields are absent from JSON serialization.
+	b, _ := json.Marshal(result)
+	jsonStr := string(b)
+	if strings.Contains(jsonStr, "base_fee_gwei") {
+		t.Fatalf("expected base_fee_gwei omitted from JSON for legacy chain, got %s", jsonStr)
+	}
+	if strings.Contains(jsonStr, "priority_fee_gwei") {
+		t.Fatalf("expected priority_fee_gwei omitted from JSON for legacy chain, got %s", jsonStr)
+	}
 	if result.GasPriceGwei != "5.000000" {
 		t.Fatalf("expected gas_price_gwei 5.000000, got %s", result.GasPriceGwei)
 	}
@@ -276,6 +285,44 @@ func TestChainsGasRejectsNonEVMInMulti(t *testing.T) {
 	}
 	if !strings.Contains(stderr.String(), "EVM") {
 		t.Fatalf("expected EVM-only error message, got: %s", stderr.String())
+	}
+}
+
+func TestFetchGasPriceTipCapFailureAddsWarning(t *testing.T) {
+	// EIP-1559 chain where eth_maxPriorityFeePerGas returns an error.
+	srv := newMockRPCServer(t, mockRPCConfig{
+		baseFeeHex:     "0x3B9ACA00", // 1 gwei
+		priorityFeeHex: "",            // will return error
+		gasPriceHex:    "0xB2D05E00", // 3 gwei
+		blockNumberHex: "0x10",
+	})
+	defer srv.Close()
+
+	chain := id.Chain{Name: "Ethereum", Slug: "ethereum", CAIP2: "eip155:1", EVMChainID: 1}
+	now := func() time.Time { return time.Date(2026, 3, 9, 12, 0, 0, 0, time.UTC) }
+
+	result, err := fetchGasPrice(context.Background(), chain, srv.URL, now)
+	if err != nil {
+		t.Fatalf("fetchGasPrice failed: %v", err)
+	}
+	if !result.EIP1559 {
+		t.Fatal("expected eip1559=true")
+	}
+	if result.PriorityFeeGwei != "0.000000" {
+		t.Fatalf("expected zero priority_fee_gwei on failure, got %s", result.PriorityFeeGwei)
+	}
+	if len(result.Warnings) == 0 {
+		t.Fatal("expected warnings to include priority fee unavailable message")
+	}
+	found := false
+	for _, w := range result.Warnings {
+		if strings.Contains(w, "priority fee unavailable") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("expected warning about priority fee, got %v", result.Warnings)
 	}
 }
 

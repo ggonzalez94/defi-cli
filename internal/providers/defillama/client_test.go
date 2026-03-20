@@ -260,7 +260,7 @@ func TestProtocolsTopChainFilterCaseInsensitive(t *testing.T) {
 	}
 }
 
-func TestProtocolsTopChainFallbackToTotalTVL(t *testing.T) {
+func TestProtocolsTopChainMissingChainTvlsSkipped(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`[
@@ -277,8 +277,33 @@ func TestProtocolsTopChainFallbackToTotalTVL(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ProtocolsTop failed: %v", err)
 	}
-	if len(items) != 1 || items[0].TVLUSD != 5000 {
-		t.Fatalf("expected fallback to total TVL 5000, got %+v", items)
+	if len(items) != 0 {
+		t.Fatalf("expected protocol with no chainTvls entry to be skipped, got %+v", items)
+	}
+}
+
+func TestProtocolsTopChainZeroTVLPreserved(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/protocols", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`[
+			{"name":"ZeroTVLProtocol","category":"Lending","tvl":5000,"chains":["Ethereum"],"chainTvls":{"Ethereum":0}}
+		]`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.apiBase = srv.URL
+
+	items, err := c.ProtocolsTop(context.Background(), "", "Ethereum", 0)
+	if err != nil {
+		t.Fatalf("ProtocolsTop failed: %v", err)
+	}
+	if len(items) != 1 {
+		t.Fatalf("expected protocol with zero chain TVL to be preserved, got %d items", len(items))
+	}
+	if items[0].TVLUSD != 0 {
+		t.Fatalf("expected TVL=0 for chain with explicit zero, got %f", items[0].TVLUSD)
 	}
 }
 

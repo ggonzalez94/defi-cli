@@ -25,7 +25,10 @@ func NormalizeAmount(baseUnits, decimal string, decimals int) (string, string, e
 		return "", "", clierr.New(clierr.CodeUsage, "decimals must be >= 0")
 	}
 
-	// "max" resolves to uint256.max — used by repay to close full borrow balance.
+	// "max" resolves to uint256.max — semantically valid only for repay flows
+	// (close full borrow balance). Other commands (swap, bridge, transfer, supply,
+	// withdraw, borrow, deposit, yield withdraw) will fail at the contract/RPC
+	// level if max is passed, so no additional guard is needed here.
 	if strings.EqualFold(strings.TrimSpace(baseUnits), "max") {
 		return MaxUint256, "max", nil
 	}
