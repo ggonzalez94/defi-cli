@@ -1,6 +1,6 @@
 ---
-title: Bridge, Swap, and Transfer Commands
-description: Full reference for bridge/swap quote families plus ERC-20 transfer execution commands.
+title: Bridge, Swap, Transfer, and Approvals Commands
+description: Full reference for bridge/swap quote and execution, ERC-20 transfers, approvals, and action inspection.
 ---
 
 ## `bridge quote`
@@ -57,11 +57,12 @@ Reason: this route uses DefiLlama bridge analytics endpoints that are provider-g
 ```bash
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
 defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --results-only
 ```
 
 Flags:
 
-- `--provider string` (`1inch|uniswap|jupiter|fibrous|bungee|taikoswap`) required
+- `--provider string` (`1inch|uniswap|tempo|jupiter|fibrous|bungee|taikoswap`) required
 - `--chain string` required
 - `--from-asset string` required
 - `--to-asset string` required
@@ -76,6 +77,7 @@ Flags:
 Type support:
 
 - `uniswap`: `exact-input`, `exact-output`
+- `tempo`: `exact-input`, `exact-output`
 - `1inch`, `jupiter`, `fibrous`, `bungee`, `taikoswap`: `exact-input` only
 
 Auth requirements:
@@ -83,7 +85,7 @@ Auth requirements:
 - `1inch` -> `DEFI_1INCH_API_KEY`
 - `uniswap` -> `DEFI_UNISWAP_API_KEY`
 - `jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
-- `fibrous`, `bungee`, `taikoswap` -> keyless by default
+- `tempo`, `fibrous`, `bungee`, `taikoswap` -> keyless by default
 
 These requirements are driven by provider APIs. `defi-cli` passes through provider auth requirements per route/provider pair.
 
@@ -130,16 +132,25 @@ defi bridge submit --action-id <action_id> --step-timeout 15m --timeout 20m --al
 ## `swap plan|submit|status`
 
 ```bash
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --from-address 0xYourEOA --results-only
 defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap submit --action-id <action_id> --results-only
 defi swap status --action-id <action_id> --results-only
 ```
 
-Execution provider today: `taikoswap`.
+Execution providers: `tempo|taikoswap`.
 
 `plan` and `submit` also accept `--input-json` and `--input-file` with the same precedence rules as bridge plans.
 
 `submit` supports signer, polling, gas, simulation, and policy override flags consistent with other execution commands (`--simulate`, signer inputs, `--poll-interval`, `--step-timeout`, `--gas-multiplier`, `--max-fee-gwei`, `--max-priority-fee-gwei`, `--allow-max-approval`, `--unsafe-provider-tx`).
+
+Tempo execution notes:
+
+- Tempo DEX planning supports `exact-input` and `exact-output`.
+- Tempo DEX currently supports USD-denominated TIP-20 assets only and auto-routes supported pairs through quote-token relationships on-chain.
+- Tempo DEX swaps settle to the caller, so `--recipient` must be omitted or match `--from-address`.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on standard EVM chains). If a step requires an ERC-20 approval that has not been granted on-chain, estimation may fail with a simulation error.
 
 ## `transfer plan|submit|status`
 
@@ -170,7 +181,7 @@ defi transfer status --action-id <action_id> --results-only
 - `--simulate bool` optional (default `true`)
 - `--input-json string` optional structured payload
 - `--input-file string` optional structured payload file or `-` for stdin
-- `--signer string` (`local`)
+- `--signer string` (`local`). Note: `--signer tempo` is available for swap submit commands on Tempo chains; other execution commands currently support `local` only.
 - `--key-source string` (`auto|env|file|keystore`)
 - `--private-key string` optional one-off override
 - `--poll-interval string` (default `2s`)
@@ -180,3 +191,25 @@ defi transfer status --action-id <action_id> --results-only
 - `--max-priority-fee-gwei string` optional
 
 Explicit flags override structured input values on `submit` as well.
+
+## `approvals plan|submit|status`
+
+```bash
+defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
+defi approvals submit --action-id <action_id> --results-only
+defi approvals status --action-id <action_id> --results-only
+```
+
+Creates and executes ERC-20 approval transactions for a given spender and amount. `plan` and `submit` accept `--input-json` / `--input-file`.
+
+## `actions list|show|estimate`
+
+```bash
+defi actions list --results-only
+defi actions show --action-id <action_id> --results-only
+defi actions estimate --action-id <action_id> --results-only
+```
+
+Inspect persisted actions. `actions estimate` computes per-step gas projections using `eth_estimateGas` and EIP-1559 fee resolution.
+
+Tempo note: `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing). If a Tempo step requires an ERC-20 approval that has not been granted on-chain, estimation may fail with a simulation error.

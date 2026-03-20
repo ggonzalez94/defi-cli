@@ -15,17 +15,23 @@ import (
 var (
 	policyERC20ABI           = mustPolicyABI(registry.ERC20MinimalABI)
 	policyUniswapV3RouterABI = mustPolicyABI(registry.UniswapV3RouterABI)
+	policyTempoDEXABI        = mustPolicyABI(registry.TempoStablecoinDEXABI)
 
 	policyApproveSelector     = policyERC20ABI.Methods["approve"].ID
 	policyTransferSelector    = policyERC20ABI.Methods["transfer"].ID
 	policyUniswapV3SwapMethod = policyUniswapV3RouterABI.Methods["exactInputSingle"].ID
+	policyTempoSwapExactIn    = policyTempoDEXABI.Methods["swapExactAmountIn"].ID
+	policyTempoSwapExactOut   = policyTempoDEXABI.Methods["swapExactAmountOut"].ID
 )
 
 func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []byte, opts ExecuteOptions) error {
 	if step == nil {
 		return clierr.New(clierr.CodeInternal, "missing action step")
 	}
-	if !common.IsHexAddress(step.Target) {
+	// Batched steps (Calls populated) may have empty Target/Data. Skip the
+	// single-target address check for those; the provider-specific handler
+	// will validate each call's target individually.
+	if len(step.Calls) == 0 && !common.IsHexAddress(step.Target) {
 		return clierr.New(clierr.CodeUsage, "invalid step target address")
 	}
 
@@ -35,7 +41,7 @@ func validateStepPolicy(action *Action, step *ActionStep, chainID int64, data []
 	case StepTypeTransfer:
 		return validateTransferPolicy(action, step, data)
 	case StepTypeSwap:
-		return validateSwapPolicy(action, step, chainID, data)
+		return validateSwapPolicy(action, step, chainID, data, opts)
 	case StepTypeBridge:
 		return validateBridgePolicy(action, step, chainID, opts)
 	default:
@@ -126,20 +132,112 @@ func validateTransferPolicy(action *Action, step *ActionStep, data []byte) error
 	return nil
 }
 
-func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []byte) error {
-	if action == nil || !strings.EqualFold(strings.TrimSpace(action.Provider), "taikoswap") {
+func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []byte, opts ExecuteOptions) error {
+	if action == nil {
 		return nil
 	}
-	if len(data) < 4 || !bytes.Equal(data[:4], policyUniswapV3SwapMethod) {
-		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step must call exactInputSingle")
+	switch strings.ToLower(strings.TrimSpace(action.Provider)) {
+	case "taikoswap":
+		if len(data) < 4 || !bytes.Equal(data[:4], policyUniswapV3SwapMethod) {
+			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step must call exactInputSingle")
+		}
+		_, router, ok := registry.UniswapV3Contracts(chainID)
+		if !ok {
+			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step has unsupported chain")
+		}
+		expectedRouter := common.HexToAddress(router).Hex()
+		if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedRouter) {
+			return clierr.New(clierr.CodeActionPlan, "taikoswap swap step target does not match canonical router")
+		}
+	case "tempo":
+		// Batched calls: validate each call individually.
+		// Always enter this path when Calls is populated, regardless of
+		// whether legacy Data is also set, to match validateStepPolicyCalls
+		// in the executor and prevent tampered actions from bypassing
+		// batched validation.
+		if len(step.Calls) > 0 {
+			return validateTempoSwapCalls(chainID, step.Calls, action, opts)
+		}
+		// Legacy single-target validation.
+		if len(data) < 4 || (!bytes.Equal(data[:4], policyTempoSwapExactIn) && !bytes.Equal(data[:4], policyTempoSwapExactOut)) {
+			return clierr.New(clierr.CodeActionPlan, "tempo swap step must call swapExactAmountIn or swapExactAmountOut")
+		}
+		dexAddr, ok := registry.TempoStablecoinDEX(chainID)
+		if !ok {
+			return clierr.New(clierr.CodeActionPlan, "tempo swap step has unsupported chain")
+		}
+		expectedDEX := common.HexToAddress(dexAddr).Hex()
+		if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedDEX) {
+			return clierr.New(clierr.CodeActionPlan, "tempo swap step target does not match canonical stablecoin dex")
+		}
 	}
-	_, router, ok := registry.UniswapV3Contracts(chainID)
+	return nil
+}
+
+// validateTempoSwapCalls validates each call in a batched Tempo swap step.
+// Recognized selectors are ERC-20 approve and Tempo DEX swap methods.
+// At least one swap call (swapExactAmountIn or swapExactAmountOut) is required.
+func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opts ExecuteOptions) error {
+	dexAddr, ok := registry.TempoStablecoinDEX(chainID)
 	if !ok {
-		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step has unsupported chain")
+		return clierr.New(clierr.CodeActionPlan, "tempo swap step has unsupported chain")
 	}
-	expectedRouter := common.HexToAddress(router).Hex()
-	if !strings.EqualFold(common.HexToAddress(step.Target).Hex(), expectedRouter) {
-		return clierr.New(clierr.CodeActionPlan, "taikoswap swap step target does not match canonical router")
+	expectedDEX := common.HexToAddress(dexAddr).Hex()
+
+	hasSwapCall := false
+	for i, call := range calls {
+		data, err := decodeHex(call.Data)
+		if err != nil {
+			return clierr.Wrap(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid data", i), err)
+		}
+		if len(data) < 4 {
+			return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has insufficient calldata", i))
+		}
+		selector := data[:4]
+		switch {
+		case bytes.Equal(selector, policyApproveSelector):
+			// Validate spender and amount for approve calls.
+			args, abiErr := policyERC20ABI.Methods["approve"].Inputs.Unpack(data[4:])
+			if abiErr != nil || len(args) != 2 {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid approve calldata", i))
+			}
+			spender, spenderOK := toAddress(args[0])
+			if !spenderOK || spender == (common.Address{}) {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid approve spender", i))
+			}
+			if !strings.EqualFold(spender.Hex(), expectedDEX) {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d approve spender does not match canonical stablecoin dex", i))
+			}
+			if !opts.AllowMaxApproval {
+				amount, amountOK := toBigInt(args[1])
+				if !amountOK || amount.Sign() <= 0 {
+					return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has invalid approve amount", i))
+				}
+				if action != nil {
+					requested, reqOK := parsePositiveBaseUnits(action.InputAmount)
+					if !reqOK {
+						return clierr.New(clierr.CodeActionPlan, "cannot validate approval bounds for non-numeric input amount; use --allow-max-approval to override")
+					}
+					if amount.Cmp(requested) > 0 {
+						return clierr.New(
+							clierr.CodeActionPlan,
+							fmt.Sprintf("tempo swap call %d approval amount %s exceeds requested input amount %s; use --allow-max-approval to override", i, amount.String(), requested.String()),
+						)
+					}
+				}
+			}
+		case bytes.Equal(selector, policyTempoSwapExactIn), bytes.Equal(selector, policyTempoSwapExactOut):
+			// Swap calls must target the canonical DEX.
+			if !strings.EqualFold(common.HexToAddress(call.Target).Hex(), expectedDEX) {
+				return clierr.New(clierr.CodeActionPlan, "tempo swap call target does not match canonical stablecoin dex")
+			}
+			hasSwapCall = true
+		default:
+			return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has unrecognized selector 0x%x", i, selector))
+		}
+	}
+	if !hasSwapCall {
+		return clierr.New(clierr.CodeActionPlan, "tempo swap step must contain at least one swap call (swapExactAmountIn or swapExactAmountOut)")
 	}
 	return nil
 }

@@ -1,9 +1,9 @@
 ---
 title: defi-cli Docs
-description: Query DeFi lending, yield, bridge, and swap data from a single agent-first CLI.
+description: Query and act on DeFi lending, yield, bridge, and swap from a single agent-first CLI.
 ---
 
-`defi-cli` is an agent-first DeFi retrieval CLI with a stable automation contract:
+`defi-cli` is an agent-first DeFi CLI for querying and acting on-chain, with a stable automation contract:
 
 - Stable JSON envelope + deterministic field naming
 - Stable exit codes
@@ -26,24 +26,22 @@ defi providers list --results-only
 ```json
 [
   {
-    "name": "defillama",
-    "type": "market+bridge-data",
-    "requires_key": false,
-    "capabilities": ["chains.top", "chains.assets", "protocols.top", "protocols.categories", "bridge.list", "bridge.details"],
-    "key_env_var": "DEFI_DEFILLAMA_API_KEY"
-  },
-  {
-    "name": "kamino",
+    "name": "aave",
     "type": "lending+yield",
     "requires_key": false,
-    "capabilities": ["lend.markets", "lend.rates", "yield.opportunities", "yield.history"]
+    "capabilities": ["lend.markets", "lend.rates", "lend.positions", "yield.opportunities", "yield.positions", "yield.history", "lend.plan", "lend.execute", "yield.plan", "yield.execute", "rewards.plan", "rewards.execute"]
   },
   {
-    "name": "jupiter",
+    "name": "taikoswap",
     "type": "swap",
     "requires_key": false,
-    "capabilities": ["swap.quote"],
-    "key_env_var": "DEFI_JUPITER_API_KEY"
+    "capabilities": ["swap.quote", "swap.plan", "swap.execute"]
+  },
+  {
+    "name": "across",
+    "type": "bridge",
+    "requires_key": false,
+    "capabilities": ["bridge.quote", "bridge.plan", "bridge.execute"]
   }
 ]
 ```
@@ -67,9 +65,11 @@ Bungee quotes are keyless by default. Dedicated backend mode requires both `DEFI
 
 `lend markets`, `lend rates`, `yield opportunities`, and `yield history` use direct protocol adapters:
 
-- `aave`
-- `morpho`
-- `kamino` (Solana mainnet)
+- `aave` (read + execution)
+- `morpho` (read + execution)
+- `kamino` (Solana mainnet, read only)
+
+Execution commands (`plan`, `run`, `submit`, `status`) are available for swap, bridge, lend, yield, rewards, approvals, and transfer workflows. See [Commands Overview](/reference/commands-overview).
 
 ## Next
 

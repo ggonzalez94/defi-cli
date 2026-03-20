@@ -38,3 +38,31 @@ func AavePoolAddressProvider(chainID int64) (string, bool) {
 	value, ok := aavePoolAddressProviderByChainID[chainID]
 	return value, ok
 }
+
+const tempoStablecoinDEXAddress = "0xdec0000000000000000000000000000000000000"
+
+var tempoChainIDs = map[int64]struct{}{
+	31318: {},
+	4217:  {},
+	42431: {},
+}
+
+func TempoStablecoinDEX(chainID int64) (string, bool) {
+	if _, ok := tempoChainIDs[chainID]; !ok {
+		return "", false
+	}
+	return tempoStablecoinDEXAddress, true
+}
+
+// Canonical fee token addresses for Tempo chains.
+var tempoFeeTokenByChainID = map[int64]string{
+	4217:  "0x20c000000000000000000000b9537d11c60e8b50",
+	42431: "0x20c0000000000000000000000000000000000001",
+	31318: "0x20c0000000000000000000000000000000000001",
+}
+
+// TempoFeeToken returns the fee token address for the given Tempo chain ID.
+func TempoFeeToken(chainID int64) (string, bool) {
+	addr, ok := tempoFeeTokenByChainID[chainID]
+	return addr, ok
+}

@@ -53,8 +53,11 @@ cache:
 | --- | --- |
 | `chains top`, `chains assets`, `protocols top`, `protocols categories` | `5m` |
 | `lend markets`, `yield opportunities`, `bridge list`, `bridge details` | `60s` |
-| `lend rates` | `30s` |
+| `lend rates`, `lend positions`, `yield positions` | `30s` |
+| `yield history` | `5m` |
 | `bridge quote`, `swap quote` | `15s` |
+
+Execution commands (`plan`, `run`, `submit`, `status`) and action inspection (`actions list|show|estimate`) bypass cache reads/writes.
 
 ## Strict mode
 
