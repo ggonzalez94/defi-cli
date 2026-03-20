@@ -154,10 +154,14 @@ func TestChainsGasEndToEndWithMockRPC(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
 	}
 
-	var result model.GasPrice
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
+	var results []model.GasPrice
+	if err := json.Unmarshal(stdout.Bytes(), &results); err != nil {
 		t.Fatalf("failed to parse output: %v output=%s", err, stdout.String())
 	}
+	if len(results) != 1 {
+		t.Fatalf("expected 1 element, got %d", len(results))
+	}
+	result := results[0]
 	if result.ChainID != "eip155:1" {
 		t.Fatalf("expected chain_id eip155:1, got %s", result.ChainID)
 	}
@@ -234,7 +238,7 @@ func TestChainsGasMultipleChainsWithMockRPC(t *testing.T) {
 	}
 }
 
-func TestChainsGasSingleChainStillReturnsScalar(t *testing.T) {
+func TestChainsGasSingleChainReturnsArray(t *testing.T) {
 	srv := newMockRPCServer(t, mockRPCConfig{
 		baseFeeHex:     "0x3B9ACA00",
 		priorityFeeHex: "0x77359400",
@@ -250,13 +254,16 @@ func TestChainsGasSingleChainStillReturnsScalar(t *testing.T) {
 		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
 	}
 
-	// Single chain should return a scalar object, not an array.
-	var result model.GasPrice
-	if err := json.Unmarshal(stdout.Bytes(), &result); err != nil {
-		t.Fatalf("single chain should return scalar GasPrice, got parse error: %v output=%s", err, stdout.String())
+	// Single chain should return a one-element array for consistent schema.
+	var results []model.GasPrice
+	if err := json.Unmarshal(stdout.Bytes(), &results); err != nil {
+		t.Fatalf("single chain should return array of GasPrice, got parse error: %v output=%s", err, stdout.String())
 	}
-	if result.ChainID != "eip155:1" {
-		t.Fatalf("expected chain_id eip155:1, got %s", result.ChainID)
+	if len(results) != 1 {
+		t.Fatalf("expected 1 element, got %d", len(results))
+	}
+	if results[0].ChainID != "eip155:1" {
+		t.Fatalf("expected chain_id eip155:1, got %s", results[0].ChainID)
 	}
 }
 

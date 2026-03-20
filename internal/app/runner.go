@@ -451,15 +451,16 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 				entries = append(entries, chainEntry{chain: chain, rpcURL: rpcURL})
 			}
 
-			ctx := cmd.Context()
+			ctx, cancel := context.WithTimeout(cmd.Context(), s.settings.Timeout)
+			defer cancel()
 
-			// Single chain: preserve the original scalar response.
+			// Single chain: still returns a one-element array for consistent schema.
 			if len(entries) == 1 {
 				result, err := fetchGasPrice(ctx, entries[0].chain, entries[0].rpcURL, s.runner.now)
 				if err != nil {
 					return err
 				}
-				return s.emitSuccess(trimRootPath(cmd.CommandPath()), result, nil, cacheMetaBypass(), nil, false)
+				return s.emitSuccess(trimRootPath(cmd.CommandPath()), []model.GasPrice{result}, nil, cacheMetaBypass(), nil, false)
 			}
 
 			// Multiple chains: fetch in parallel, preserve input order.
@@ -495,6 +496,9 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 			}
 
 			partial := len(warnings) > 0
+			if partial && s.settings.Strict {
+				return clierr.New(clierr.CodePartialStrict, "partial gas results in strict mode; failures: "+strings.Join(warnings, "; "))
+			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), prices, warnings, cacheMetaBypass(), nil, partial)
 		},
 	}
@@ -529,7 +533,7 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of protocols to return")
 	cmd.Flags().StringVar(&category, "category", "", "Filter by protocol category (e.g. lending)")
-	cmd.Flags().StringVar(&chain, "chain", "", "Filter by chain presence (e.g. Ethereum, Arbitrum)")
+	cmd.Flags().StringVar(&chain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
 	root.AddCommand(cmd)
 
 	catCmd := &cobra.Command{
@@ -566,7 +570,7 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	}
 	feesCmd.Flags().IntVar(&feesLimit, "limit", 20, "Number of protocols to return")
 	feesCmd.Flags().StringVar(&feesCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
-	feesCmd.Flags().StringVar(&feesChain, "chain", "", "Filter by chain presence (e.g. Ethereum, Arbitrum)")
+	feesCmd.Flags().StringVar(&feesChain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
 	root.AddCommand(feesCmd)
 
 	var revLimit int
@@ -588,7 +592,7 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	}
 	revCmd.Flags().IntVar(&revLimit, "limit", 20, "Number of protocols to return")
 	revCmd.Flags().StringVar(&revCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
-	revCmd.Flags().StringVar(&revChain, "chain", "", "Filter by chain presence (e.g. Ethereum, Arbitrum)")
+	revCmd.Flags().StringVar(&revChain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
 	root.AddCommand(revCmd)
 
 	return root
@@ -613,7 +617,7 @@ func (s *runtimeState) newDexesCommand() *cobra.Command {
 		},
 	}
 	volCmd.Flags().IntVar(&limit, "limit", 20, "Number of DEXes to return")
-	volCmd.Flags().StringVar(&chain, "chain", "", "Filter by chain presence (e.g. Ethereum, Arbitrum)")
+	volCmd.Flags().StringVar(&chain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
 	root.AddCommand(volCmd)
 
 	return root
