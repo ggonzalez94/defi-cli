@@ -128,8 +128,10 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 			if cmd.Name() == "help" {
 				return nil
 			}
-			if err := normalizeAndValidateCommandFlags(cmd); err != nil {
-				return err
+			if !commandUsesStructuredInput(cmd) {
+				if err := normalizeAndValidateCommandFlags(cmd); err != nil {
+					return err
+				}
 			}
 			settings, err := config.Load(s.flags)
 			if err != nil {
@@ -254,6 +256,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 	cmd.AddCommand(s.newTransferCommand())
 	cmd.AddCommand(s.newActionsCommand())
 	cmd.AddCommand(s.newYieldCommand())
+	cmd.AddCommand(s.newWalletCommand())
 	cmd.AddCommand(newVersionCommand())
 
 	return cmd
