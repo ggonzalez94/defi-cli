@@ -255,6 +255,34 @@ func TestValidateTempoSwapBatchedCallsRejectsUnknownSelector(t *testing.T) {
 	}
 }
 
+func TestValidateTempoSwapBatchedCallsRejectsApproveOnly(t *testing.T) {
+	dexAddr := "0xdec0000000000000000000000000000000000000"
+	tokenIn := "0x20c0000000000000000000000000000000000000"
+
+	approveData, err := policyERC20ABI.Pack("approve", common.HexToAddress(dexAddr), big.NewInt(1000))
+	if err != nil {
+		t.Fatalf("pack approve calldata: %v", err)
+	}
+
+	action := &Action{Provider: "tempo", InputAmount: "1000"}
+	step := &ActionStep{
+		Type:   StepTypeSwap,
+		Target: "",
+		Data:   "",
+		Calls: []StepCall{
+			{Target: tokenIn, Data: "0x" + common.Bytes2Hex(approveData), Value: "0"},
+		},
+	}
+
+	err = validateSwapPolicy(action, step, 4217, nil, ExecuteOptions{})
+	if err == nil {
+		t.Fatal("expected approve-only batch to fail")
+	}
+	if !strings.Contains(err.Error(), "at least one swap call") {
+		t.Fatalf("expected missing swap call message, got err=%v", err)
+	}
+}
+
 func TestValidateBridgePolicyEndpointGuard(t *testing.T) {
 	action := &Action{Provider: "lifi"}
 	step := &ActionStep{

@@ -172,6 +172,7 @@ func validateSwapPolicy(action *Action, step *ActionStep, chainID int64, data []
 
 // validateTempoSwapCalls validates each call in a batched Tempo swap step.
 // Recognized selectors are ERC-20 approve and Tempo DEX swap methods.
+// At least one swap call (swapExactAmountIn or swapExactAmountOut) is required.
 func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opts ExecuteOptions) error {
 	dexAddr, ok := registry.TempoStablecoinDEX(chainID)
 	if !ok {
@@ -179,6 +180,7 @@ func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opt
 	}
 	expectedDEX := common.HexToAddress(dexAddr).Hex()
 
+	hasSwapCall := false
 	for i, call := range calls {
 		data, err := decodeHex(call.Data)
 		if err != nil {
@@ -225,9 +227,13 @@ func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opt
 			if !strings.EqualFold(common.HexToAddress(call.Target).Hex(), expectedDEX) {
 				return clierr.New(clierr.CodeActionPlan, "tempo swap call target does not match canonical stablecoin dex")
 			}
+			hasSwapCall = true
 		default:
 			return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d has unrecognized selector 0x%x", i, selector))
 		}
+	}
+	if !hasSwapCall {
+		return clierr.New(clierr.CodeActionPlan, "tempo swap step must contain at least one swap call (swapExactAmountIn or swapExactAmountOut)")
 	}
 	return nil
 }
