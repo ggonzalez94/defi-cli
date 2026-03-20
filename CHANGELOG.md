@@ -19,98 +19,78 @@ Format:
 - Added `stablecoins top` command to list top stablecoins by circulating market cap with price, chain count, and day/week/month supply changes (no API key required, uses DefiLlama stablecoins API). Supports `--peg-type` filter (e.g. `peggedUSD`, `peggedEUR`) and `--limit`.
 - Added `chains gas` command to query current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection (no keys required, bypasses cache, supports `--rpc-url` override). Accepts comma-separated chains for multi-chain batch queries with parallel RPC fetching and partial-result support.
 - Added `chains list` command to enumerate all supported chains with slugs, CAIP-2 identifiers, namespaces, and accepted aliases (no keys required, bypasses cache).
-- Added TaikoSwap provider support for `swap quote` using on-chain quoter contract calls (no API key required).
-- Added swap execution workflow commands: `swap plan`, `swap submit`, and `swap status`.
-- Added bridge execution workflow commands: `bridge plan`, `bridge submit`, and `bridge status` (Across and LiFi providers).
-- Added approvals workflow commands: `approvals plan`, `approvals submit`, and `approvals status`.
-- Added transfer workflow commands: `transfer plan`, `transfer submit`, and `transfer status` for native ERC-20 wallet-to-wallet sends.
-- Added lend execution workflow commands under `lend supply|withdraw|borrow|repay ... plan|submit|status` (Aave and Morpho).
-- Added rewards execution workflow commands under `rewards claim|compound ... plan|submit|status` (Aave).
-- Added action persistence and inspection commands: `actions list` and `actions show`.
-- Added local signer support for execution with env/file/keystore key sources.
-- Added Taiko Hoodi chain alias and token registry entries (`USDC`, `USDT`, `WETH`) for deterministic asset parsing.
-- Added planner unit tests for approvals, Aave lend/rewards flows, and LiFi bridge action building.
-- Added centralized execution registry data in `internal/registry` for endpoint, contract, and ABI references.
-- Added nightly execution-planning smoke workflow (`nightly-execution-smoke.yml`) and script.
-- Added `lend positions` to query account-level lending positions by address for Aave and Morpho with `--type all|supply|borrow|collateral`.
-- Added `yield positions` to query account-level yield deposit positions by address for Aave and Morpho.
-- Added `yield history` to query historical yield-provider series with `--metrics apy_total,tvl_usd`, `--interval hour|day`, `--window`/`--from`/`--to`, and optional `--opportunity-ids`.
-- Added yield execution workflow commands under `yield deposit|withdraw ... plan|submit|status` (Aave and Morpho).
-- Added `actions estimate` to compute per-step gas projections for persisted actions using `eth_estimateGas` and EIP-1559 fee cap/tip resolution.
-- Added structured request input for execution `plan` and `submit` commands via `--input-json` and `--input-file` (use `-` to read JSON from stdin).
+- Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.
+- Added the `tempo` swap provider with on-chain quote and execution planning against the Tempo Stablecoin DEX, including `exact-input` and `exact-output` support.
+- Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
+- Tempo native execution: `swap submit` now broadcasts Tempo type 0x76 transactions with fee-token payments and batched calls on Tempo mainnet, testnet, and devnet.
+- Batched approve+swap in a single atomic Tempo transaction (no separate approval step).
+- `--signer tempo` for agent wallet support via the Tempo CLI, with delegated access keys, spending limits, and expiry checks.
+- `--fee-token` flag for execution commands (Tempo-only, defaults to USDC.e on mainnet).
+- `actions estimate` now supports Tempo actions with fee-token-denominated gas estimates (`fee_unit`, `fee_token` fields).
+- `StepExecutor` interface for chain-specific execution; EVM path extracted unchanged, Tempo path added.
 
 ### Changed
-- BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) sourced from Morpho vault/vault-v2 data instead of Morpho market IDs.
-- BREAKING: `yield opportunities` removed subjective fields (`risk_level`, `risk_reasons`, `score`) and removed the `--max-risk` flag.
-- BREAKING: `yield opportunities --sort` now supports only objective keys (`apy_total|tvl_usd|liquidity_usd`) and defaults to `apy_total`.
-- BREAKING: Removed one-shot execution `run` commands across all execution domains; use `plan` to persist an action and `submit --action-id` to broadcast it.
-- `yield opportunities` now returns `backing_assets` with full per-opportunity backing composition.
-- Yield liquidity/TVL sourcing is now provider-native and consistent: Aave (`size.usd`, `borrowInfo.availableLiquidity.usd`), Morpho vaults (`totalAssetsUsd`, vault liquidity fields), and Kamino (`totalSupplyUsd`, `max(totalSupplyUsd-totalBorrowUsd,0)`).
-- BREAKING: Lend and rewards commands now use `--provider` as the selector flag; `--protocol` has been removed.
-- `providers list` now includes TaikoSwap execution capabilities (`swap.plan`, `swap.execute`) alongside quote metadata.
-- `providers list` now includes LiFi bridge execution capabilities (`bridge.plan`, `bridge.execute`).
-- `providers list` now includes Across bridge execution capabilities (`bridge.plan`, `bridge.execute`).
-- `providers list` now includes Morpho lend execution capabilities (`lend.plan`, `lend.execute`).
-- Added execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
-- Added execution config/env support for action store paths.
-- Execution command cache/action-store policy now covers `swap|bridge|approvals|transfer|lend|rewards ... plan|submit|status`.
-- Removed implicit defaults for multi-provider command paths; `--provider` must be set explicitly where applicable.
-- Added bridge gas-top-up request support via `--from-amount-for-gas` for LiFi quote/plan flows.
-- Bridge execution now tracks LiFi destination settlement status before finalizing bridge steps.
-- Bridge execution now tracks Across destination settlement status before finalizing bridge steps.
-- Aave execution registry defaults now include PoolAddressesProvider mappings for Base, Arbitrum, Optimism, Polygon, and Avalanche in addition to Ethereum.
-- Execution `submit` commands now propagate command timeout/cancel context through on-chain execution.
-- Morpho lend execution now requires explicit `--market-id` to avoid ambiguous market selection.
-- Execution `submit` commands no longer require `--yes`; command intent now gates execution.
-- Unified execution action-construction dispatch under a shared ActionBuilder registry while preserving existing command semantics.
-- Execution commands now use `--from-address` as the single signer-address guard; `--confirm-address` has been removed.
-- Execution `submit` commands now support `--private-key` as a one-off local signer override (highest precedence).
-- Local signer `--key-source auto` now discovers `${XDG_CONFIG_HOME:-~/.config}/defi/key.hex` when present.
-- Missing local-signer key errors now include a simple default key-file hint (`~/.config/defi/key.hex`, with `XDG_CONFIG_HOME` override note).
-- Local signer key/keystore file loading no longer hard-fails on non-`0600` file permissions.
-- `schema` output now includes inherited flags, typed defaults, `required`/`enum`/`format` flag metadata, command auth metadata, and request/response structure hints for agent discovery.
-- Execution command input validation now hardens control-character/path handling and enforces canonical `act_<32 hex chars>` action IDs.
-- Execution endpoint defaults for Across/LiFi settlement polling and Morpho GraphQL planning are now centralized in `internal/registry`.
-- Default chain RPC metadata is now centralized in `internal/registry/rpc.go`; execution/quote flows use shared chain defaults when `--rpc-url` is not provided.
-- Execution pre-sign validation now enforces bounded ERC-20 approvals by default and validates TaikoSwap router/selector invariants before signing.
-- Transfer execution pre-sign validation now enforces ERC-20 `transfer(to,amount)` calldata invariants (selector, recipient, amount, and token target consistency with planned action metadata).
-- Execution `submit` commands now expose `--allow-max-approval` and `--unsafe-provider-tx` overrides for advanced/provider-specific flows.
-- `swap quote` (on-chain providers) and `swap plan` now support `--rpc-url` to override chain default RPCs per invocation.
-- Swap execution planning now validates sender/recipient fields as EVM addresses before route planning.
-- Uniswap `swap quote` now requires a real `--from-address` swapper input instead of using a deterministic placeholder address.
-- `lend positions` now emits non-overlapping type rows for automation: `supply` (non-collateral), `collateral` (posted collateral), and `borrow` (debt).
-- `yield` and `lend` command surfaces are now explicitly split by user intent: passive yield deposits/withdrawals live under `yield`, while loan lifecycle operations remain under `lend`.
-- Morpho execution is now split by product surface: `yield deposit|withdraw` targets vaults (`--vault-address`) while `lend ...` targets Morpho Blue markets (`--market-id`).
-- Aave `yield deposit|withdraw` now maps to Aave reserve supply/withdraw execution while preserving yield-intent command semantics and metadata.
-- `providers list` for Aave/Morpho/Kamino now advertises `yield.history` capability metadata.
-- `providers list` for Aave/Morpho now also advertises `yield.positions`, `yield.plan`, and `yield.execute` capability metadata.
-- Bridge execution flag help now clarifies that `--step-timeout` includes settlement polling and that `--allow-max-approval` may be needed on provider routes that return larger approval calldata.
+- `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
+- `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
+- `actions estimate` now returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields, instead of rejecting them.
+- Tempo swap planning/quotes now validate TIP-20 currency metadata up front and return `unsupported` for non-USD assets or DEX reverts such as missing pairs, instead of reporting them as transient provider outages.
 
 ### Fixed
-- Improved bridge execution error messaging to clearly distinguish quote-only providers from execution-capable providers.
-- Fixed execution read-after-write consistency for sequential on-chain steps by reusing RPC clients per action, gating on confirmed block visibility, and waiting for ERC-20 allowance state visibility after successful approval receipts.
-- Fixed `actions estimate` for multi-step same-chain actions (`approve` then contract call) by using sequential `eth_simulateV1` estimation when supported and falling back to per-step `eth_estimateGas` when unavailable.
-- Fixed execution timeout budgeting so `submit` waits are derived from per-step execution stages instead of the short provider request timeout.
-- Fixed `approvals submit` and `bridge submit` to short-circuit completed actions before requesting signer inputs.
-- Fixed Across/LiFi bridge planning to reject provider transaction payloads with invalid target addresses.
-- Fixed Aave rewards compound planning to reject recipient/sender mismatches so claim/supply addresses stay aligned.
+- None yet.
 
 ### Docs
-- Documented bridge/lend/rewards/approvals execution flows, signer env inputs, command behavior, and exit codes in `README.md`.
-- Documented transfer execution flow and flags in `README.md`, `AGENTS.md`, and Mintlify command references.
-- Updated `AGENTS.md` with expanded execution command coverage and caveats.
-- Updated `docs/act-execution-design.md` implementation status to reflect the shipped Phase 2 surface.
-- Clarified execution builder architecture split (provider-backed route builders for swap/bridge vs internal planners for lend/rewards/approvals) in `AGENTS.md` and execution design docs.
-- Added `lend positions` usage and caveats to `README.md`, `AGENTS.md`, and Mintlify lending command reference.
-- Documented `yield history` usage, flags, and provider caveats across README and Mintlify yield/lending references.
-- Documented `yield positions` and `yield deposit|withdraw` execution usage across README, AGENTS, and Mintlify command references.
-- Updated yield docs/reference examples to remove risk-based flags and document `backing_assets` plus objective `tvl_usd`/`liquidity_usd` semantics.
-- Updated README + Mintlify bridge/swap docs to remove stale implicit-provider defaults, require explicit `--provider` in examples, and document Across max-approval behavior with `--allow-max-approval`.
-- Clarified bridge settlement timeout guidance across docs, including how `--step-timeout` maps to execution wait stages and how `--timeout` applies to provider/planning requests.
-- Clarified release-channel behavior: prerelease tags are published as prereleases and no longer sync Mintlify `docs-live`; stable tags continue to drive production docs.
+- Documented Tempo chain aliases, provider support, native DEX caveats, and execution examples across README, AGENTS, and Mintlify docs.
+- Updated Tempo swap examples to use supported USD TIP-20 pairs and documented that the DEX auto-routes supported pairs through quote-token relationships.
 
 ### Security
 - None yet.
+
+## [v0.4.0] - 2026-03-07
+
+### Added
+- Execution command surface: plan, submit, and status workflows for `swap` (TaikoSwap), `bridge` (Across, LiFi), `lend supply|withdraw|borrow|repay` (Aave, Morpho), `yield deposit|withdraw` (Aave, Morpho), `rewards claim|compound` (Aave), `approvals`, and `transfer`.
+- Local signer support for execution (`--private-key`, `DEFI_PRIVATE_KEY_FILE`, keystore, or auto-discovered `~/.config/defi/key.hex`).
+- Structured request input for `plan` and `submit` commands via `--input-json` and `--input-file` (use `-` to read JSON from stdin).
+- Action inspection commands: `actions list`, `actions show`, and `actions estimate` (per-step EIP-1559 gas projections).
+- `lend positions` to query account-level lending positions (Aave, Morpho) with `--type all|supply|borrow|collateral`.
+- `yield positions` to query account-level yield deposit positions (Aave, Morpho).
+- `yield history` for historical yield series with `--metrics apy_total,tvl_usd`, `--interval hour|day`, and `--window`/`--from`/`--to`.
+- TaikoSwap provider for `swap quote` using on-chain quoter contract calls (no API key required).
+- Taiko Hoodi chain alias and token registry entries (`USDC`, `USDT`, `WETH`).
+- Execution-specific exit codes (`20`-`24`) for plan/simulation/policy/timeout/signer failures.
+- `schema` output now includes inherited flags, typed defaults, `required`/`enum`/`format` metadata, command auth, and request/response structure hints.
+- Nightly execution-planning smoke tests (`nightly-execution-smoke.yml`).
+
+### Changed
+- BREAKING: Morpho `yield opportunities` now returns vault-level opportunities (`provider_native_id_kind=vault_address`) instead of Morpho market IDs.
+- BREAKING: `yield opportunities` removed subjective fields (`risk_level`, `risk_reasons`, `score`) and the `--max-risk` flag; now returns `backing_assets` with per-opportunity composition.
+- BREAKING: `yield opportunities --sort` supports only objective keys (`apy_total|tvl_usd|liquidity_usd`, default `apy_total`).
+- BREAKING: Lend and rewards commands now use `--provider` instead of `--protocol`.
+- `yield` and `lend` command surfaces are explicitly split by intent: `yield` for passive deposit/withdraw, `lend` for loan lifecycle (`supply|withdraw|borrow|repay`).
+- Morpho execution split by product: `yield deposit|withdraw` targets vaults (`--vault-address`), `lend` targets Morpho Blue markets (`--market-id`).
+- `providers list` now includes execution capabilities (`*.plan`, `*.execute`) for all execution-capable providers.
+- Yield liquidity/TVL sourcing is now provider-native: Aave, Morpho vaults, and Kamino each report native values.
+- `lend positions --type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
+- Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts in to larger approvals.
+- Bridge execution waits for destination settlement (Across, LiFi) before marking steps complete.
+- LiFi bridge quote/plan support `--from-amount-for-gas` for destination gas top-up.
+- `swap quote` and execution commands support `--rpc-url` to override chain default RPCs.
+- Aave execution auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche.
+
+### Fixed
+- Fixed execution read-after-write consistency for sequential on-chain steps (approval then contract call).
+- Fixed `actions estimate` for multi-step same-chain actions using `eth_simulateV1` with per-step fallback.
+- Fixed execution timeout budgeting so waits derive from per-step stages instead of the provider request timeout.
+- Fixed `approvals submit` and `bridge submit` to short-circuit completed actions before requesting signer inputs.
+- Fixed Across/LiFi bridge planning to reject provider payloads with invalid target addresses.
+- Fixed Aave rewards compound planning to reject recipient/sender mismatches.
+- Improved bridge execution error messaging to distinguish quote-only from execution-capable providers.
+
+### Docs
+- Documented full execution surface (plan/submit/status), signer setup, and execution exit codes across README, AGENTS.md, and Mintlify docs.
+- Added `lend positions`, `yield positions`, `yield history`, and `yield deposit|withdraw` to docs and command references.
+- Updated yield docs to reflect objective metrics (`backing_assets`, `tvl_usd`, `liquidity_usd`) and removed risk-based flags.
+- Clarified bridge settlement timeout guidance (`--step-timeout` vs `--timeout`) and `--allow-max-approval` behavior.
 
 ## [v0.3.1] - 2026-02-25
 
@@ -218,7 +198,8 @@ Format:
 ### Changed
 - Project/module path migrated to `github.com/ggonzalez94/defi-cli`.
 
-[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/ggonzalez94/defi-cli/compare/v0.4.0...HEAD
+[v0.4.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.1...v0.4.0
 [v0.3.1]: https://github.com/ggonzalez94/defi-cli/compare/v0.3.0...v0.3.1
 [v0.3.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.2.0...v0.3.0
 [v0.2.0]: https://github.com/ggonzalez94/defi-cli/compare/v0.1.1...v0.2.0

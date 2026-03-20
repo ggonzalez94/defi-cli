@@ -1,6 +1,6 @@
 ---
-title: Lending and Yield Commands
-description: Full reference for lend and yield command flags and examples.
+title: Lending, Yield, and Rewards Commands
+description: Full reference for lend, yield, and rewards command flags and examples.
 ---
 
 ## `lend markets`
@@ -150,6 +150,25 @@ Flags (`status`):
 - `--action-id string` required
 
 `lend ... plan|submit`, `yield ... plan|submit`, and `rewards ... plan|submit` follow the same structured-input pattern. For rewards structured input, `assets` accepts a JSON string array while the CLI flag remains comma-separated.
+
+## `lend supply|withdraw|borrow|repay plan|submit|status`
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply submit --action-id <action_id> --results-only
+```
+
+Execution providers: `aave|morpho`. Morpho requires `--market-id`. `plan` and `submit` accept `--input-json` / `--input-file`.
+
+## `rewards claim|compound plan|submit|status`
+
+```bash
+defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --assets 0xAsset1,0xAsset2 --reward-token 0xReward --results-only
+defi rewards claim submit --action-id <action_id> --results-only
+```
+
+Execution provider: `aave`. `--assets` expects comma-separated on-chain addresses (structured input accepts a JSON string array). `plan` and `submit` accept `--input-json` / `--input-file`.
 
 ## Provider-selection note
 

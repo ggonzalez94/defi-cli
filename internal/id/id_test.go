@@ -209,6 +209,15 @@ func TestParseChainExpandedCoverage(t *testing.T) {
 		{input: "megaeth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "mega eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
 		{input: "mega-eth", chainID: 4326, caip2: "eip155:4326", slug: "megaeth"},
+		{input: "tempo", chainID: 4217, caip2: "eip155:4217", slug: "tempo"},
+		{input: "tempo mainnet", chainID: 4217, caip2: "eip155:4217", slug: "tempo"},
+		{input: "tempo-mainnet", chainID: 4217, caip2: "eip155:4217", slug: "tempo"},
+		{input: "presto", chainID: 4217, caip2: "eip155:4217", slug: "tempo"},
+		{input: "tempo testnet", chainID: 42431, caip2: "eip155:42431", slug: "tempo-moderato"},
+		{input: "tempo-testnet", chainID: 42431, caip2: "eip155:42431", slug: "tempo-moderato"},
+		{input: "moderato", chainID: 42431, caip2: "eip155:42431", slug: "tempo-moderato"},
+		{input: "tempo devnet", chainID: 31318, caip2: "eip155:31318", slug: "tempo-devnet"},
+		{input: "tempo-devnet", chainID: 31318, caip2: "eip155:31318", slug: "tempo-devnet"},
 		{input: "celo", chainID: 42220, caip2: "eip155:42220", slug: "celo"},
 		{input: "taiko", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
 		{input: "taiko alethia", chainID: 167000, caip2: "eip155:167000", slug: "taiko"},
@@ -268,6 +277,9 @@ func TestParseAssetExpandedChainRegistry(t *testing.T) {
 		{chainInput: "monad", symbol: "USDC"},
 		{chainInput: "citrea", symbol: "USDC"},
 		{chainInput: "megaeth", symbol: "USDT"},
+		{chainInput: "tempo", symbol: "USDC.E"},
+		{chainInput: "tempo testnet", symbol: "USDC.E"},
+		{chainInput: "tempo devnet", symbol: "PATHUSD"},
 		{chainInput: "celo", symbol: "USDC"},
 		{chainInput: "taiko", symbol: "USDC"},
 		{chainInput: "hoodi", symbol: "USDC"},
@@ -497,6 +509,35 @@ func TestListChainsAliasesExcludePrimarySlug(t *testing.T) {
 			if alias == e.Chain.Slug {
 				t.Fatalf("chain %s has primary slug in aliases", e.Chain.Slug)
 			}
+		}
+	}
+}
+
+func TestParseAssetTempoBootstrapAddresses(t *testing.T) {
+	tests := []struct {
+		chainInput string
+		symbol     string
+		address    string
+	}{
+		{chainInput: "tempo", symbol: "pathUSD", address: "0x20c0000000000000000000000000000000000000"},
+		{chainInput: "tempo", symbol: "USDC.e", address: "0x20c000000000000000000000b9537d11c60e8b50"},
+		{chainInput: "tempo", symbol: "EURC.e", address: "0x20c0000000000000000000001621e21f71cf12fb"},
+		{chainInput: "tempo testnet", symbol: "alphaUSD", address: "0x20c0000000000000000000000000000000000001"},
+		{chainInput: "tempo testnet", symbol: "USDC.e", address: "0x20c0000000000000000000009e8d7eb59b783726"},
+		{chainInput: "tempo devnet", symbol: "thetaUSD", address: "0x20c0000000000000000000000000000000000003"},
+	}
+
+	for _, tc := range tests {
+		chain, err := ParseChain(tc.chainInput)
+		if err != nil {
+			t.Fatalf("ParseChain(%s) failed: %v", tc.chainInput, err)
+		}
+		asset, err := ParseAsset(tc.symbol, chain)
+		if err != nil {
+			t.Fatalf("ParseAsset(%s) failed: %v", tc.symbol, err)
+		}
+		if asset.Address != tc.address {
+			t.Fatalf("expected %s on %s to resolve to %s, got %s", tc.symbol, tc.chainInput, tc.address, asset.Address)
 		}
 	}
 }

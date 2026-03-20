@@ -31,7 +31,7 @@ func (r *Registry) Configure(swapProviders map[string]providers.SwapProvider, br
 }
 
 func (r *Registry) BuildSwapAction(ctx context.Context, providerName, op string, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, string, error) {
-	providerName = strings.ToLower(strings.TrimSpace(providerName))
+	providerName = providers.NormalizeSwapProvider(providerName)
 	if providerName == "" {
 		return execution.Action{}, "", clierr.New(clierr.CodeUsage, "--provider is required")
 	}

@@ -41,6 +41,15 @@ func (s *LocalSigner) Address() common.Address {
 	return s.address
 }
 
+// PrivateKey returns the underlying ECDSA private key. This is used by
+// TempoStepExecutor to create a tempo-go signer for type 0x76 transactions.
+func (s *LocalSigner) PrivateKey() *ecdsa.PrivateKey {
+	if s == nil {
+		return nil
+	}
+	return s.privateKey
+}
+
 func (s *LocalSigner) SignTx(chainID *big.Int, tx *types.Transaction) (*types.Transaction, error) {
 	if s == nil || s.privateKey == nil {
 		return nil, errors.New("local signer is not initialized")
