@@ -158,6 +158,9 @@ func (r *Registry) BuildLendAction(ctx context.Context, req LendRequest) (execut
 			RPCURL:          req.RPCURL,
 		})
 	case "moonwell":
+		if strings.TrimSpace(req.OnBehalfOf) != "" {
+			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "moonwell does not support --on-behalf-of; Compound v2 calls operate on msg.sender only")
+		}
 		return planner.BuildMoonwellLendAction(ctx, planner.MoonwellLendRequest{
 			Verb:            req.Verb,
 			Chain:           req.Chain,
@@ -233,6 +236,9 @@ func (r *Registry) BuildYieldAction(ctx context.Context, req YieldRequest) (exec
 			RPCURL:          req.RPCURL,
 		})
 	case "moonwell":
+		if strings.TrimSpace(req.OnBehalfOf) != "" {
+			return execution.Action{}, clierr.New(clierr.CodeUnsupported, "moonwell does not support --on-behalf-of; Compound v2 calls operate on msg.sender only")
+		}
 		var lendVerb planner.AaveLendVerb
 		switch yieldVerb {
 		case string(YieldVerbDeposit):

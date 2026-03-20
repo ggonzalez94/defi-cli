@@ -79,6 +79,43 @@ func TestBuildRewardsClaimActionRejectsUnsupportedProvider(t *testing.T) {
 	}
 }
 
+func TestBuildLendActionMoonwellRejectsOnBehalfOf(t *testing.T) {
+	reg := New(nil, nil)
+	_, err := reg.BuildLendAction(context.Background(), LendRequest{
+		Provider:   "moonwell",
+		OnBehalfOf: "0x00000000000000000000000000000000000000aa",
+	})
+	if err == nil {
+		t.Fatal("expected on-behalf-of rejection for moonwell lend")
+	}
+	cErr, ok := clierr.As(err)
+	if !ok || cErr.Code != clierr.CodeUnsupported {
+		t.Fatalf("expected unsupported cli error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--on-behalf-of") {
+		t.Fatalf("error should mention --on-behalf-of, got: %v", err)
+	}
+}
+
+func TestBuildYieldActionMoonwellRejectsOnBehalfOf(t *testing.T) {
+	reg := New(nil, nil)
+	_, err := reg.BuildYieldAction(context.Background(), YieldRequest{
+		Provider:   "moonwell",
+		Verb:       YieldVerbDeposit,
+		OnBehalfOf: "0x00000000000000000000000000000000000000aa",
+	})
+	if err == nil {
+		t.Fatal("expected on-behalf-of rejection for moonwell yield")
+	}
+	cErr, ok := clierr.As(err)
+	if !ok || cErr.Code != clierr.CodeUnsupported {
+		t.Fatalf("expected unsupported cli error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "--on-behalf-of") {
+		t.Fatalf("error should mention --on-behalf-of, got: %v", err)
+	}
+}
+
 func TestNormalizeLendingProviderAliases(t *testing.T) {
 	if got := providers.NormalizeLendingProvider("AAVE-V3"); got != "aave" {
 		t.Fatalf("expected aave, got %s", got)
