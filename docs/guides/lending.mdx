@@ -23,6 +23,31 @@ defi lend rates --provider kamino --chain solana --asset USDC --limit 10 --resul
 - `--provider morpho` -> Morpho adapter
 - `--provider kamino` -> Kamino adapter (Solana mainnet only)
 
+## Positions
+
+```bash
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
+defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borrow --asset USDC --results-only
+```
+
+`--type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
+Supported providers: `aave`, `morpho`.
+
+## Execution (supply, withdraw, borrow, repay)
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply submit --action-id <action_id> --results-only
+```
+
+Morpho lend execution requires `--market-id`:
+
+```bash
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+```
+
+Aave auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche. Use `--pool-address` on other chains.
+
 ## Suggested filters and reliability defaults
 
 ```bash

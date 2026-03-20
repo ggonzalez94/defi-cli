@@ -4,7 +4,7 @@ Short guide for agents working on `defi-cli`.
 
 ## Project intent
 
-`defi-cli` is an agent-first DeFi retrieval CLI. Core priorities are:
+`defi-cli` is an agent-first DeFi CLI for querying and acting on-chain. Core priorities are:
 
 - stable JSON contract (envelope + fields + deterministic ordering)
 - stable exit codes
@@ -34,10 +34,10 @@ cmd/
 internal/
   app/runner.go                   # command wiring, provider routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/                 # direct GraphQL lending + yield
+    aave/ morpho/                 # lending + yield (read + execution)
     defillama/                    # market/yield normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes + lifi execution planning
-    oneinch/ uniswap/ taikoswap/  # swap quotes + uniswap-v3-compatible execution planning (taikoswap today)
+    oneinch/ uniswap/ taikoswap/ tempo/ # swap quotes + execution planning providers
     types.go                      # provider interfaces
   execution/                      # action persistence + planner helpers + signer abstraction + tx execution
   registry/                       # canonical execution endpoints/contracts/ABI fragments + default chain RPC map
@@ -75,6 +75,8 @@ README.md                         # user-facing usage + caveats
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
+- Tempo quote/planning does not require an API key; execution uses native Tempo type 0x76 transactions via the TempoStepExecutor and currently settles Tempo DEX swaps back to the sender only.
+- Tempo Stablecoin DEX swaps are currently USD TIP-20 only; the DEX auto-routes supported pairs through quote-token relationships, so non-USD assets should fail as `unsupported` rather than `unavailable`.
 - TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
 - `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
 - Execution `plan` and `submit` commands also support `--input-json` and `--input-file` (`-` reads stdin); explicit flags override structured input values.
@@ -107,10 +109,15 @@ README.md                         # user-facing usage + caveats
 - Morpho yield execution requires `--vault-address` (Morpho vault contract address).
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
-- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `tempo`/`tempo mainnet`/`presto`, `tempo testnet`/`moderato`, `tempo devnet`, `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
 - Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
-- Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap only (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
+- Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap and Tempo (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
+- Swap planning supports Tempo exact-output execution; TaikoSwap remains exact-input only.
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on EVM chains).
+- `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys and expiry checks.
+- Tempo execution uses type 0x76 transactions with batched calls (approve+swap are atomic in a single transaction).
+- `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
@@ -132,7 +139,7 @@ README.md                         # user-facing usage + caveats
   2. register routes/info in `internal/app/runner.go`
   3. add `httptest`-based adapter tests
   4. update README caveats if data quality/semantics differ
-  5. document any command that requires an API key explicitely
+  5. document any command that requires an API key explicitly
 - Contract changes:
   1. treat as breaking unless explicitly intended
   2. update `internal/model` + `internal/out` tests first

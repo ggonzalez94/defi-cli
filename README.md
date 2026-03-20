@@ -4,42 +4,20 @@
   <img src="assets/logo.png" alt="defi-cli logo" width="600" />
 </p>
 
-Query lending rates, compare yield, get bridge and swap quotes — across protocols and chains, from a single CLI.
+Query and act on DeFi lending, yield, bridge, and swap — across protocols and chains, from a single CLI.
 
 Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP-2/CAIP-19), and deterministic exit codes make it easy to pipe into any workflow.
 
 ## Features
 
-- **Lending** — query markets/rates from Aave/Morpho/Kamino and account positions from Aave/Morpho, plus execute Aave/Morpho loan actions (`lend supply|withdraw|borrow|repay`).
-- **Yield** — compare opportunities, query account yield positions, fetch historical yield/TVL series, and execute yield deposit/withdraw flows.
-- **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics (volume, chain breakdown), and execute Across/LiFi bridge plans.
-- **Swapping** — get swap quotes (1inch, Uniswap, TaikoSwap) and execute TaikoSwap plans on-chain.
-- **Approvals, transfers & rewards** — create and execute ERC-20 approvals/transfers plus Aave rewards claim/compound flows.
+- **Lending** — query markets/rates from Aave/Morpho/Kamino, account positions from Aave/Morpho, and execute loan actions (`lend supply|withdraw|borrow|repay`).
+- **Yield** — compare opportunities, query positions, fetch historical series, and execute deposit/withdraw flows (Aave, Morpho).
+- **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics, and execute bridge plans (Across, LiFi).
+- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee) and execute swap plans (Tempo with native type 0x76 transactions and batched calls, TaikoSwap).
+- **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
 - **Wallet** — query native and ERC-20 token balances on any supported EVM chain (no API key required).
-- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
-- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input for mutation workflows, and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
-
-## Documentation Site (Mintlify)
-
-This repo includes a dedicated Mintlify docs site under [`docs/`](docs) (`docs/docs.json` + `.mdx` pages).
-
-Preview locally:
-
-```bash
-cd docs
-npx --yes mint@4.2.378 dev --no-open
-```
-
-Validate before publishing:
-
-```bash
-cd docs
-npx --yes mint@4.2.378 validate
-npx --yes mint@4.2.378 broken-links
-npx --yes mint@4.2.378 a11y
-```
-
-Production docs deployment should target `docs-live` in Mintlify Git settings. The release workflow syncs `docs-live` on stable release tags (non-prerelease) so live docs align with main-channel binaries.
+- **Chains & protocols** — browse chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
+- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
 
 ## Install
 
@@ -54,7 +32,7 @@ curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/i
 Install a specific version (accepted: `latest`, `stable`, `vX.Y.Z`, `X.Y.Z`):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.3.1
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.4.0
 ```
 
 ### 2) Go install
@@ -85,112 +63,62 @@ defi version --long
 
 ## Quick Start
 
+### Read: query markets and quotes
+
 ```bash
 defi providers list --results-only
-defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
-defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
-defi assets resolve --chain base --symbol USDC --results-only
 defi wallet balance --chain 1 --address 0xYourEOA --results-only
 defi wallet balance --chain base --address 0xYourEOA --asset USDC --results-only
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
-defi lend rates --provider morpho --chain 1 --asset USDC --results-only
-defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
-defi yield opportunities --chain base --asset USDC --limit 20 --results-only
-defi yield positions --chain 1 --address 0xYourEOA --providers aave,morpho --limit 20 --results-only
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
-defi yield history --chain 1 --asset USDC --providers aave,morpho --metrics apy_total,tvl_usd --interval day --window 7d --limit 1 --results-only
-defi bridge list --limit 10 --results-only # Requires DEFI_DEFILLAMA_API_KEY
-defi bridge details --bridge layerzero --results-only # Requires DEFI_DEFILLAMA_API_KEY
+defi yield history --chain 1 --asset USDC --providers aave --metrics apy_total --interval day --window 7d --limit 1 --results-only
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
-defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
-defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
-defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
-defi bridge plan --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --from-amount-for-gas 100000 --results-only
-defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
-defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0x... --amount 1000000 --from-address 0xYourEOA --results-only
-defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --assets 0x... --reward-token 0x... --results-only
-defi approvals plan --chain taiko --asset USDC --spender 0xSpender --amount 1000000 --from-address 0xYourEOA --results-only
-defi transfer plan --chain taiko --asset USDC --amount 1000000 --from-address 0xYourEOA --recipient 0xRecipient --results-only
-defi transfer plan --input-json '{"chain":"taiko","asset":"USDC","amount":"1000000","from_address":"0xYourEOA","recipient":"0xRecipient"}' --results-only
-defi swap status --action-id <action_id> --results-only
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --results-only
+```
+
+### Act: plan and execute transactions
+
+```bash
+# Plan a swap (dry-run, no signer needed)
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
+
+# Execute a planned action (requires signer)
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
+defi swap submit --action-id <action_id> --results-only
+
+# Structured input for agents
+defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","from_address":"0xYourEOA"}' --results-only
+
+# Inspect actions
 defi actions list --results-only
 defi actions estimate --action-id <action_id> --results-only
 ```
 
-`yield opportunities --providers`, `yield positions --providers`, and `yield history --providers` accept provider names from `defi providers list` (for example `aave,morpho,kamino`).
+### Execution command surface
 
-Bridge quote examples:
-
-```bash
-defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
-defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
-defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
-```
-
-Swap quote examples:
-
-```bash
-export DEFI_1INCH_API_KEY=...
-export DEFI_UNISWAP_API_KEY=...
-defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
-defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
-defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --from-address 0xYourEOA --results-only
-# Exact-output on Uniswap
-defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --from-address 0xYourEOA --results-only
-# Optional manual slippage override for Uniswap (percent)
-defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --slippage-pct 1.0 --from-address 0xYourEOA --results-only
-defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
-```
-
-Swap execution flow (local signer):
-
-```bash
-export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
-# or pass --private-key 0x... on submit commands for one-off usage
-
-# 1) Plan only
-defi swap plan \
-  --provider taikoswap \
-  --chain taiko \
-  --from-asset USDC \
-  --to-asset WETH \
-  --amount 1000000 \
-  --from-address 0xYourEOA \
-  --results-only
-
-# 2) Execute the saved action
-defi swap submit \
-  --action-id <action_id> \
-  --results-only
-```
-
-Execution `plan` and `submit` commands also accept structured input for agents:
-
-```bash
-defi bridge plan --input-file ./bridge-plan.json --results-only
-defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","from_address":"0xYourEOA"}' --results-only
-defi swap submit --input-json '{"action_id":"<action_id>","from_address":"0xYourEOA"}' --results-only
-```
-
-For structured input, flags still win over JSON/file values when both are provided.
-
-`swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`).
-For bridge flows, `--rpc-url` applies to the source-chain execution RPC.
-
-Execution command surface:
-
-- `swap plan|submit|status`
-- `bridge plan|submit|status` (provider: `across|lifi`)
+- `swap plan|submit|status` (Tempo, TaikoSwap)
+- `bridge plan|submit|status` (Across, LiFi)
+- `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho)
+- `yield deposit|withdraw plan|submit|status` (Aave, Morpho)
+- `rewards claim|compound plan|submit|status` (Aave)
 - `approvals plan|submit|status`
 - `transfer plan|submit|status`
-- `lend supply|withdraw|borrow|repay plan|submit|status` (provider: `aave|morpho`)
-- `yield deposit|withdraw plan|submit|status` (provider: `aave|morpho`)
-- `rewards claim|compound plan|submit|status` (provider: `aave`)
 - `actions list|show|estimate`
 
-Schema output is designed for agent discovery. `defi schema` now includes inherited flags plus command/flag metadata such as `required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints.
+All `plan` commands support `--rpc-url` to override chain default RPCs.
+`plan` and `submit` accept `--input-json` / `--input-file` for structured input; explicit flags override JSON values.
+`--providers` flags accept provider names from `defi providers list` (e.g. `aave,morpho,kamino`).
+
+### More quote examples
+
+```bash
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only   # requires DEFI_1INCH_API_KEY
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --from-address 0xYourEOA --results-only  # requires DEFI_UNISWAP_API_KEY
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --from-address 0xYourEOA --results-only
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --results-only
+defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
+```
 
 ## Command API Key Requirements
 
@@ -203,6 +131,7 @@ When a provider requires authentication, bring your own key:
 - `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+- `defi swap quote --provider tempo` -> no API key required
 - `defi swap quote --provider taikoswap` -> no API key required
 
 `defi providers list` includes both provider-level key metadata and capability-level key metadata (`capability_auth`).
@@ -227,7 +156,12 @@ If a keyed provider is used without a key, CLI exits with code `10`.
 
 ## Execution Signer Inputs (Submit Commands)
 
-Execution `submit` commands currently support a local key signer.
+Execution `submit` commands support a local key signer and (on Tempo) an agent wallet signer.
+
+Signer selection:
+
+- `--signer tempo` — use the Tempo CLI agent wallet (`tempo wallet -j whoami`); requires the Tempo CLI installed and configured with delegated access keys.
+- Local key signer (default) — uses the key input precedence below.
 
 Key input precedence:
 
@@ -301,51 +235,38 @@ providers:
 
 ## Caveats
 
+### Data
+
 - `wallet balance` currently supports EVM chains only; Solana is not yet supported.
 - `wallet balance` uses `eth_getBalance` for native tokens and ERC-20 `balanceOf` for tokens; it does not query pending/unconfirmed balances.
-- Morpho can surface extreme APY values on very small markets. Prefer `--min-tvl-usd` when ranking yield.
-- `yield` and `lend` represent distinct user intents: use `yield` for passive deposit/withdraw flows and `lend` for market loan lifecycle (`supply|withdraw|borrow|repay`).
-- Morpho execution surfaces are intentionally split: `yield deposit|withdraw` target Morpho vaults (`--vault-address`), while `lend ...` targets Morpho Blue markets (`--market-id`).
-- Aave `yield deposit|withdraw` routes to the same reserve mechanics as Aave lend supply/withdraw with yield-intent command semantics.
-- `yield opportunities` returns objective metrics and composition data: `apy_total`, `tvl_usd`, `liquidity_usd`, and full `backing_assets` (subjective `risk_*`/`score` fields were removed).
-- `liquidity_usd` is provider-sourced available liquidity and is intentionally distinct from `tvl_usd` (total supplied/managed value).
-- `actions estimate` reports source-chain EVM step gas/fee projections from planned calldata (`eth_estimateGas` + EIP-1559); it does not add destination settlement gas unless that transaction is an explicit action step.
-- `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
-- Aave historical windows are lookback-based and effectively end near current time; use `--window` for Aave-friendly history requests.
-- `chains assets` requires `DEFI_DEFILLAMA_API_KEY` because DefiLlama chain asset TVL is key-gated.
-- `bridge list` and `bridge details` require `DEFI_DEFILLAMA_API_KEY`; quote providers (`across`, `lifi`) do not.
-- Category rankings from `protocols categories` are deterministic and sorted by `tvl_usd`, then protocol count, then name.
-- `--chain` normalization supports additional aliases/IDs including `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
-- Bungee Auto-mode quote coverage is chain+token dependent; unsupported pairs return provider errors even when chain normalization succeeds.
-- Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
-- Bungee dedicated backend routing only activates when both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE` are set; if either is missing, requests use the public backend.
-- Swap quote type defaults to `--type exact-input`; use `--type exact-output` with `--amount-out`/`--amount-out-decimal` when supported by the provider.
-- Exact-output swap quotes currently support `--provider uniswap` only; Solana exact-output is currently unsupported.
-- Uniswap supports both `exact-input` and `exact-output`; 1inch/Jupiter/Fibrous/Bungee currently support `exact-input` only.
-- Uniswap quote requests require `--from-address` as the `swapper`; provider auto slippage is used by default, and `--slippage-pct` sets a manual max slippage percent.
-- MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
-- `fibrous` swap quotes are currently limited to `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled due unstable route responses).
-- For chains without bootstrap symbol entries, pass token address or CAIP-19 via `--asset`/`--from-asset`/`--to-asset` for deterministic resolution.
-- For `lend`/`yield`, unresolved asset symbols skip DefiLlama-based symbol matching and may disable fallback/provider selection to avoid unsafe broad matches.
-- `lend positions --type all` returns disjoint rows by intent: `supply` (non-collateralized supplied balance), `collateral` (posted collateral), and `borrow` (debt).
-- Swap execution currently supports TaikoSwap only.
-- Bridge execution currently supports Across and LiFi.
-- Transfer execution supports native ERC-20 `transfer(...)` actions on EVM chains.
-- Lend execution supports Aave and Morpho (`--market-id` required for Morpho).
-- Yield execution supports Aave and Morpho (`--vault-address` required for Morpho).
-- Rewards execution currently supports Aave only.
-- Aave execution resolves pool addresses automatically on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche; use `--pool-address` / `--pool-address-provider` on unsupported chains.
-- LiFi bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
-- Across bridge execution now waits for destination settlement status before marking the bridge step complete; adjust `--step-timeout` for slower routes.
-- `--step-timeout` applies to each bridge wait stage (receipt and settlement polling); execution wait budget is derived from `--step-timeout` and remaining action stages.
-- LiFi bridge quote/plan support `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
-- Execution pre-sign checks enforce bounded ERC-20 approvals (`approve <= planned input amount`) by default; use `--allow-max-approval` when a route requires larger approvals.
-- Transfer execution pre-sign checks validate ERC-20 `transfer(to,amount)` calldata, recipient, amount, and token target invariants before signing.
-- Swap execution validates `--from-address` and `--recipient` as EVM hex addresses before planning transactions.
-- Bridge execution pre-sign checks validate settlement provider metadata and known settlement endpoint URLs for Across/LiFi; use `--unsafe-provider-tx` to bypass these guardrails.
-- All `submit` execution commands will broadcast signed transactions.
-- Rewards `--assets` expects comma-separated on-chain addresses used by Aave incentives contracts.
-- Selector choice is explicit for multi-provider flows; pass `--provider` (no implicit defaults).
+- Morpho can surface extreme APY values on very small markets; use `--min-tvl-usd` when ranking.
+- `yield opportunities` returns `apy_total`, `tvl_usd`, `liquidity_usd`, and `backing_assets` (objective metrics only).
+- `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only. Use `--window` for Aave history.
+- `lend positions --type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
+- For chains without bootstrap symbol entries, pass token address or CAIP-19 for deterministic resolution.
+- `--chain` supports CAIP-2, numeric IDs, and aliases (`tempo`, `presto`, `moderato`, `tempo devnet`, `mantle`, `megaeth`, `taiko`, `gnosis`, `linea`, `zksync`, `hyperevm`, `monad`, `citrea`, and more).
+
+### Quotes
+
+- `swap quote --type` defaults to `exact-input`; `exact-output` is currently supported by `uniswap` and `tempo` (`--amount-out`/`--amount-out-decimal`).
+- Uniswap requires `--from-address`; `--slippage-pct` is optional (default: provider auto).
+- Tempo DEX currently supports USD-denominated TIP-20 swaps only and auto-routes supported pairs through quote-token relationships; non-USD assets such as `EURC.e` are rejected.
+- Tempo swap execution settles to the sender only; omit `--recipient` or keep it equal to `--from-address`.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields instead of native-gas EIP-1559 pricing).
+- `fibrous` currently supports `base`, `hyperevm`, and `citrea`.
+- Bungee dedicated backend requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
+
+### Execution
+
+- `yield` and `lend` are split by intent: `yield` for passive deposits/withdrawals, `lend` for loan lifecycle.
+- Morpho: `yield deposit|withdraw` targets vaults (`--vault-address`), `lend` targets markets (`--market-id`).
+- Aave execution auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche; use `--pool-address` on other chains.
+- Bridge execution waits for destination settlement; adjust `--step-timeout` for slower routes.
+- Pre-sign checks enforce bounded ERC-20 approvals by default; use `--allow-max-approval` to opt in to larger approvals.
+- Bridge pre-sign checks validate settlement endpoints; use `--unsafe-provider-tx` to bypass.
+- All `submit` commands broadcast signed transactions.
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks.
+- `--provider` is required for multi-provider flows (no implicit defaults).
 
 ## Exit Codes
 
@@ -376,7 +297,7 @@ cmd/
 internal/
   app/runner.go                   # command wiring, routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/                 # direct lending + yield
+    aave/ morpho/                 # lending + yield (read + execution)
     defillama/                    # normalization + fallback + bridge analytics
     across/ lifi/                 # bridge quotes + lifi execution planning
     oneinch/ uniswap/ taikoswap/  # swap (quote + taikoswap execution planning)
@@ -406,3 +327,17 @@ go test -race ./...
 go vet ./...
 bash scripts/nightly_execution_smoke.sh
 ```
+
+### Documentation Site (Mintlify)
+
+The `docs/` directory contains a Mintlify docs site (`docs.json` + `.mdx` pages).
+
+```bash
+cd docs
+npx --yes mint@4.2.378 dev --no-open        # local preview
+npx --yes mint@4.2.378 validate             # validate before publishing
+npx --yes mint@4.2.378 broken-links
+npx --yes mint@4.2.378 a11y
+```
+
+Production docs deploy from the `docs-live` branch, which the release workflow syncs on stable (non-prerelease) tags.
