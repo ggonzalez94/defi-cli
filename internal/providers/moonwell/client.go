@@ -50,6 +50,10 @@ func New() *Client {
 	return &Client{now: time.Now}
 }
 
+// SetRPCOverride sets the RPC URL used for on-chain reads (markets,
+// rates, yield opportunities). Pass "" to revert to the default.
+func (c *Client) SetRPCOverride(url string) { c.rpcOverride = url }
+
 func (c *Client) Info() model.ProviderInfo {
 	return model.ProviderInfo{
 		Name:        "moonwell",

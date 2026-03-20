@@ -301,12 +301,12 @@ providers:
 - `yield` and `lend` are split by intent: `yield` for passive deposits/withdrawals, `lend` for loan lifecycle.
 - Morpho: `yield deposit|withdraw` targets vaults (`--vault-address`), `lend` targets markets (`--market-id`).
 - Aave execution auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche; use `--pool-address` on other chains.
-- Moonwell execution targets mToken contracts (Compound v2 style) on Base and Optimism; use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset.
+- Moonwell execution targets mToken contracts (Compound v2 style) on Base and Optimism; use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset. The mWETH market auto-unwraps to native ETH on borrow/withdraw; the planner uses ERC-20 paths, so callers must handle ETH/WETH wrapping externally.
 - Bridge execution waits for destination settlement; adjust `--step-timeout` for slower routes.
 - Pre-sign checks enforce bounded ERC-20 approvals by default; use `--allow-max-approval` to opt in to larger approvals.
 - Bridge pre-sign checks validate settlement endpoints; use `--unsafe-provider-tx` to bypass.
 - All `submit` commands broadcast signed transactions.
-- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks.
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys and expiry checks.
 - `--provider` is required for multi-provider flows (no implicit defaults).
 
 ## Exit Codes

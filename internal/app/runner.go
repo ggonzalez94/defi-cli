@@ -727,6 +727,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	var chainArg string
 	var assetArg string
 	var marketsLimit int
+	var marketsRPCURL string
 
 	marketsCmd := &cobra.Command{
 		Use:   "markets",
@@ -740,13 +741,14 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit}
+			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit, "rpc_url": strings.TrimSpace(marketsRPCURL)}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				provider, err := s.selectLendingProvider(providerName)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
+				applyRPCOverride(provider, marketsRPCURL)
 
 				start := time.Now()
 				data, err := provider.LendMarkets(ctx, providerName, chain, asset)
@@ -763,12 +765,14 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
+	marketsCmd.Flags().StringVar(&marketsRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
 	_ = marketsCmd.MarkFlagRequired("provider")
 	_ = marketsCmd.MarkFlagRequired("chain")
 	_ = marketsCmd.MarkFlagRequired("asset")
 
 	var ratesProvider, ratesChain, ratesAsset string
 	var ratesLimit int
+	var ratesRPCURL string
 	ratesCmd := &cobra.Command{
 		Use:   "rates",
 		Short: "List lending rates",
@@ -781,13 +785,14 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit}
+			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit, "rpc_url": strings.TrimSpace(ratesRPCURL)}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				provider, err := s.selectLendingProvider(providerName)
 				if err != nil {
 					return nil, nil, nil, false, err
 				}
+				applyRPCOverride(provider, ratesRPCURL)
 
 				start := time.Now()
 				data, err := provider.LendRates(ctx, providerName, chain, asset)
@@ -804,6 +809,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
+	ratesCmd.Flags().StringVar(&ratesRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
 	_ = ratesCmd.MarkFlagRequired("provider")
 	_ = ratesCmd.MarkFlagRequired("chain")
 	_ = ratesCmd.MarkFlagRequired("asset")
@@ -1627,6 +1633,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	var opportunitiesLimit int
 	var opportunitiesMinTVL, opportunitiesMinAPY float64
 	var opportunitiesIncludeIncomplete bool
+	var opportunitiesRPCURL string
 	opportunitiesCmd := &cobra.Command{
 		Use:   "opportunities",
 		Short: "Rank yield opportunities",
@@ -1654,6 +1661,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				"providers":          req.Providers,
 				"sort":               req.SortBy,
 				"include_incomplete": req.IncludeIncomplete,
+				"rpc_url":            strings.TrimSpace(opportunitiesRPCURL),
 			})
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				selectedProviders, err := s.selectYieldProviders(req.Providers, req.Chain)
@@ -1668,6 +1676,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 
 				for _, providerName := range selectedProviders {
 					provider := s.yieldProviders[providerName]
+					applyRPCOverride(provider, opportunitiesRPCURL)
 					reqCopy := req
 					reqCopy.Providers = nil
 					start := time.Now()
@@ -1715,6 +1724,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	opportunitiesCmd.Flags().StringVar(&opportunitiesProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino,moonwell)")
 	opportunitiesCmd.Flags().StringVar(&opportunitiesSortArg, "sort", "apy_total", "Sort key (apy_total|tvl_usd|liquidity_usd)")
 	opportunitiesCmd.Flags().BoolVar(&opportunitiesIncludeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
 	_ = opportunitiesCmd.MarkFlagRequired("chain")
 	_ = opportunitiesCmd.MarkFlagRequired("asset")
 	root.AddCommand(opportunitiesCmd)
@@ -2462,6 +2472,23 @@ func parseLookbackWindow(raw string) (time.Duration, error) {
 			return 0, fmt.Errorf("invalid duration window")
 		}
 		return d, nil
+	}
+}
+
+// rpcConfigurable is implemented by providers that support per-request RPC
+// URL overrides (e.g. Moonwell, which reads data via on-chain multicalls).
+type rpcConfigurable interface {
+	SetRPCOverride(url string)
+}
+
+// applyRPCOverride sets the RPC URL on providers that support it. The
+// provider is tested via interface assertion so non-RPC providers are
+// silently ignored.
+func applyRPCOverride(provider any, rpcURL string) {
+	if url := strings.TrimSpace(rpcURL); url != "" {
+		if p, ok := provider.(rpcConfigurable); ok {
+			p.SetRPCOverride(url)
+		}
 	}
 }
 

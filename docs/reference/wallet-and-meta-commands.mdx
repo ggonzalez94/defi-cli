@@ -1,7 +1,28 @@
 ---
-title: Meta Commands
-description: Schema, version, and completion command reference.
+title: Meta and Utility Commands
+description: Wallet, schema, version, and completion command reference.
 ---
+
+## `wallet balance`
+
+Query native or ERC-20 token balances by address and chain. Uses `eth_getBalance` for native tokens and ERC-20 `balanceOf` for tokens. No API key required; uses on-chain RPC reads.
+
+```bash
+defi wallet balance --chain 1 --address 0xYourEOA --results-only
+defi wallet balance --chain 8453 --address 0xYourEOA --asset USDC --results-only
+```
+
+Flags:
+
+- `--chain string` required — chain identifier
+- `--address string` required — account address
+- `--asset string` optional — token symbol/address/CAIP-19 (omit for native balance)
+- `--rpc-url string` optional — RPC URL override
+
+Caveats:
+
+- EVM chains only; Solana is not yet supported.
+- Does not query pending/unconfirmed balances.
 
 ## `schema [command path]`
 
