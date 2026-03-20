@@ -232,6 +232,7 @@ providers:
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache reads/writes.
+- Expired entries (past TTL + `max_stale`) are automatically pruned on startup to prevent unbounded growth.
 
 ## Caveats
 

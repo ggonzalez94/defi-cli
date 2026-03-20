@@ -34,7 +34,7 @@ const (
 	sqliteRetryBase    = 10 * time.Millisecond
 )
 
-func Open(path, lockPath string) (*Store, error) {
+func Open(path, lockPath string, maxStale time.Duration) (*Store, error) {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return nil, fmt.Errorf("create cache directory: %w", err)
 	}
@@ -70,7 +70,12 @@ func Open(path, lockPath string) (*Store, error) {
 		}
 	}
 
-	return &Store{db: db, lock: lock}, nil
+	store := &Store{db: db, lock: lock}
+	// Prune entries that are past both TTL and max_stale on startup to
+	// prevent unbounded growth while preserving the stale fallback window.
+	// Best-effort: a prune failure should not prevent cache usage.
+	_ = store.pruneUnlocked(maxStale)
+	return store, nil
 }
 
 func (s *Store) Close() error {
@@ -78,6 +83,38 @@ func (s *Store) Close() error {
 		return nil
 	}
 	return s.db.Close()
+}
+
+// Prune deletes cache entries that are past both their TTL and the max_stale
+// fallback window. Entries within (ttl, ttl+maxStale] are preserved so that
+// runCachedCommand can serve them during temporary provider failures.
+// It is called automatically on Open and can be called manually.
+func (s *Store) Prune(maxStale time.Duration) error {
+	if s == nil || s.db == nil {
+		return nil
+	}
+	unlock, err := acquireFileLock(s.lock, lockAcquireTimeout)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.pruneUnlocked(maxStale)
+}
+
+// pruneUnlocked performs the prune without acquiring the file lock.
+// The caller must hold the lock (or be in a context where locking is
+// already guaranteed, such as during Open).
+func (s *Store) pruneUnlocked(maxStale time.Duration) error {
+	maxStaleSec := int64(maxStale.Seconds())
+	if maxStaleSec < 0 {
+		maxStaleSec = 0
+	}
+	nowUnix := time.Now().UTC().Unix()
+	err := execWithRetry(s.db, "DELETE FROM cache_entries WHERE created_at + ttl_seconds + ? < ?", maxStaleSec, nowUnix)
+	if err != nil {
+		return fmt.Errorf("prune cache: %w", err)
+	}
+	return nil
 }
 
 func (s *Store) Get(key string, maxStale time.Duration) (Result, error) {

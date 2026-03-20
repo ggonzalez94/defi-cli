@@ -11,6 +11,7 @@ Format:
 
 ### Added
 - Added `wallet balance` command to query native or ERC-20 token balances by address and chain, using on-chain RPC calls (no API key required).
+- Cache auto-pruning: expired entries (past TTL + `max_stale`) are automatically deleted on startup to prevent unbounded `cache.db` growth.
 - Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.
 - Added the `tempo` swap provider with on-chain quote and execution planning against the Tempo Stablecoin DEX, including `exact-input` and `exact-output` support.
 - Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
@@ -35,7 +36,7 @@ Format:
 - Updated Tempo swap examples to use supported USD TIP-20 pairs and documented that the DEX auto-routes supported pairs through quote-token relationships.
 
 ### Security
-- None yet.
+- Bridge `submit` now validates canonical Across/LiFi execution targets on covered source chains before signing, while keeping `--unsafe-provider-tx` as the explicit provider-payload override.
 
 ## [v0.4.0] - 2026-03-07
 
