@@ -13,7 +13,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Lending** — query markets/rates from Aave/Morpho/Kamino/Moonwell, account positions from Aave/Morpho/Moonwell, and execute loan actions (`lend supply|withdraw|borrow|repay`).
 - **Yield** — compare opportunities, query positions, fetch historical series, and execute deposit/withdraw flows (Aave, Morpho, Moonwell).
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics, and execute bridge plans (Across, LiFi).
-- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, TaikoSwap, Fibrous, Bungee) and execute swap plans (TaikoSwap).
+- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee) and execute swap plans (Tempo with native type 0x76 transactions and batched calls, TaikoSwap).
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
 - **Chains & protocols** — browse chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
@@ -71,14 +71,14 @@ defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --r
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
 defi yield history --chain 1 --asset USDC --providers aave --metrics apy_total --interval day --window 7d --limit 1 --results-only
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --results-only
-defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --results-only
 ```
 
 ### Act: plan and execute transactions
 
 ```bash
 # Plan a swap (dry-run, no signer needed)
-defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
 
 # Execute a planned action (requires signer)
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
@@ -94,7 +94,7 @@ defi actions estimate --action-id <action_id> --results-only
 
 ### Execution command surface
 
-- `swap plan|submit|status` (TaikoSwap)
+- `swap plan|submit|status` (Tempo, TaikoSwap)
 - `bridge plan|submit|status` (Across, LiFi)
 - `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho, Moonwell)
 - `yield deposit|withdraw plan|submit|status` (Aave, Morpho, Moonwell)
@@ -113,6 +113,7 @@ All `plan` commands support `--rpc-url` to override chain default RPCs.
 defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only   # requires DEFI_1INCH_API_KEY
 defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --from-address 0xYourEOA --results-only  # requires DEFI_UNISWAP_API_KEY
 defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --from-address 0xYourEOA --results-only
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --results-only
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
 ```
 
@@ -127,6 +128,7 @@ When a provider requires authentication, bring your own key:
 - `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
+- `defi swap quote --provider tempo` -> no API key required
 - `defi swap quote --provider taikoswap` -> no API key required
 
 `defi providers list` includes both provider-level key metadata and capability-level key metadata (`capability_auth`).
@@ -151,7 +153,12 @@ If a keyed provider is used without a key, CLI exits with code `10`.
 
 ## Execution Signer Inputs (Submit Commands)
 
-Execution `submit` commands currently support a local key signer.
+Execution `submit` commands support a local key signer and (on Tempo) an agent wallet signer.
+
+Signer selection:
+
+- `--signer tempo` — use the Tempo CLI agent wallet (`tempo wallet -j whoami`); requires the Tempo CLI installed and configured with delegated access keys.
+- Local key signer (default) — uses the key input precedence below.
 
 Key input precedence:
 
@@ -232,12 +239,15 @@ providers:
 - `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only. Use `--window` for Aave history.
 - `lend positions --type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 for deterministic resolution.
-- `--chain` supports CAIP-2, numeric IDs, and aliases (`mantle`, `megaeth`, `taiko`, `gnosis`, `linea`, `zksync`, `hyperevm`, `monad`, `citrea`, and more).
+- `--chain` supports CAIP-2, numeric IDs, and aliases (`tempo`, `presto`, `moderato`, `tempo devnet`, `mantle`, `megaeth`, `taiko`, `gnosis`, `linea`, `zksync`, `hyperevm`, `monad`, `citrea`, and more).
 
 ### Quotes
 
-- `swap quote --type` defaults to `exact-input`; `exact-output` is Uniswap-only (`--amount-out`/`--amount-out-decimal`).
+- `swap quote --type` defaults to `exact-input`; `exact-output` is currently supported by `uniswap` and `tempo` (`--amount-out`/`--amount-out-decimal`).
 - Uniswap requires `--from-address`; `--slippage-pct` is optional (default: provider auto).
+- Tempo DEX currently supports USD-denominated TIP-20 swaps only and auto-routes supported pairs through quote-token relationships; non-USD assets such as `EURC.e` are rejected.
+- Tempo swap execution settles to the sender only; omit `--recipient` or keep it equal to `--from-address`.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields instead of native-gas EIP-1559 pricing).
 - `fibrous` currently supports `base`, `hyperevm`, and `citrea`.
 - Bungee dedicated backend requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 
@@ -251,6 +261,7 @@ providers:
 - Pre-sign checks enforce bounded ERC-20 approvals by default; use `--allow-max-approval` to opt in to larger approvals.
 - Bridge pre-sign checks validate settlement endpoints; use `--unsafe-provider-tx` to bypass.
 - All `submit` commands broadcast signed transactions.
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks.
 - `--provider` is required for multi-provider flows (no implicit defaults).
 
 ## Exit Codes

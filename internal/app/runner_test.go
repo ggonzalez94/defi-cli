@@ -377,6 +377,13 @@ func TestRunnerProvidersList(t *testing.T) {
 	if len(out) == 0 {
 		t.Fatalf("expected providers output, got empty")
 	}
+	tempoInfo, ok := findProviderInfo(out, "tempo")
+	if !ok {
+		t.Fatalf("expected tempo provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := tempoInfo["requires_key"].(bool); !ok || requiresKey {
+		t.Fatalf("expected tempo requires_key=false, got %#v", tempoInfo["requires_key"])
+	}
 	fibrousInfo, ok := findProviderInfo(out, "fibrous")
 	if !ok {
 		t.Fatalf("expected fibrous provider in providers list, got %#v", out)
@@ -496,6 +503,13 @@ func TestRunnerProvidersListBypassesCacheOpen(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatalf("expected providers output, got empty")
+	}
+	tempoInfo, ok := findProviderInfo(out, "tempo")
+	if !ok {
+		t.Fatalf("expected tempo provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := tempoInfo["requires_key"].(bool); !ok || requiresKey {
+		t.Fatalf("expected tempo requires_key=false, got %#v", tempoInfo["requires_key"])
 	}
 	fibrousInfo, ok := findProviderInfo(out, "fibrous")
 	if !ok {
@@ -1184,6 +1198,55 @@ func TestSwapExactOutputPassedToProvider(t *testing.T) {
 	}
 	if uniswap.lastReq.Swapper != "0x000000000000000000000000000000000000dEaD" {
 		t.Fatalf("expected swapper to be forwarded, got %s", uniswap.lastReq.Swapper)
+	}
+}
+
+func TestSwapExactOutputTempoPassedToProvider(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	tempoProvider := &fakeSwapProvider{name: "tempo"}
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		swapProviders: map[string]providers.SwapProvider{
+			"tempo": tempoProvider,
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "quote",
+		"--provider", "tempo-dex",
+		"--chain", "tempo",
+		"--from-asset", "USDC.e",
+		"--to-asset", "EURC.e",
+		"--type", "exact-output",
+		"--amount-out", "1000000",
+	})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("swap command failed: %v stderr=%s", err, stderr.String())
+	}
+
+	if tempoProvider.lastReq.TradeType != providers.SwapTradeTypeExactOutput {
+		t.Fatalf("expected trade type exact-output, got %s", tempoProvider.lastReq.TradeType)
+	}
+	if tempoProvider.lastReq.AmountBaseUnits != "1000000" {
+		t.Fatalf("unexpected amount base units: %s", tempoProvider.lastReq.AmountBaseUnits)
+	}
+	if tempoProvider.calls != 1 {
+		t.Fatalf("expected tempo provider call, got %d", tempoProvider.calls)
 	}
 }
 

@@ -44,7 +44,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 	type yieldSubmitArgs struct {
 		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
 		Simulate           bool    `json:"simulate" flag:"simulate"`
-		Signer             string  `json:"signer" flag:"signer" enum:"local"`
+		Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
 		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
 		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
 		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
@@ -55,6 +55,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
 		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
 		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
+		FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
 	}
 	buildAction := func(ctx context.Context, args yieldArgs) (execution.Action, error) {
 		chain, asset, err := parseChainAsset(args.ChainArg, args.AssetArg)
@@ -159,10 +160,11 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 			if err != nil {
 				return err
 			}
-			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), txSigner.Address().Hex()) {
+			senderAddr := effectiveSenderAddress(txSigner)
+			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), senderAddr) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
 			}
-			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), txSigner.Address().Hex()) {
+			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), senderAddr) {
 				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
 			}
 			execOpts, err := parseExecuteOptions(
@@ -174,6 +176,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 				submit.MaxPriorityFeeGwei,
 				submit.AllowMaxApproval,
 				submit.UnsafeProviderTx,
+				submit.FeeToken,
 			)
 			if err != nil {
 				return err
@@ -186,7 +189,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 	}
 	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by yield plan")
 	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local)")
+	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
 	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
 	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
 	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
@@ -197,6 +200,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
 	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
 	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
 	annotateStructuredSubmitCommand(submitCmd, yieldSubmitArgs{})
 
 	var statusActionID string

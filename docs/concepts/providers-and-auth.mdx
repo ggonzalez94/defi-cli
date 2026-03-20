@@ -16,6 +16,7 @@ description: Provider coverage, key requirements, and routing behavior.
 | `bungee` | bridge quote, swap quote | No (default mode) |
 | `1inch` | swap quote | Yes |
 | `uniswap` | swap quote | Yes |
+| `tempo` | swap quote + execution | No |
 | `taikoswap` | swap quote + execution | No |
 | `jupiter` | swap quote (Solana) | Optional |
 | `fibrous` | swap quote | No |
@@ -45,6 +46,7 @@ If either is missing, bungee quotes use public backend.
 - `yield history` uses the same direct providers and accepts `--providers aave,morpho,kamino`.
 - `bridge quote` and `swap quote` require explicit `--provider`; there are no implicit provider defaults.
 - Execution commands (`plan`, `run`, `submit`, `status`) require `--provider` for multi-provider surfaces.
+- `swap quote --type exact-output` is currently supported by `uniswap` and `tempo`; `swap plan --type exact-output` is currently supported by `tempo`.
 - Provider/chain-family mismatches fail fast with `unsupported` errors (for example `--provider jupiter` on EVM chains).
 
 ## Data caveats
@@ -56,3 +58,7 @@ If either is missing, bungee quotes use public backend.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled).
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
 - Across may omit native USD fee fields for some routes; when missing, `estimated_fee_usd` can fall back to a stable-asset approximation while token-unit fees remain in `fee_breakdown`.
+- Tempo Stablecoin DEX currently supports USD-denominated TIP-20 assets only; supported pairs are auto-routed on-chain through quote-token relationships.
+- Tempo DEX swap execution settles to the caller; `--recipient` must match `--from-address` (or be omitted).
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks. Requires the Tempo CLI installed.
