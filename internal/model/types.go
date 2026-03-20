@@ -62,6 +62,26 @@ type ProviderCapabilityAuth struct {
 	Description string `json:"description,omitempty"`
 }
 
+type SupportedChain struct {
+	Name       string   `json:"name"`
+	Slug       string   `json:"slug"`
+	CAIP2      string   `json:"caip2"`
+	Namespace  string   `json:"namespace"`
+	EVMChainID int64    `json:"evm_chain_id,omitempty"`
+	Aliases    []string `json:"aliases,omitempty"`
+}
+
+type GasPrice struct {
+	ChainID        string `json:"chain_id"`
+	ChainName      string `json:"chain_name"`
+	BlockNumber    int64  `json:"block_number"`
+	EIP1559        bool   `json:"eip1559"`
+	BaseFeeGwei    string `json:"base_fee_gwei"`
+	PriorityFeeGwei string `json:"priority_fee_gwei"`
+	GasPriceGwei   string `json:"gas_price_gwei"`
+	FetchedAt      string `json:"fetched_at"`
+}
+
 type ChainTVL struct {
 	Rank    int     `json:"rank"`
 	Chain   string  `json:"chain"`
@@ -83,12 +103,73 @@ type ProtocolTVL struct {
 	Protocol string  `json:"protocol"`
 	Category string  `json:"category"`
 	TVLUSD   float64 `json:"tvl_usd"`
+	Chains   int     `json:"chains"`
 }
 
 type ProtocolCategory struct {
 	Name      string  `json:"name"`
 	Protocols int     `json:"protocols"`
 	TVLUSD    float64 `json:"tvl_usd"`
+}
+
+type ProtocolFees struct {
+	Rank          int     `json:"rank"`
+	Protocol      string  `json:"protocol"`
+	Category      string  `json:"category"`
+	Fees24hUSD    float64 `json:"fees_24h_usd"`
+	Fees7dUSD     float64 `json:"fees_7d_usd"`
+	Fees30dUSD    float64 `json:"fees_30d_usd"`
+	Change1dPct   float64 `json:"change_1d_pct"`
+	Change7dPct   float64 `json:"change_7d_pct"`
+	Change1mPct   float64 `json:"change_1m_pct"`
+	Chains        int     `json:"chains"`
+}
+
+type ProtocolRevenue struct {
+	Rank           int     `json:"rank"`
+	Protocol       string  `json:"protocol"`
+	Category       string  `json:"category"`
+	Revenue24hUSD  float64 `json:"revenue_24h_usd"`
+	Revenue7dUSD   float64 `json:"revenue_7d_usd"`
+	Revenue30dUSD  float64 `json:"revenue_30d_usd"`
+	Change1dPct    float64 `json:"change_1d_pct"`
+	Change7dPct    float64 `json:"change_7d_pct"`
+	Change1mPct    float64 `json:"change_1m_pct"`
+	Chains         int     `json:"chains"`
+}
+
+type DexVolume struct {
+	Rank          int     `json:"rank"`
+	Protocol      string  `json:"protocol"`
+	Volume24hUSD  float64 `json:"volume_24h_usd"`
+	Volume7dUSD   float64 `json:"volume_7d_usd"`
+	Volume30dUSD  float64 `json:"volume_30d_usd"`
+	Change1dPct   float64 `json:"change_1d_pct"`
+	Change7dPct   float64 `json:"change_7d_pct"`
+	Change1mPct   float64 `json:"change_1m_pct"`
+	Chains        int     `json:"chains"`
+}
+
+type Stablecoin struct {
+	Rank           int     `json:"rank"`
+	Name           string  `json:"name"`
+	Symbol         string  `json:"symbol"`
+	PegType        string  `json:"peg_type"`
+	PegMechanism   string  `json:"peg_mechanism"`
+	CirculatingUSD float64 `json:"circulating_usd"`
+	Price          float64 `json:"price"`
+	Chains         int     `json:"chains"`
+	DayChangeUSD   float64 `json:"day_change_usd"`
+	WeekChangeUSD  float64 `json:"week_change_usd"`
+	MonthChangeUSD float64 `json:"month_change_usd"`
+}
+
+type StablecoinChain struct {
+	Rank              int     `json:"rank"`
+	Chain             string  `json:"chain"`
+	ChainID           string  `json:"chain_id"`
+	CirculatingUSD    float64 `json:"circulating_usd"`
+	DominantPegType   string  `json:"dominant_peg_type"`
 }
 
 type AssetResolution struct {
@@ -301,6 +382,16 @@ type YieldPosition struct {
 	APYTotal             float64     `json:"apy_total"`
 	SourceURL            string      `json:"source_url,omitempty"`
 	FetchedAt            string      `json:"fetched_at"`
+}
+
+type WalletBalance struct {
+	ChainID        string     `json:"chain_id"`
+	AccountAddress string     `json:"account_address"`
+	AssetType      string     `json:"asset_type"`
+	AssetID        string     `json:"asset_id"`
+	Symbol         string     `json:"symbol"`
+	Balance        AmountInfo `json:"balance"`
+	FetchedAt      string     `json:"fetched_at"`
 }
 
 type YieldHistoryPoint struct {

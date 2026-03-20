@@ -221,7 +221,7 @@ Core executor: `internal/execution/executor.go`.
 Per step execution flow:
 
 1. Validate RPC URL, target, and chain match.
-2. Apply lightweight pre-sign policy checks (approval bounds, transfer calldata invariants, TaikoSwap target/selector checks, bridge settlement metadata checks).
+2. Apply lightweight pre-sign policy checks (approval bounds, transfer calldata invariants, TaikoSwap target/selector checks, bridge canonical-target and settlement checks).
 3. Optional simulation (`eth_call`) when `--simulate=true`.
 4. Gas estimation (`eth_estimateGas`) with configurable multiplier.
 5. EIP-1559 fee resolution (suggested or overridden by flags).

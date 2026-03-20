@@ -125,3 +125,129 @@ func TestIsAllowedBridgeSettlementURL(t *testing.T) {
 		t.Fatal("did not expect malformed endpoint to be allowed")
 	}
 }
+
+func TestHasBridgeExecutionTargetPolicy(t *testing.T) {
+	// LiFi must cover all major EVM chains where the Diamond is deployed.
+	lifiChains := []struct {
+		chainID int64
+		name    string
+	}{
+		{1, "Ethereum"},
+		{10, "Optimism"},
+		{56, "BSC"},
+		{100, "Gnosis"},
+		{137, "Polygon"},
+		{146, "Sonic"},
+		{252, "Fraxtal"},
+		{324, "zkSync"},
+		{480, "World Chain"},
+		{5000, "Mantle"},
+		{8453, "Base"},
+		{42161, "Arbitrum"},
+		{42220, "Celo"},
+		{43114, "Avalanche"},
+		{57073, "Ink"},
+		{59144, "Linea"},
+		{80094, "Berachain"},
+		{81457, "Blast"},
+		{167000, "Taiko"},
+		{534352, "Scroll"},
+	}
+	for _, tc := range lifiChains {
+		if !HasBridgeExecutionTargetPolicy("lifi", tc.chainID) {
+			t.Fatalf("expected lifi target policy coverage for %s (chain %d)", tc.name, tc.chainID)
+		}
+	}
+
+	// Across must cover its supported chains.
+	acrossChains := []struct {
+		chainID int64
+		name    string
+	}{
+		{1, "Ethereum"},
+		{10, "Optimism"},
+		{137, "Polygon"},
+		{8453, "Base"},
+		{42161, "Arbitrum"},
+	}
+	for _, tc := range acrossChains {
+		if !HasBridgeExecutionTargetPolicy("across", tc.chainID) {
+			t.Fatalf("expected across target policy coverage for %s (chain %d)", tc.name, tc.chainID)
+		}
+	}
+
+	if HasBridgeExecutionTargetPolicy("across", 43114) {
+		t.Fatal("did not expect across target policy coverage for unsupported chain")
+	}
+	if HasBridgeExecutionTargetPolicy("unknown", 1) {
+		t.Fatal("did not expect target policy coverage for unknown provider")
+	}
+}
+
+func TestIsAllowedBridgeExecutionTarget(t *testing.T) {
+	// The standard LiFi Diamond address is shared across most major chains.
+	lifiDiamond := "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE"
+	standardLiFiChains := []struct {
+		chainID int64
+		name    string
+	}{
+		{1, "Ethereum"},
+		{10, "Optimism"},
+		{56, "BSC"},
+		{100, "Gnosis"},
+		{137, "Polygon"},
+		{146, "Sonic"},
+		{252, "Fraxtal"},
+		{480, "World Chain"},
+		{5000, "Mantle"},
+		{8453, "Base"},
+		{42161, "Arbitrum"},
+		{42220, "Celo"},
+		{43114, "Avalanche"},
+		{81457, "Blast"},
+		{534352, "Scroll"},
+	}
+	for _, tc := range standardLiFiChains {
+		if !IsAllowedBridgeExecutionTarget("lifi", tc.chainID, lifiDiamond) {
+			t.Fatalf("expected canonical lifi diamond to be allowed on %s (chain %d)", tc.name, tc.chainID)
+		}
+	}
+
+	// Case-insensitive: all-lowercase form of the same LiFi diamond address must also pass.
+	if !IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1231deb6f5749ef6ce6943a275a1d3e7486f4eae") {
+		t.Fatal("expected lowercase lifi target to be allowed (case-insensitive)")
+	}
+	if IsAllowedBridgeExecutionTarget("lifi", 8453, "0x1111111111111111111111111111111111111111") {
+		t.Fatal("did not expect unknown lifi target to be allowed")
+	}
+
+	// Chains with non-standard LiFi Diamond addresses should accept their specific address.
+	if !IsAllowedBridgeExecutionTarget("lifi", 324, "0x341e94069f53234fE6DabeF707aD424830525715") {
+		t.Fatal("expected lifi zkSync-specific diamond to be allowed")
+	}
+	// Standard diamond must NOT be accepted on chains with non-standard addresses.
+	if IsAllowedBridgeExecutionTarget("lifi", 324, lifiDiamond) {
+		t.Fatal("did not expect standard lifi diamond on zkSync (uses different address)")
+	}
+
+	if !IsAllowedBridgeExecutionTarget("across", 1, "0x767e4c20F521a829dE4Ffc40C25176676878147f") {
+		t.Fatal("expected canonical across target to be allowed on mainnet")
+	}
+	// Case-insensitive: all-uppercase hex also matches.
+	if !IsAllowedBridgeExecutionTarget("across", 1, "0x767E4C20F521A829DE4FFC40C25176676878147F") {
+		t.Fatal("expected uppercase across target to be allowed (case-insensitive)")
+	}
+	if IsAllowedBridgeExecutionTarget("across", 1, "not-an-address") {
+		t.Fatal("did not expect malformed target to be allowed")
+	}
+	if IsAllowedBridgeExecutionTarget("across", 43114, "0x767e4c20F521a829dE4Ffc40C25176676878147f") {
+		t.Fatal("did not expect target without chain coverage to be allowed")
+	}
+	if IsAllowedBridgeExecutionTarget("across", 1, "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE") {
+		t.Fatal("did not expect unrelated provider target to be allowed")
+	}
+	// Empty target must not be allowed.
+	if IsAllowedBridgeExecutionTarget("lifi", 1, "") {
+		t.Fatal("did not expect empty target to be allowed")
+	}
+}

@@ -5,6 +5,17 @@ description: Discover chains, protocols, and assets before running strategy-spec
 
 Use market-discovery commands to scope chains/protocols and normalize assets first.
 
+## Supported chains
+
+Enumerate all chains the CLI recognizes, including slugs and CAIP-2 identifiers. No API keys required.
+
+```bash
+defi chains list --results-only
+defi chains list --results-only --select slug,caip2,namespace
+```
+
+Use this to discover valid `--chain` values before running other commands.
+
 ## Top chains by TVL
 
 ```bash
@@ -23,15 +34,63 @@ Notes:
 - `chains assets` requires `DEFI_DEFILLAMA_API_KEY`.
 - If filtering by token address/CAIP-19, the token must have a known symbol on that chain.
 
+## Gas prices
+
+Query live EVM gas prices (no API key, bypasses cache).
+
+```bash
+defi chains gas --chain 1 --results-only
+defi chains gas --chain 1,10,137,8453,42161 --results-only
+```
+
+Multi-chain queries run in parallel and return partial results if some chains fail. Use `--rpc-url` to override the default RPC (single chain only).
+
 ## Top protocols and categories
 
 ```bash
 defi protocols top --limit 20 --results-only
 defi protocols top --category lending --limit 20 --results-only
+defi protocols top --chain Ethereum --limit 10 --results-only
 defi protocols categories --results-only
 ```
 
-Category ranking is deterministic: `tvl_usd`, then protocol count, then name.
+Category ranking is deterministic: `tvl_usd`, then protocol count, then name. When `--chain` is specified, TVL reflects the protocol's value locked on that chain.
+
+## Protocol fees and revenue
+
+```bash
+defi protocols fees --limit 10 --results-only --select rank,protocol,fees_24h_usd,change_1d_pct
+defi protocols fees --category Dexs --chain Ethereum --limit 10 --results-only
+defi protocols revenue --limit 10 --results-only --select rank,protocol,revenue_24h_usd,change_1d_pct
+```
+
+Rankings sorted by 24h value descending. Revenue represents protocol-retained fees (not LP/validator). Both support `--category` and `--chain` filters. No API key required.
+
+## DEX volume rankings
+
+```bash
+defi dexes volume --limit 10 --results-only --select rank,protocol,volume_24h_usd,change_1d_pct
+defi dexes volume --chain Arbitrum --limit 5 --results-only
+```
+
+Rankings are sorted by 24h volume descending. Use `--chain` to filter DEXes active on a specific chain. No API key required.
+
+## Stablecoin market data
+
+```bash
+defi stablecoins top --limit 10 --results-only --select rank,symbol,circulating_usd,price
+defi stablecoins top --peg-type peggedUSD --limit 20 --results-only
+```
+
+Returns circulating market cap, current price, chain count, and day/week/month supply change deltas. Useful for stablecoin selection and depeg monitoring.
+
+## Stablecoin chains
+
+```bash
+defi stablecoins chains --limit 10 --results-only --select rank,chain,circulating_usd
+```
+
+Ranks chains by total stablecoin market cap with dominant peg type and CAIP-2 chain IDs. No API key required.
 
 ## Resolve assets to canonical IDs
 

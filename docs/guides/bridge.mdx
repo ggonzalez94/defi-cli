@@ -52,6 +52,7 @@ defi bridge details --bridge layerzero --results-only
 - Quotes include `fee_breakdown` with `lp_fee`, `relayer_fee`, `gas_fee`, totals, and a consistency check against amount deltas.
 - Across can omit native USD fee fields on some routes; in those cases `estimated_fee_usd` may use a stable-asset approximation.
 - Across `/swap/approval` responses can include max-allowance `approve` calldata. `defi-cli` blocks approval amounts above planned input by default; use `--allow-max-approval` on `bridge submit` only when you explicitly accept that larger allowance.
+- Bridge `submit` validates canonical execution targets on covered Across/LiFi source chains before signing. Use `--unsafe-provider-tx` only when you intentionally want to bypass that provider-payload guardrail.
 - Bridge `submit` marks bridge steps complete only after destination settlement is confirmed by provider status APIs (Across `/deposit/status`, LiFi `/status`).
 - `--step-timeout` applies to each bridge wait stage (receipt and settlement polling). Slow routes may need higher values (for example `--step-timeout 15m`).
 - Global `--timeout` controls provider/planning requests. Execution wait budget is derived from `--step-timeout` and remaining action stages.

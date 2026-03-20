@@ -17,8 +17,13 @@ type MarketDataProvider interface {
 	Provider
 	ChainsTop(ctx context.Context, limit int) ([]model.ChainTVL, error)
 	ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asset, limit int) ([]model.ChainAssetTVL, error)
-	ProtocolsTop(ctx context.Context, category string, limit int) ([]model.ProtocolTVL, error)
+	ProtocolsTop(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolTVL, error)
 	ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error)
+	StablecoinsTop(ctx context.Context, pegType string, limit int) ([]model.Stablecoin, error)
+	StablecoinChains(ctx context.Context, limit int) ([]model.StablecoinChain, error)
+	ProtocolsFees(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolFees, error)
+	ProtocolsRevenue(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolRevenue, error)
+	DexesVolume(ctx context.Context, chain string, limit int) ([]model.DexVolume, error)
 }
 
 type LendingProvider interface {

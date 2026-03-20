@@ -15,8 +15,31 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics, and execute bridge plans (Across, LiFi).
 - **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee) and execute swap plans (Tempo with native type 0x76 transactions and batched calls, TaikoSwap).
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
-- **Chains & protocols** — browse chains by TVL, inspect chain TVL by asset, discover protocols, resolve asset identifiers.
+- **Wallet** — query native and ERC-20 token balances on any supported EVM chain (no API key required).
+- **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, track stablecoin market caps, resolve asset identifiers.
 - **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
+
+## Documentation Site (Mintlify)
+
+This repo includes a dedicated Mintlify docs site under [`docs/`](docs) (`docs/docs.json` + `.mdx` pages).
+
+Preview locally:
+
+```bash
+cd docs
+npx --yes mint@4.2.378 dev --no-open
+```
+
+Validate before publishing:
+
+```bash
+cd docs
+npx --yes mint@4.2.378 validate
+npx --yes mint@4.2.378 broken-links
+npx --yes mint@4.2.378 a11y
+```
+
+Production docs deployment should target `docs-live` in Mintlify Git settings. The release workflow syncs `docs-live` on stable release tags (non-prerelease) so live docs align with main-channel binaries.
 
 ## Install
 
@@ -66,6 +89,20 @@ defi version --long
 
 ```bash
 defi providers list --results-only
+defi chains list --results-only --select slug,caip2,namespace
+defi chains gas --chain 1 --results-only
+defi chains gas --chain 1,10,137,8453,42161 --results-only   # multi-chain batch
+defi chains top --limit 10 --results-only --select rank,chain,tvl_usd
+defi chains assets --chain 1 --asset USDC --results-only # Requires DEFI_DEFILLAMA_API_KEY
+defi protocols fees --limit 10 --results-only --select rank,protocol,fees_24h_usd,change_1d_pct
+defi protocols revenue --limit 10 --results-only --select rank,protocol,revenue_24h_usd,change_1d_pct
+defi dexes volume --limit 10 --results-only --select rank,protocol,volume_24h_usd,change_1d_pct
+defi dexes volume --chain Arbitrum --limit 5 --results-only  # Filter DEXes active on Arbitrum
+defi stablecoins top --limit 10 --results-only --select rank,symbol,circulating_usd,price
+defi stablecoins chains --limit 10 --results-only --select rank,chain,circulating_usd
+defi wallet balance --chain 1 --address 0xYourEOA --results-only
+defi wallet balance --chain base --address 0xYourEOA --asset USDC --results-only
+defi assets resolve --chain base --symbol USDC --results-only
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --results-only
 defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 10 --results-only
@@ -222,24 +259,32 @@ providers:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/stablecoins/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `wallet balance`: `15s`, `bridge/swap quotes`: `15s`).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).
 - If fallback is disabled (`--no-stale` or `--max-stale 0s`) or stale data exceeds the budget, the CLI exits with code `14`.
-- Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+- Metadata commands (`version`, `schema`, `providers list`, `chains list`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache reads/writes.
+- Expired entries (past TTL + `max_stale`) are automatically pruned on startup to prevent unbounded growth.
 
 ## Caveats
 
 ### Data
 
+- `wallet balance` currently supports EVM chains only; Solana is not yet supported.
+- `wallet balance` uses `eth_getBalance` for native tokens and ERC-20 `balanceOf` for tokens; it does not query pending/unconfirmed balances.
 - Morpho can surface extreme APY values on very small markets; use `--min-tvl-usd` when ranking.
 - `yield opportunities` returns `apy_total`, `tvl_usd`, `liquidity_usd`, and `backing_assets` (objective metrics only).
 - `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only. Use `--window` for Aave history.
 - `lend positions --type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
 - For chains without bootstrap symbol entries, pass token address or CAIP-19 for deterministic resolution.
 - `--chain` supports CAIP-2, numeric IDs, and aliases (`tempo`, `presto`, `moderato`, `tempo devnet`, `mantle`, `megaeth`, `taiko`, `gnosis`, `linea`, `zksync`, `hyperevm`, `monad`, `citrea`, and more).
+- `chains assets` requires `DEFI_DEFILLAMA_API_KEY`; `bridge list`/`bridge details` also require it; quote providers (`across`, `lifi`) do not.
+- `protocols fees` rankings are sorted by 24h fees descending; protocols with null or zero 24h fees are excluded.
+- `protocols revenue` rankings are sorted by 24h revenue descending; protocols with null or zero 24h revenue are excluded. Revenue represents the portion of fees retained by the protocol (not LPs/validators).
+- `dexes volume` rankings are sorted by 24h volume descending; DEXes with null or zero 24h volume are excluded. `--chain` filters by chain presence.
+- `chains gas` returns live EVM gas prices via RPC; it is EVM-only and bypasses cache. Use `--rpc-url` to override the default chain RPC. Pass comma-separated chains (e.g. `--chain 1,10,8453`) for parallel multi-chain queries; `--rpc-url` is only allowed with a single chain.
 
 ### Quotes
 
