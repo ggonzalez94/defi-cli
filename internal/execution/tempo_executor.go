@@ -328,21 +328,21 @@ func (e *TempoStepExecutor) EstimateStep(_ context.Context, _ *Action, _ *Action
 }
 
 // validateStepPolicyCalls validates policy for steps that use batched Calls.
-// For steps with non-empty single Target/Data it delegates to the existing
-// validateStepPolicy. For batched Calls it runs provider-specific checks.
+// When Calls is populated, batched validation always runs (even if legacy
+// Target/Data fields are also set) to prevent bypass via tampered actions.
 func validateStepPolicyCalls(action *Action, step *ActionStep, chainID int64, calls []StepCall, opts ExecuteOptions) error {
-	// If the step has a populated Target (non-batched), use legacy validation.
+	// Batched calls take priority — always validate them when present.
+	if len(calls) > 0 && step.Type == StepTypeSwap && action != nil && strings.EqualFold(strings.TrimSpace(action.Provider), "tempo") {
+		return validateTempoSwapCalls(chainID, calls, action, opts)
+	}
+
+	// Fallback: legacy single-target validation for non-batched steps.
 	if strings.TrimSpace(step.Target) != "" && common.IsHexAddress(step.Target) {
 		data, err := decodeHex(step.Data)
 		if err != nil {
 			return clierr.Wrap(clierr.CodeUsage, "decode step calldata", err)
 		}
 		return validateStepPolicy(action, step, chainID, data, opts)
-	}
-
-	// Batched calls: validate each call individually.
-	if step.Type == StepTypeSwap && action != nil && strings.EqualFold(strings.TrimSpace(action.Provider), "tempo") {
-		return validateTempoSwapCalls(chainID, calls, action, opts)
 	}
 
 	return nil
