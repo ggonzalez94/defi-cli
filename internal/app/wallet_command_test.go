@@ -85,6 +85,9 @@ func TestNativeSymbol(t *testing.T) {
 		{999, "HYPE"},
 		{143, "MON"},
 		{4114, "cBTC"},
+		{4217, "ETH"},
+		{42431, "ETH"},
+		{31318, "ETH"},
 	}
 	for _, tc := range tests {
 		t.Run(fmt.Sprintf("chain_%d", tc.chainID), func(t *testing.T) {
@@ -114,6 +117,9 @@ func TestNativeAssetID(t *testing.T) {
 		{name: "celo", chain: id.Chain{CAIP2: "eip155:42220", EVMChainID: 42220}, wantID: "eip155:42220/slip44:52752", wantSym: "CELO"},
 		{name: "berachain", chain: id.Chain{CAIP2: "eip155:80094", EVMChainID: 80094}, wantID: "eip155:80094/slip44:8008", wantSym: "BERA"},
 		{name: "hyperevm", chain: id.Chain{CAIP2: "eip155:999", EVMChainID: 999}, wantID: "eip155:999/slip44:2457", wantSym: "HYPE"},
+		{name: "tempo", chain: id.Chain{CAIP2: "eip155:4217", EVMChainID: 4217}, wantID: "eip155:4217/slip44:60", wantSym: "ETH"},
+		{name: "tempo-moderato", chain: id.Chain{CAIP2: "eip155:42431", EVMChainID: 42431}, wantID: "eip155:42431/slip44:60", wantSym: "ETH"},
+		{name: "tempo-devnet", chain: id.Chain{CAIP2: "eip155:31318", EVMChainID: 31318}, wantID: "eip155:31318/slip44:60", wantSym: "ETH"},
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
@@ -124,6 +130,51 @@ func TestNativeAssetID(t *testing.T) {
 				t.Fatalf("nativeSymbol(%s) = %q, want %q", tc.name, got, tc.wantSym)
 			}
 		})
+	}
+}
+
+func TestFetchNativeBalance(t *testing.T) {
+	addr := common.HexToAddress("0x000000000000000000000000000000000000dEaD")
+	client := stubWalletRPC{
+		balanceAt: func(_ context.Context, account common.Address, blockNumber *big.Int) (*big.Int, error) {
+			if account != addr {
+				t.Fatalf("unexpected address %s", account.Hex())
+			}
+			if blockNumber != nil {
+				t.Fatalf("expected nil block number, got %v", blockNumber)
+			}
+			return big.NewInt(1_500_000_000_000_000_000), nil // 1.5 ETH
+		},
+	}
+
+	chain := id.Chain{CAIP2: "eip155:1", EVMChainID: 1, Slug: "ethereum"}
+	got, err := fetchNativeBalance(context.Background(), client, chain, addr)
+	if err != nil {
+		t.Fatalf("fetchNativeBalance failed: %v", err)
+	}
+	if got.AssetType != "native" {
+		t.Fatalf("expected asset_type native, got %s", got.AssetType)
+	}
+	if got.Symbol != "ETH" {
+		t.Fatalf("expected symbol ETH, got %s", got.Symbol)
+	}
+	if got.AssetID != "eip155:1/slip44:60" {
+		t.Fatalf("expected asset_id eip155:1/slip44:60, got %s", got.AssetID)
+	}
+	if got.Balance.Decimals != 18 {
+		t.Fatalf("expected 18 decimals, got %d", got.Balance.Decimals)
+	}
+	if got.Balance.AmountBaseUnits != "1500000000000000000" {
+		t.Fatalf("unexpected base units %s", got.Balance.AmountBaseUnits)
+	}
+	if got.Balance.AmountDecimal != "1.5" {
+		t.Fatalf("unexpected decimal amount %s", got.Balance.AmountDecimal)
+	}
+	if got.ChainID != "eip155:1" {
+		t.Fatalf("unexpected chain_id %s", got.ChainID)
+	}
+	if got.AccountAddress != strings.ToLower(addr.Hex()) {
+		t.Fatalf("unexpected account_address %s", got.AccountAddress)
 	}
 }
 
@@ -184,6 +235,42 @@ func TestFetchERC20BalanceFetchesOnChainDecimals(t *testing.T) {
 		t.Fatalf("unexpected base units %s", got.Balance.AmountBaseUnits)
 	}
 	if got.Balance.AmountDecimal != "1.234567" {
+		t.Fatalf("unexpected decimal amount %s", got.Balance.AmountDecimal)
+	}
+}
+
+func TestFetchERC20BalanceSkipsOnChainDecimalsWhenKnown(t *testing.T) {
+	token := common.HexToAddress("0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48")
+	client := stubWalletRPC{
+		callContract: func(_ context.Context, msg ethereum.CallMsg, _ *big.Int) ([]byte, error) {
+			selector := common.Bytes2Hex(msg.Data[:4])
+			if selector == common.Bytes2Hex(erc20DecimalsSelector) {
+				t.Fatal("should not call decimals() when bootstrap provides them")
+			}
+			if selector == common.Bytes2Hex(erc20BalanceOfSelector) {
+				return encodeUint256(5000000), nil
+			}
+			t.Fatalf("unexpected selector %s", selector)
+			return nil, nil
+		},
+	}
+
+	got, err := fetchERC20Balance(context.Background(), client, id.Chain{CAIP2: "eip155:1", EVMChainID: 1}, common.HexToAddress("0x000000000000000000000000000000000000dEaD"), id.Asset{
+		AssetID:  "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+		Address:  token.Hex(),
+		Symbol:   "USDC",
+		Decimals: 6,
+	})
+	if err != nil {
+		t.Fatalf("fetchERC20Balance failed: %v", err)
+	}
+	if got.Balance.Decimals != 6 {
+		t.Fatalf("expected decimals 6, got %d", got.Balance.Decimals)
+	}
+	if got.Balance.AmountBaseUnits != "5000000" {
+		t.Fatalf("unexpected base units %s", got.Balance.AmountBaseUnits)
+	}
+	if got.Balance.AmountDecimal != "5" {
 		t.Fatalf("unexpected decimal amount %s", got.Balance.AmountDecimal)
 	}
 }

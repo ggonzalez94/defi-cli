@@ -227,7 +227,7 @@ func nativeAssetID(chain id.Chain) string {
 
 func nativeAssetInfo(chain id.Chain) (symbol string, slip44Ref string) {
 	switch chain.EVMChainID {
-	case 1, 10, 324, 480, 4326, 534352, 57073, 59144, 81457, 167000, 167013, 42161, 8453:
+	case 1, 10, 324, 480, 4217, 4326, 31318, 42431, 534352, 57073, 59144, 81457, 167000, 167013, 42161, 8453:
 		return "ETH", "60"
 	case 56:
 		return "BNB", "714"
