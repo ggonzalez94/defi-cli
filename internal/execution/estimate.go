@@ -294,7 +294,10 @@ func EstimateActionGas(ctx context.Context, action Action, opts EstimateOptions)
 				feeUnit = tempoFeeTokenSymbol(ft)
 			}
 			if feeUnit != "" {
-				// Convert 18-decimal denominated fees to 6-decimal token units.
+				// Convert 18-decimal gas pricing to fee-token base units.
+				// All current Tempo fee tokens (USDC.e, pathUSD) are 6 decimals.
+				// If a fee token with different decimals is added, read decimals()
+				// on-chain here instead of hardcoding 12.
 				divisor := new(big.Int).Exp(big.NewInt(10), big.NewInt(12), nil) // 10^(18-6)
 				likelyFee = new(big.Int).Div(likelyFee, divisor)
 				worstFee = new(big.Int).Div(worstFee, divisor)

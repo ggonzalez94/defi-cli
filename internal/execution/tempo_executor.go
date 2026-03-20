@@ -162,7 +162,10 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 
 	// Resolve fee token.
 	feeTokenAddr := common.Address{}
-	if ft := strings.TrimSpace(opts.FeeToken); ft != "" && common.IsHexAddress(ft) {
+	if ft := strings.TrimSpace(opts.FeeToken); ft != "" {
+		if !common.IsHexAddress(ft) {
+			return clierr.New(clierr.CodeUsage, fmt.Sprintf("--fee-token must be a valid hex address; got %q", ft))
+		}
 		feeTokenAddr = common.HexToAddress(ft)
 	} else if ft, ok := registry.TempoFeeToken(chainID); ok {
 		feeTokenAddr = common.HexToAddress(ft)
