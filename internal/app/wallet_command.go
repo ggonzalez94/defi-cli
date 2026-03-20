@@ -58,9 +58,16 @@ func (s *runtimeState) newWalletCommand() *cobra.Command {
 				asset = &a
 			}
 
-			req := map[string]any{"chain": chain.CAIP2, "address": addr}
+			cacheAddr := addr
+			if chain.IsEVM() {
+				cacheAddr = strings.ToLower(addr)
+			}
+			req := map[string]any{"chain": chain.CAIP2, "address": cacheAddr}
 			if asset != nil {
 				req["asset"] = asset.AssetID
+			}
+			if rpcURLArg != "" {
+				req["rpc_url"] = strings.TrimSpace(rpcURLArg)
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 
