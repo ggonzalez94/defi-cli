@@ -70,7 +70,7 @@
               "reference/market-commands",
               "reference/lending-and-yield-commands",
               "reference/bridge-and-swap-commands",
-              "reference/meta-commands"
+              "reference/wallet-and-meta-commands"
             ]
           },
           {

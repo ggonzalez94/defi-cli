@@ -62,5 +62,6 @@ If either is missing, bungee quotes use public backend.
 - Tempo Stablecoin DEX currently supports USD-denominated TIP-20 assets only; supported pairs are auto-routed on-chain through quote-token relationships.
 - Tempo DEX swap execution settles to the caller; `--recipient` must match `--from-address` (or be omitted).
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
-- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks. Requires the Tempo CLI installed.
+- `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys and expiry checks. Requires the Tempo CLI installed.
 - Moonwell uses on-chain RPC reads (no API key); supported on Base and Optimism. Execution targets mToken contracts (Compound v2 style); use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset. Moonwell does not support `--on-behalf-of`.
+- Moonwell's mWETH market auto-unwraps to native ETH on borrow/withdraw and may expect native ETH for supply/repay. The CLI planner uses the standard ERC-20 path (`approve` + call with `value=0`), so callers must handle ETH/WETH wrapping externally.

@@ -185,6 +185,7 @@ func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opt
 	expectedDEX := common.HexToAddress(dexAddr).Hex()
 
 	hasSwapCall := false
+	approveCount := 0
 	for i, call := range calls {
 		data, err := decodeHex(call.Data)
 		if err != nil {
@@ -196,6 +197,26 @@ func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opt
 		selector := data[:4]
 		switch {
 		case bytes.Equal(selector, policyApproveSelector):
+			approveCount++
+			if approveCount > 1 {
+				return clierr.New(clierr.CodeActionPlan, "tempo swap step contains more than one approve call")
+			}
+			// Approve must not send value.
+			if strings.TrimSpace(call.Value) != "" && strings.TrimSpace(call.Value) != "0" {
+				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d approve must have zero value", i))
+			}
+			// Approve target must be the action's input token. Reject if
+			// token_in metadata is missing — it is required for safe
+			// validation and its absence may indicate a tampered action.
+			if action != nil {
+				expectedToken := strings.TrimSpace(metadataString(action.Metadata, "token_in"))
+				if expectedToken == "" {
+					return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d cannot validate approve target: action missing token_in metadata", i))
+				}
+				if !strings.EqualFold(common.HexToAddress(call.Target).Hex(), common.HexToAddress(expectedToken).Hex()) {
+					return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d approve target does not match action input token", i))
+				}
+			}
 			// Validate spender and amount for approve calls.
 			args, abiErr := policyERC20ABI.Methods["approve"].Inputs.Unpack(data[4:])
 			if abiErr != nil || len(args) != 2 {

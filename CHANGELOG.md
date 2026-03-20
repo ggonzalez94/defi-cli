@@ -27,7 +27,7 @@ Format:
 - Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
 - Tempo native execution: `swap submit` now broadcasts Tempo type 0x76 transactions with fee-token payments and batched calls on Tempo mainnet, testnet, and devnet.
 - Batched approve+swap in a single atomic Tempo transaction (no separate approval step).
-- `--signer tempo` for agent wallet support via the Tempo CLI, with delegated access keys, spending limits, and expiry checks.
+- `--signer tempo` for agent wallet support via the Tempo CLI, with delegated access keys and expiry checks.
 - `--fee-token` flag for execution commands (Tempo-only, defaults to USDC.e on mainnet).
 - `actions estimate` now supports Tempo actions with fee-token-denominated gas estimates (`fee_unit`, `fee_token` fields).
 - `StepExecutor` interface for chain-specific execution; EVM path extracted unchanged, Tempo path added.
