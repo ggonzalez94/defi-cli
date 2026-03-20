@@ -612,15 +612,15 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 
 	// Parse phase 1 results and collect underlying addresses for phase 2.
 	type phase1Data struct {
-		mToken     common.Address
-		underlying common.Address
-		supplyRate *big.Int
-		borrowRate *big.Int
-		totalSupply *big.Int
-		exchangeRate *big.Int
-		totalBorrows *big.Int
-		cash         *big.Int
-		priceUSD     float64
+		mToken        common.Address
+		underlying    common.Address
+		supplyRate    *big.Int
+		borrowRate    *big.Int
+		totalSupply   *big.Int
+		exchangeRate  *big.Int
+		totalBorrows  *big.Int
+		cash          *big.Int
+		priceMantissa *big.Int
 	}
 	p1Parsed := make([]phase1Data, 0, len(mTokens))
 
@@ -647,56 +647,19 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 		exchangeRate := decodeUint256Result(r[4], mTokenABI, "exchangeRateCurrent")
 		totalBorrows := decodeUint256Result(r[5], mTokenABI, "totalBorrowsCurrent")
 		cash := decodeUint256Result(r[6], mTokenABI, "getCash")
-
-		var priceUSD float64
-		if r[7].Success && len(r[7].ReturnData) >= 32 {
-			pDec, pErr := oracleABI.Unpack("getUnderlyingPrice", r[7].ReturnData)
-			if pErr == nil && len(pDec) > 0 {
-				priceMantissa := asBigInt(pDec[0])
-				if priceMantissa.Sign() > 0 {
-					// Decimals unknown yet; store raw mantissa temporarily.
-					// We'll compute priceUSD after phase 2 when we have decimals.
-					priceUSD = -1 // sentinel: raw mantissa stored separately
-				}
-			}
-		}
-		_ = priceUSD
+		priceMantissa := decodeUint256Result(r[7], oracleABI, "getUnderlyingPrice")
 
 		p1Parsed = append(p1Parsed, phase1Data{
-			mToken:       mt,
-			underlying:   underlying,
-			supplyRate:   supplyRate,
-			borrowRate:   borrowRate,
-			totalSupply:  totalSupply,
-			exchangeRate: exchangeRate,
-			totalBorrows: totalBorrows,
-			cash:         cash,
+			mToken:        mt,
+			underlying:    underlying,
+			supplyRate:    supplyRate,
+			borrowRate:    borrowRate,
+			totalSupply:   totalSupply,
+			exchangeRate:  exchangeRate,
+			totalBorrows:  totalBorrows,
+			cash:          cash,
+			priceMantissa: priceMantissa,
 		})
-	}
-
-	// Store raw price mantissas separately — we need decimals from phase 2 to convert.
-	priceMantissas := make([]*big.Int, len(p1Parsed))
-	for i, p := range p1Parsed {
-		idx := -1
-		for j, mt := range mTokens {
-			if mt == p.mToken {
-				idx = j
-				break
-			}
-		}
-		if idx < 0 {
-			priceMantissas[i] = new(big.Int)
-			continue
-		}
-		r := phase1Results[idx*callsPerMarketPhase1+7]
-		if r.Success && len(r.ReturnData) >= 32 {
-			dec, err := oracleABI.Unpack("getUnderlyingPrice", r.ReturnData)
-			if err == nil && len(dec) > 0 {
-				priceMantissas[i] = asBigInt(dec[0])
-				continue
-			}
-		}
-		priceMantissas[i] = new(big.Int)
 	}
 
 	if len(p1Parsed) == 0 {
@@ -747,7 +710,7 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 		}
 
 		// Convert price mantissa to USD using decimals.
-		priceUSD := mantissaToUSD(priceMantissas[i], decimals)
+		priceUSD := mantissaToUSD(p.priceMantissa, decimals)
 
 		// TVL = totalSupply(mTokens) * exchangeRate / 1e18 → underlying units, then * priceUSD
 		underlyingTotal := new(big.Int).Mul(p.totalSupply, p.exchangeRate)
@@ -930,27 +893,6 @@ func callOracle(ctx context.Context, client *ethclient.Client, comptroller commo
 	}
 	return addr, nil
 }
-
-func callGetAccountSnapshot(ctx context.Context, client *ethclient.Client, mToken, account common.Address) (*big.Int, *big.Int, *big.Int, *big.Int, error) {
-	data, err := mTokenABI.Pack("getAccountSnapshot", account)
-	if err != nil {
-		return nil, nil, nil, nil, clierr.Wrap(clierr.CodeInternal, "pack getAccountSnapshot", err)
-	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &mToken, Data: data}, nil)
-	if err != nil {
-		return nil, nil, nil, nil, clierr.Wrap(clierr.CodeUnavailable, "call getAccountSnapshot", err)
-	}
-	decoded, err := mTokenABI.Unpack("getAccountSnapshot", out)
-	if err != nil || len(decoded) < 4 {
-		return nil, nil, nil, nil, clierr.Wrap(clierr.CodeUnavailable, "decode getAccountSnapshot", err)
-	}
-	errCode := asBigInt(decoded[0])
-	mTokenBal := asBigInt(decoded[1])
-	borrowBal := asBigInt(decoded[2])
-	exchangeRate := asBigInt(decoded[3])
-	return errCode, mTokenBal, borrowBal, exchangeRate, nil
-}
-
 
 // ── Utility helpers ─────────────────────────────────────────────────────
 

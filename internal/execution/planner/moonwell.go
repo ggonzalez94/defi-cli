@@ -312,6 +312,9 @@ func plannerExecMulticall3(ctx context.Context, client *ethclient.Client, calls 
 	if err != nil {
 		return nil, fmt.Errorf("unpack aggregate3: %w", err)
 	}
+	if len(dec) == 0 {
+		return nil, fmt.Errorf("empty aggregate3 response")
+	}
 	rawResults := dec[0].([]struct {
 		Success    bool   `json:"success"`
 		ReturnData []byte `json:"returnData"`

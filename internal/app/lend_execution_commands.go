@@ -120,7 +120,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Lending provider (aave|morpho)")
+	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Lending provider (aave|morpho|moonwell)")
 	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.AssetArg, "asset", "", "Asset symbol/address/CAIP-19")
 	planCmd.Flags().StringVar(&plan.MarketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")

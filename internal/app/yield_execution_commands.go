@@ -115,7 +115,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
 		},
 	}
-	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Yield provider (aave|morpho)")
+	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Yield provider (aave|morpho|moonwell)")
 	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.AssetArg, "asset", "", "Asset symbol/address/CAIP-19")
 	planCmd.Flags().StringVar(&plan.VaultAddress, "vault-address", "", "Morpho vault address (required for --provider morpho)")

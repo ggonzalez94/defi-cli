@@ -555,7 +555,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
 
-	var positionsProvider, positionsChain, positionsAddress, positionsAsset, positionsType string
+	var positionsProvider, positionsChain, positionsAddress, positionsAsset, positionsType, positionsRPCURL string
 	var positionsLimit int
 	positionsCmd := &cobra.Command{
 		Use:   "positions",
@@ -597,6 +597,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 				"asset":    chainAssetFilterCacheValue(asset, positionsAsset),
 				"type":     string(positionType),
 				"limit":    positionsLimit,
+				"rpc_url":  strings.TrimSpace(positionsRPCURL),
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
@@ -616,6 +617,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 					Asset:        asset,
 					PositionType: positionType,
 					Limit:        positionsLimit,
+					RPCURL:       strings.TrimSpace(positionsRPCURL),
 				})
 				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 				return data, statuses, nil, false, err
@@ -628,6 +630,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	positionsCmd.Flags().StringVar(&positionsAsset, "asset", "", "Optional asset filter (symbol/address/CAIP-19)")
 	positionsCmd.Flags().StringVar(&positionsType, "type", string(providers.LendPositionTypeAll), "Position type filter (all|supply|borrow|collateral)")
 	positionsCmd.Flags().IntVar(&positionsLimit, "limit", 20, "Maximum positions to return")
+	positionsCmd.Flags().StringVar(&positionsRPCURL, "rpc-url", "", "Optional RPC URL override used by providers that need on-chain reads")
 
 	root.AddCommand(marketsCmd)
 	root.AddCommand(ratesCmd)
@@ -1453,7 +1456,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	opportunitiesCmd.Flags().IntVar(&opportunitiesLimit, "limit", 20, "Maximum opportunities to return")
 	opportunitiesCmd.Flags().Float64Var(&opportunitiesMinTVL, "min-tvl-usd", 0, "Minimum TVL in USD")
 	opportunitiesCmd.Flags().Float64Var(&opportunitiesMinAPY, "min-apy", 0, "Minimum total APY percent")
-	opportunitiesCmd.Flags().StringVar(&opportunitiesProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
+	opportunitiesCmd.Flags().StringVar(&opportunitiesProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino,moonwell)")
 	opportunitiesCmd.Flags().StringVar(&opportunitiesSortArg, "sort", "apy_total", "Sort key (apy_total|tvl_usd|liquidity_usd)")
 	opportunitiesCmd.Flags().BoolVar(&opportunitiesIncludeIncomplete, "include-incomplete", false, "Include opportunities missing APY/TVL")
 	_ = opportunitiesCmd.MarkFlagRequired("chain")
@@ -1562,7 +1565,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 	positionsCmd.Flags().StringVar(&positionsChainArg, "chain", "", "Chain identifier")
 	positionsCmd.Flags().StringVar(&positionsAddressArg, "address", "", "Position owner address")
 	positionsCmd.Flags().StringVar(&positionsAssetArg, "asset", "", "Optional asset filter (symbol/address/CAIP-19)")
-	positionsCmd.Flags().StringVar(&positionsProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino)")
+	positionsCmd.Flags().StringVar(&positionsProvidersArg, "providers", "", "Filter by provider names (aave,morpho,kamino,moonwell)")
 	positionsCmd.Flags().IntVar(&positionsLimit, "limit", 20, "Maximum positions to return")
 	positionsCmd.Flags().StringVar(&positionsRPCURL, "rpc-url", "", "Optional RPC URL override used by providers that need on-chain valuation")
 	_ = positionsCmd.MarkFlagRequired("chain")
