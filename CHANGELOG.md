@@ -10,6 +10,15 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Added `--chain` filter to `protocols fees` and `protocols revenue` to filter by chain presence (e.g. `protocols fees --chain Ethereum`). Supports combined `--category` and `--chain` filtering, consistent with `dexes volume --chain` behavior.
+- Added `--chain` filter to `protocols top` to rank protocols by chain-specific TVL (e.g. `protocols top --chain Ethereum`). When specified, TVL reflects the protocol's value locked on that chain rather than total TVL. Supports combined `--category` and `--chain` filtering. Output now includes `chains` count.
+- Added `protocols revenue` command to rank protocols by 24h revenue (protocol-retained fees) with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama revenue API). Supports `--category` filter and `--limit`.
+- Added `dexes volume` command to rank DEXes by 24h trading volume with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama DEX volume API). Supports `--chain` filter for chain presence and `--limit`.
+- Added `protocols fees` command to rank protocols by 24h fee revenue with 7d/30d totals and 1d/7d/1m percentage changes (no API key required, uses DefiLlama fees API). Supports `--category` filter and `--limit`.
+- Added `stablecoins chains` command to rank chains by total stablecoin market cap with dominant peg type and CAIP-2 chain IDs (no API key required, uses DefiLlama stablecoin chains API). Supports `--limit`.
+- Added `stablecoins top` command to list top stablecoins by circulating market cap with price, chain count, and day/week/month supply changes (no API key required, uses DefiLlama stablecoins API). Supports `--peg-type` filter (e.g. `peggedUSD`, `peggedEUR`) and `--limit`.
+- Added `chains gas` command to query current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection (no keys required, bypasses cache, supports `--rpc-url` override). Accepts comma-separated chains for multi-chain batch queries with parallel RPC fetching and partial-result support.
+- Added `chains list` command to enumerate all supported chains with slugs, CAIP-2 identifiers, namespaces, and accepted aliases (no keys required, bypasses cache).
 - Added `wallet balance` command to query native or ERC-20 token balances by address and chain, using on-chain RPC calls (no API key required).
 - Cache auto-pruning: expired entries (past TTL + `max_stale`) are automatically deleted on startup to prevent unbounded `cache.db` growth.
 - Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.

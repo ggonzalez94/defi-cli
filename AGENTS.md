@@ -120,10 +120,11 @@ README.md                         # user-facing usage + caveats
 - `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
+- `chains gas` returns live EVM gas prices via RPC (EVM-only, no API key, bypasses cache); supports `--rpc-url` override and comma-separated `--chain` for parallel multi-chain queries (returns array; `--rpc-url` disallowed with multiple chains).
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
-- Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
+- Metadata commands (`version`, `schema`, `providers list`, `chains list`, `chains gas`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache initialization.
 - For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.

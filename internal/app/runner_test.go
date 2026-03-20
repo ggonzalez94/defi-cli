@@ -403,6 +403,62 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 }
 
+func TestRunnerChainsList(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"chains", "list", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+	var out []map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if len(out) == 0 {
+		t.Fatal("expected at least one chain in output")
+	}
+
+	// Verify each entry has required fields.
+	for _, item := range out {
+		if _, ok := item["name"].(string); !ok {
+			t.Fatalf("missing name field: %+v", item)
+		}
+		if _, ok := item["slug"].(string); !ok {
+			t.Fatalf("missing slug field: %+v", item)
+		}
+		if _, ok := item["caip2"].(string); !ok {
+			t.Fatalf("missing caip2 field: %+v", item)
+		}
+		if _, ok := item["namespace"].(string); !ok {
+			t.Fatalf("missing namespace field: %+v", item)
+		}
+	}
+
+	// Verify Ethereum is present.
+	var ethFound bool
+	for _, item := range out {
+		if item["slug"] == "ethereum" {
+			ethFound = true
+			if item["caip2"] != "eip155:1" {
+				t.Fatalf("expected ethereum caip2 eip155:1, got %v", item["caip2"])
+			}
+			if item["namespace"] != "eip155" {
+				t.Fatalf("expected eip155 namespace, got %v", item["namespace"])
+			}
+		}
+	}
+	if !ethFound {
+		t.Fatal("expected ethereum in chains list output")
+	}
+}
+
+func TestRunnerChainsListBypassesCache(t *testing.T) {
+	if shouldOpenCache("chains list") {
+		t.Fatal("chains list should bypass cache initialization")
+	}
+}
+
 func TestRunnerErrorEnvelopeIgnoresResultsOnly(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -599,6 +655,120 @@ func TestRunnerProtocolsCategories(t *testing.T) {
 	}
 	if _, ok := first["tvl_usd"]; !ok {
 		t.Fatalf("expected 'tvl_usd' field in category, got %+v", first)
+	}
+}
+
+func TestRunnerProtocolsFees(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		marketProvider: fakeMarketProvider{
+			protocolFees: []model.ProtocolFees{
+				{Rank: 1, Protocol: "Lido", Category: "Liquid Staking", Fees24hUSD: 8000000, Fees7dUSD: 55000000, Fees30dUSD: 200000000, Chains: 1},
+			},
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newProtocolsCommand())
+	root.SetArgs([]string{"protocols", "fees"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected protocols fees command success, err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if env["success"] != true {
+		t.Fatalf("expected success=true, got %v", env["success"])
+	}
+	data, ok := env["data"].([]any)
+	if !ok {
+		t.Fatalf("expected data to be an array, got %T", env["data"])
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected non-empty fees list")
+	}
+	first, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first item to be object, got %T", data[0])
+	}
+	if _, ok := first["protocol"]; !ok {
+		t.Fatalf("expected 'protocol' field, got %+v", first)
+	}
+	if _, ok := first["fees_24h_usd"]; !ok {
+		t.Fatalf("expected 'fees_24h_usd' field, got %+v", first)
+	}
+}
+
+func TestRunnerProtocolsRevenue(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	state := &runtimeState{
+		runner: &Runner{
+			stdout: &stdout,
+			stderr: &stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:   "json",
+			Timeout:      2 * time.Second,
+			CacheEnabled: false,
+		},
+		marketProvider: fakeMarketProvider{
+			protocolRevenue: []model.ProtocolRevenue{
+				{Rank: 1, Protocol: "Lido", Category: "Liquid Staking", Revenue24hUSD: 5000000, Revenue7dUSD: 35000000, Revenue30dUSD: 130000000, Chains: 1},
+			},
+		},
+	}
+	root := &cobra.Command{Use: "defi"}
+	root.SilenceUsage = true
+	root.SilenceErrors = true
+	root.SetOut(&stdout)
+	root.SetErr(&stderr)
+	root.AddCommand(state.newProtocolsCommand())
+	root.SetArgs([]string{"protocols", "revenue"})
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected protocols revenue command success, err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse output json: %v output=%s", err, stdout.String())
+	}
+	if env["success"] != true {
+		t.Fatalf("expected success=true, got %v", env["success"])
+	}
+	data, ok := env["data"].([]any)
+	if !ok {
+		t.Fatalf("expected data to be an array, got %T", env["data"])
+	}
+	if len(data) == 0 {
+		t.Fatalf("expected non-empty revenue list")
+	}
+	first, ok := data[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected first item to be object, got %T", data[0])
+	}
+	if _, ok := first["protocol"]; !ok {
+		t.Fatalf("expected 'protocol' field, got %+v", first)
+	}
+	if _, ok := first["revenue_24h_usd"]; !ok {
+		t.Fatalf("expected 'revenue_24h_usd' field, got %+v", first)
 	}
 }
 
@@ -1469,6 +1639,8 @@ type fakeMarketProvider struct {
 	categories          []model.ProtocolCategory
 	chainAssets         []model.ChainAssetTVL
 	expectedAssetSymbol string
+	protocolFees        []model.ProtocolFees
+	protocolRevenue     []model.ProtocolRevenue
 }
 
 func (f fakeMarketProvider) Info() model.ProviderInfo {
@@ -1494,12 +1666,32 @@ func (f fakeMarketProvider) ChainsAssets(ctx context.Context, chain id.Chain, as
 	return f.chainAssets, nil
 }
 
-func (f fakeMarketProvider) ProtocolsTop(context.Context, string, int) ([]model.ProtocolTVL, error) {
+func (f fakeMarketProvider) ProtocolsTop(context.Context, string, string, int) ([]model.ProtocolTVL, error) {
 	return nil, nil
 }
 
 func (f fakeMarketProvider) ProtocolsCategories(context.Context) ([]model.ProtocolCategory, error) {
 	return f.categories, nil
+}
+
+func (f fakeMarketProvider) StablecoinsTop(context.Context, string, int) ([]model.Stablecoin, error) {
+	return nil, nil
+}
+
+func (f fakeMarketProvider) StablecoinChains(context.Context, int) ([]model.StablecoinChain, error) {
+	return nil, nil
+}
+
+func (f fakeMarketProvider) ProtocolsFees(context.Context, string, string, int) ([]model.ProtocolFees, error) {
+	return f.protocolFees, nil
+}
+
+func (f fakeMarketProvider) ProtocolsRevenue(context.Context, string, string, int) ([]model.ProtocolRevenue, error) {
+	return f.protocolRevenue, nil
+}
+
+func (f fakeMarketProvider) DexesVolume(context.Context, string, int) ([]model.DexVolume, error) {
+	return nil, nil
 }
 
 type fakeSwapProvider struct {

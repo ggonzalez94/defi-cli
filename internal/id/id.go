@@ -709,3 +709,35 @@ func KnownToken(chainID, symbol string) (Token, bool) {
 func LookupByAddress(chainID, address string) (Token, bool) {
 	return findTokenByAddress(chainID, canonicalizeAddress(chainID, address))
 }
+
+// ListChains returns all unique supported chains sorted by CAIP-2 identifier.
+// Each chain includes its canonical aliases (excluding the primary slug).
+func ListChains() []ChainEntry {
+	seen := make(map[string]*ChainEntry, len(chainByCAIP2))
+	for slug, chain := range chainBySlug {
+		entry, ok := seen[chain.CAIP2]
+		if !ok {
+			e := ChainEntry{Chain: chain}
+			seen[chain.CAIP2] = &e
+			entry = &e
+		}
+		if slug != chain.Slug {
+			entry.Aliases = append(entry.Aliases, slug)
+		}
+	}
+	entries := make([]ChainEntry, 0, len(seen))
+	for _, e := range seen {
+		sort.Strings(e.Aliases)
+		entries = append(entries, *e)
+	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Chain.CAIP2 < entries[j].Chain.CAIP2
+	})
+	return entries
+}
+
+// ChainEntry is a chain with its accepted aliases.
+type ChainEntry struct {
+	Chain   Chain
+	Aliases []string
+}

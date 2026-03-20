@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math/big"
 	"os"
 	"sort"
 	"strconv"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ggonzalez94/defi-cli/internal/cache"
 	"github.com/ggonzalez94/defi-cli/internal/config"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -22,6 +24,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/out"
@@ -247,6 +250,8 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 	cmd.AddCommand(s.newProvidersCommand())
 	cmd.AddCommand(s.newChainsCommand())
 	cmd.AddCommand(s.newProtocolsCommand())
+	cmd.AddCommand(s.newDexesCommand())
+	cmd.AddCommand(s.newStablecoinsCommand())
 	cmd.AddCommand(s.newAssetsCommand())
 	cmd.AddCommand(s.newLendCommand())
 	cmd.AddCommand(s.newRewardsCommand())
@@ -318,6 +323,30 @@ func (s *runtimeState) newProvidersCommand() *cobra.Command {
 
 func (s *runtimeState) newChainsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "chains", Short: "Chain market data"}
+
+	listCmd := &cobra.Command{
+		Use:   "list",
+		Short: "List all supported chains with aliases (no keys required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			entries := id.ListChains()
+			result := make([]model.SupportedChain, 0, len(entries))
+			for _, e := range entries {
+				result = append(result, model.SupportedChain{
+					Name:       e.Chain.Name,
+					Slug:       e.Chain.Slug,
+					CAIP2:      e.Chain.CAIP2,
+					Namespace:  e.Chain.Namespace(),
+					EVMChainID: e.Chain.EVMChainID,
+					Aliases:    e.Aliases,
+				})
+			}
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), result, nil, cacheMetaBypass(), nil, false)
+		},
+	}
+	listResponse := schema.SchemaFromType([]model.SupportedChain{})
+	_ = schema.SetCommandMetadata(listCmd, schema.CommandMetadata{Response: &listResponse})
+	root.AddCommand(listCmd)
+
 	var limit int
 	topCmd := &cobra.Command{
 		Use:   "top",
@@ -382,6 +411,107 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 	})
 	root.AddCommand(assetsCmd)
 
+	var gasChainArg string
+	var gasRPCURL string
+	gasCmd := &cobra.Command{
+		Use:   "gas",
+		Short: "Current gas prices for one or more EVM chains (no keys required)",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			rawChains := strings.Split(gasChainArg, ",")
+			var chainArgs []string
+			for _, c := range rawChains {
+				c = strings.TrimSpace(c)
+				if c != "" {
+					chainArgs = append(chainArgs, c)
+				}
+			}
+			if len(chainArgs) == 0 {
+				return clierr.New(clierr.CodeUsage, "at least one chain is required")
+			}
+
+			if len(chainArgs) > 1 && strings.TrimSpace(gasRPCURL) != "" {
+				return clierr.New(clierr.CodeUsage, "--rpc-url cannot be used with multiple chains")
+			}
+
+			// Parse and validate all chains up front.
+			type chainEntry struct {
+				chain  id.Chain
+				rpcURL string
+			}
+			entries := make([]chainEntry, 0, len(chainArgs))
+			for _, raw := range chainArgs {
+				chain, err := id.ParseChain(raw)
+				if err != nil {
+					return err
+				}
+				if chain.Namespace() != "eip155" {
+					return clierr.New(clierr.CodeUnsupported, "chains gas is only supported for EVM chains: "+raw)
+				}
+				rpcURL, err := registry.ResolveRPCURL(gasRPCURL, chain.EVMChainID)
+				if err != nil {
+					return clierr.Wrap(clierr.CodeUnavailable, "resolve rpc for "+raw, err)
+				}
+				entries = append(entries, chainEntry{chain: chain, rpcURL: rpcURL})
+			}
+
+			ctx, cancel := context.WithTimeout(cmd.Context(), s.settings.Timeout)
+			defer cancel()
+
+			// Single chain: still returns a one-element array for consistent schema.
+			if len(entries) == 1 {
+				result, err := fetchGasPrice(ctx, entries[0].chain, entries[0].rpcURL, s.runner.now)
+				if err != nil {
+					return err
+				}
+				return s.emitSuccess(trimRootPath(cmd.CommandPath()), []model.GasPrice{result}, nil, cacheMetaBypass(), nil, false)
+			}
+
+			// Multiple chains: fetch in parallel, preserve input order.
+			type gasResult struct {
+				price model.GasPrice
+				err   error
+			}
+			slots := make([]gasResult, len(entries))
+			done := make(chan int, len(entries))
+			for i, e := range entries {
+				go func(idx int, entry chainEntry) {
+					price, err := fetchGasPrice(ctx, entry.chain, entry.rpcURL, s.runner.now)
+					slots[idx] = gasResult{price: price, err: err}
+					done <- idx
+				}(i, e)
+			}
+			for range entries {
+				<-done
+			}
+
+			prices := make([]model.GasPrice, 0, len(entries))
+			var warnings []string
+			for i, r := range slots {
+				if r.err != nil {
+					warnings = append(warnings, fmt.Sprintf("chain %s: %s", entries[i].chain.CAIP2, r.err.Error()))
+					continue
+				}
+				prices = append(prices, r.price)
+			}
+
+			if len(prices) == 0 {
+				return clierr.New(clierr.CodeUnavailable, "all chains failed; "+strings.Join(warnings, "; "))
+			}
+
+			partial := len(warnings) > 0
+			if partial && s.settings.Strict {
+				return clierr.New(clierr.CodePartialStrict, "partial gas results in strict mode; failures: "+strings.Join(warnings, "; "))
+			}
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), prices, warnings, cacheMetaBypass(), nil, partial)
+		},
+	}
+	gasCmd.Flags().StringVar(&gasChainArg, "chain", "", "Chain id/name/CAIP-2 (comma-separated for multiple)")
+	gasCmd.Flags().StringVar(&gasRPCURL, "rpc-url", "", "RPC URL override (single chain only)")
+	_ = gasCmd.MarkFlagRequired("chain")
+	gasResponse := schema.SchemaFromType([]model.GasPrice{})
+	_ = schema.SetCommandMetadata(gasCmd, schema.CommandMetadata{Response: &gasResponse})
+	root.AddCommand(gasCmd)
+
 	return root
 }
 
@@ -389,15 +519,16 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	root := &cobra.Command{Use: "protocols", Short: "Protocol market data"}
 	var limit int
 	var category string
+	var chain string
 	cmd := &cobra.Command{
 		Use:   "top",
 		Short: "Top protocols by TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			req := map[string]any{"category": category, "limit": limit}
+			req := map[string]any{"category": category, "chain": chain, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
 			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
 				start := time.Now()
-				data, err := s.marketProvider.ProtocolsTop(ctx, category, limit)
+				data, err := s.marketProvider.ProtocolsTop(ctx, category, chain, limit)
 				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 				return data, status, nil, false, err
 			})
@@ -405,6 +536,7 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of protocols to return")
 	cmd.Flags().StringVar(&category, "category", "", "Filter by protocol category (e.g. lending)")
+	cmd.Flags().StringVar(&chain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
 	root.AddCommand(cmd)
 
 	catCmd := &cobra.Command{
@@ -421,6 +553,118 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		},
 	}
 	root.AddCommand(catCmd)
+
+	var feesLimit int
+	var feesCategory string
+	var feesChain string
+	feesCmd := &cobra.Command{
+		Use:   "fees",
+		Short: "Top protocols by 24h fees",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"category": feesCategory, "chain": feesChain, "limit": feesLimit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ProtocolsFees(ctx, feesCategory, feesChain, feesLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	feesCmd.Flags().IntVar(&feesLimit, "limit", 20, "Number of protocols to return")
+	feesCmd.Flags().StringVar(&feesCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
+	feesCmd.Flags().StringVar(&feesChain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
+	root.AddCommand(feesCmd)
+
+	var revLimit int
+	var revCategory string
+	var revChain string
+	revCmd := &cobra.Command{
+		Use:   "revenue",
+		Short: "Top protocols by 24h revenue",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"category": revCategory, "chain": revChain, "limit": revLimit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.ProtocolsRevenue(ctx, revCategory, revChain, revLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	revCmd.Flags().IntVar(&revLimit, "limit", 20, "Number of protocols to return")
+	revCmd.Flags().StringVar(&revCategory, "category", "", "Filter by protocol category (e.g. Dexs, Lending)")
+	revCmd.Flags().StringVar(&revChain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
+	root.AddCommand(revCmd)
+
+	return root
+}
+
+func (s *runtimeState) newDexesCommand() *cobra.Command {
+	root := &cobra.Command{Use: "dexes", Short: "DEX market data"}
+	var limit int
+	var chain string
+	volCmd := &cobra.Command{
+		Use:   "volume",
+		Short: "Top DEXes by 24h trading volume",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"chain": chain, "limit": limit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.DexesVolume(ctx, chain, limit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	volCmd.Flags().IntVar(&limit, "limit", 20, "Number of DEXes to return")
+	volCmd.Flags().StringVar(&chain, "chain", "", "Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon)")
+	root.AddCommand(volCmd)
+
+	return root
+}
+
+func (s *runtimeState) newStablecoinsCommand() *cobra.Command {
+	root := &cobra.Command{Use: "stablecoins", Short: "Stablecoin market data"}
+	var limit int
+	var pegType string
+	cmd := &cobra.Command{
+		Use:   "top",
+		Short: "Top stablecoins by circulating market cap",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"peg_type": pegType, "limit": limit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.StablecoinsTop(ctx, pegType, limit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	cmd.Flags().IntVar(&limit, "limit", 20, "Number of stablecoins to return")
+	cmd.Flags().StringVar(&pegType, "peg-type", "", "Filter by peg type (e.g. peggedUSD, peggedEUR)")
+	root.AddCommand(cmd)
+
+	var chainsLimit int
+	chainsCmd := &cobra.Command{
+		Use:   "chains",
+		Short: "Chains ranked by total stablecoin market cap",
+		RunE: func(cmd *cobra.Command, args []string) error {
+			req := map[string]any{"limit": chainsLimit}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				start := time.Now()
+				data, err := s.marketProvider.StablecoinChains(ctx, chainsLimit)
+				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				return data, status, nil, false, err
+			})
+		},
+	}
+	chainsCmd.Flags().IntVar(&chainsLimit, "limit", 20, "Number of chains to return")
+	root.AddCommand(chainsCmd)
 
 	return root
 }
@@ -2317,6 +2561,57 @@ func chainAssetFilterCacheValue(asset id.Asset, rawInput string) string {
 	return "raw:" + strings.ToUpper(strings.TrimSpace(rawInput))
 }
 
+func fetchGasPrice(ctx context.Context, chain id.Chain, rpcURL string, now func() time.Time) (model.GasPrice, error) {
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return model.GasPrice{}, clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
+	}
+	defer client.Close()
+
+	header, err := client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return model.GasPrice{}, clierr.Wrap(clierr.CodeUnavailable, "fetch block header", err)
+	}
+
+	gasPrice, err := client.SuggestGasPrice(ctx)
+	if err != nil {
+		return model.GasPrice{}, clierr.Wrap(clierr.CodeUnavailable, "fetch gas price", err)
+	}
+
+	eip1559 := header.BaseFee != nil
+	var baseFee, priorityFee *big.Int
+	if eip1559 {
+		baseFee = header.BaseFee
+		priorityFee, err = client.SuggestGasTipCap(ctx)
+		if err != nil {
+			priorityFee = new(big.Int)
+		}
+	}
+
+	result := model.GasPrice{
+		ChainID:     chain.CAIP2,
+		ChainName:   chain.Name,
+		BlockNumber: header.Number.Int64(),
+		EIP1559:     eip1559,
+		GasPriceGwei: weiToGwei(gasPrice),
+		FetchedAt:   now().UTC().Format(time.RFC3339),
+	}
+	if eip1559 {
+		result.BaseFeeGwei = weiToGwei(baseFee)
+		result.PriorityFeeGwei = weiToGwei(priorityFee)
+	}
+	return result, nil
+}
+
+func weiToGwei(wei *big.Int) string {
+	if wei == nil {
+		return "0"
+	}
+	gwei := new(big.Float).SetInt(wei)
+	gwei.Quo(gwei, big.NewFloat(1e9))
+	return gwei.Text('f', 6)
+}
+
 func cacheKey(commandPath string, req any) string {
 	buf, _ := json.Marshal(req)
 	prefix := []byte(commandPath + "|" + cachePayloadSchemaVersion + "|")
@@ -2438,7 +2733,7 @@ func staleFallbackAllowed(err error) bool {
 func shouldOpenCache(commandPath string) bool {
 	path := normalizeCommandPath(commandPath)
 	switch path {
-	case "", "version", "schema", "providers", "providers list":
+	case "", "version", "schema", "providers", "providers list", "chains list", "chains gas":
 		return false
 	}
 	if isExecutionCommandPath(path) {
