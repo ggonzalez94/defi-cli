@@ -50,17 +50,35 @@ Auth: requires `DEFI_DEFILLAMA_API_KEY`.
 
 Reason: `chains assets` is backed by a DefiLlama endpoint that is provider-gated.
 
+## `chains gas`
+
+Current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection. EVM-only; bypasses cache.
+
+```bash
+defi chains gas --chain 1 --results-only
+defi chains gas --chain 1,10,137,8453,42161 --results-only
+```
+
+Flags:
+
+- `--chain string` (required; comma-separated for multiple chains)
+- `--rpc-url string` (optional; single chain only)
+
+No API key required. Multi-chain queries run in parallel and return an array with partial-result support.
+
 ## `protocols top`
 
-Top protocols by TVL.
+Top protocols by TVL. When `--chain` is specified, TVL reflects the protocol's value locked on that chain rather than total TVL.
 
 ```bash
 defi protocols top --category lending --limit 20 --results-only
+defi protocols top --chain Ethereum --limit 10 --results-only
 ```
 
 Flags:
 
 - `--category string` (optional)
+- `--chain string` (optional, filter by chain presence; uses chain-specific TVL for ranking)
 - `--limit int` (default `20`)
 
 ## `protocols categories`
@@ -78,14 +96,34 @@ Top protocols by 24h fee revenue. Includes 7d/30d totals and 1d/7d/1m percentage
 ```bash
 defi protocols fees --limit 10 --results-only
 defi protocols fees --category Dexs --limit 20 --results-only
+defi protocols fees --chain Ethereum --limit 10 --results-only
 ```
 
 Flags:
 
 - `--limit int` (default `20`)
 - `--category string` (optional filter, e.g. `Dexs`, `Lending`)
+- `--chain string` (optional filter by chain presence, e.g. `Ethereum`, `Arbitrum`)
 
 No API key required; data sourced from DefiLlama fees API.
+
+## `protocols revenue`
+
+Top protocols by 24h revenue (protocol-retained fees, excluding LP/validator earnings). Includes 7d/30d totals and 1d/7d/1m percentage changes.
+
+```bash
+defi protocols revenue --limit 10 --results-only
+defi protocols revenue --category Dexs --limit 20 --results-only
+defi protocols revenue --chain Ethereum --limit 10 --results-only
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+- `--category string` (optional filter, e.g. `Dexs`, `Lending`)
+- `--chain string` (optional filter by chain presence, e.g. `Ethereum`, `Arbitrum`)
+
+No API key required; data sourced from DefiLlama revenue API.
 
 ## `dexes volume`
 
@@ -118,6 +156,21 @@ Flags:
 - `--peg-type string` (optional filter, e.g. `peggedUSD`, `peggedEUR`)
 
 No API key required; data sourced from DefiLlama stablecoins API.
+
+## `stablecoins chains`
+
+Chains ranked by total stablecoin market cap with dominant peg type and CAIP-2 chain IDs.
+
+```bash
+defi stablecoins chains --limit 10 --results-only
+defi stablecoins chains --limit 10 --results-only --select rank,chain,circulating_usd
+```
+
+Flags:
+
+- `--limit int` (default `20`)
+
+No API key required; data sourced from DefiLlama stablecoin chains API.
 
 ## `assets resolve`
 

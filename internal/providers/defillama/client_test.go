@@ -462,6 +462,46 @@ func TestStablecoinsTopFiltersByPegType(t *testing.T) {
 	}
 }
 
+func TestStablecoinsTopNonUSDPegCirculating(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/stablecoins", func(w http.ResponseWriter, r *http.Request) {
+		// DefiLlama uses peg-specific keys: peggedEUR for EUR stablecoins.
+		_, _ = w.Write([]byte(`{
+			"peggedAssets":[
+				{"name":"STASIS EURO","symbol":"EURS","pegType":"peggedEUR","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedEUR":100000000},"circulatingPrevDay":{"peggedEUR":99000000},
+				 "circulatingPrevWeek":{"peggedEUR":98000000},"circulatingPrevMonth":{"peggedEUR":95000000},
+				 "chains":["Ethereum"],"price":1.1},
+				{"name":"Tether","symbol":"USDT","pegType":"peggedUSD","pegMechanism":"fiat-backed",
+				 "circulating":{"peggedUSD":50000000},"circulatingPrevDay":{"peggedUSD":49000000},
+				 "circulatingPrevWeek":{"peggedUSD":48000000},"circulatingPrevMonth":{"peggedUSD":47000000},
+				 "chains":["Ethereum"],"price":1.0}
+			]
+		}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	c := New(httpx.New(2*time.Second, 0), "")
+	c.stablecoinsAPIURL = srv.URL
+
+	items, err := c.StablecoinsTop(context.Background(), "", 0)
+	if err != nil {
+		t.Fatalf("StablecoinsTop failed: %v", err)
+	}
+	if len(items) != 2 {
+		t.Fatalf("expected 2 items, got %d", len(items))
+	}
+	// EUR stablecoin should sort first (100M > 50M) and have correct circulating value.
+	if items[0].Symbol != "EURS" || items[0].CirculatingUSD != 100000000 {
+		t.Fatalf("expected EURS first with circulating 100000000, got %+v", items[0])
+	}
+	expectedDayChange := 100000000.0 - 99000000.0
+	if items[0].DayChangeUSD != expectedDayChange {
+		t.Fatalf("expected day change %f for EUR stablecoin, got %f", expectedDayChange, items[0].DayChangeUSD)
+	}
+}
+
 func TestStablecoinsTopNullPrice(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/stablecoins", func(w http.ResponseWriter, r *http.Request) {

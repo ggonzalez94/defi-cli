@@ -343,31 +343,10 @@ func (c *Client) ProtocolsFees(ctx context.Context, category string, chain strin
 		return nil, err
 	}
 
-	normCategory := strings.ToLower(strings.TrimSpace(category))
-	normChain := strings.ToLower(strings.TrimSpace(chain))
-	filtered := make([]feesProtocolResp, 0, len(resp.Protocols))
-	for _, p := range resp.Protocols {
-		if p.Total24h == nil || *p.Total24h <= 0 {
-			continue
-		}
-		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
-			continue
-		}
-		if normChain != "" && !containsChain(p.Chains, normChain) {
-			continue
-		}
-		filtered = append(filtered, p)
-	}
+	filtered := filterFeesProtocols(resp.Protocols, category, chain)
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
-	})
-	if limit <= 0 || limit > len(filtered) {
-		limit = len(filtered)
-	}
-
-	out := make([]model.ProtocolFees, 0, limit)
-	for i := 0; i < limit; i++ {
+	out := make([]model.ProtocolFees, 0, capLimit(limit, len(filtered)))
+	for i := 0; i < capLimit(limit, len(filtered)); i++ {
 		item := filtered[i]
 		out = append(out, model.ProtocolFees{
 			Rank:        i + 1,
@@ -396,31 +375,10 @@ func (c *Client) ProtocolsRevenue(ctx context.Context, category string, chain st
 		return nil, err
 	}
 
-	normCategory := strings.ToLower(strings.TrimSpace(category))
-	normChain := strings.ToLower(strings.TrimSpace(chain))
-	filtered := make([]feesProtocolResp, 0, len(resp.Protocols))
-	for _, p := range resp.Protocols {
-		if p.Total24h == nil || *p.Total24h <= 0 {
-			continue
-		}
-		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
-			continue
-		}
-		if normChain != "" && !containsChain(p.Chains, normChain) {
-			continue
-		}
-		filtered = append(filtered, p)
-	}
+	filtered := filterFeesProtocols(resp.Protocols, category, chain)
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
-	})
-	if limit <= 0 || limit > len(filtered) {
-		limit = len(filtered)
-	}
-
-	out := make([]model.ProtocolRevenue, 0, limit)
-	for i := 0; i < limit; i++ {
+	out := make([]model.ProtocolRevenue, 0, capLimit(limit, len(filtered)))
+	for i := 0; i < capLimit(limit, len(filtered)); i++ {
 		item := filtered[i]
 		out = append(out, model.ProtocolRevenue{
 			Rank:          i + 1,
@@ -438,19 +396,36 @@ func (c *Client) ProtocolsRevenue(ctx context.Context, category string, chain st
 	return out, nil
 }
 
-type dexProtocolResp struct {
-	Name     string   `json:"name"`
-	Total24h *float64 `json:"total24h"`
-	Total7d  *float64 `json:"total7d"`
-	Total30d *float64 `json:"total30d"`
-	Change1d *float64 `json:"change_1d"`
-	Change7d *float64 `json:"change_7d"`
-	Change1m *float64 `json:"change_1m"`
-	Chains   []string `json:"chains"`
+// filterFeesProtocols filters protocols by positive 24h value, optional category,
+// and optional chain presence, then sorts descending by 24h total.
+func filterFeesProtocols(protocols []feesProtocolResp, category, chain string) []feesProtocolResp {
+	normCategory := strings.ToLower(strings.TrimSpace(category))
+	normChain := strings.ToLower(strings.TrimSpace(chain))
+	filtered := make([]feesProtocolResp, 0, len(protocols))
+	for _, p := range protocols {
+		if p.Total24h == nil || *p.Total24h <= 0 {
+			continue
+		}
+		if normCategory != "" && strings.ToLower(p.Category) != normCategory {
+			continue
+		}
+		if normChain != "" && !containsChain(p.Chains, normChain) {
+			continue
+		}
+		filtered = append(filtered, p)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
+	})
+	return filtered
 }
 
-type dexOverviewResp struct {
-	Protocols []dexProtocolResp `json:"protocols"`
+// capLimit returns the effective limit, capping at total when limit is <= 0.
+func capLimit(limit, total int) int {
+	if limit <= 0 || limit > total {
+		return total
+	}
+	return limit
 }
 
 func (c *Client) DexesVolume(ctx context.Context, chain string, limit int) ([]model.DexVolume, error) {
@@ -459,32 +434,15 @@ func (c *Client) DexesVolume(ctx context.Context, chain string, limit int) ([]mo
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeInternal, "build dex volume request", err)
 	}
-	var resp dexOverviewResp
+	var resp feesOverviewResp
 	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
 		return nil, err
 	}
 
-	normChain := strings.ToLower(strings.TrimSpace(chain))
-	filtered := make([]dexProtocolResp, 0, len(resp.Protocols))
-	for _, p := range resp.Protocols {
-		if p.Total24h == nil || *p.Total24h <= 0 {
-			continue
-		}
-		if normChain != "" && !containsChain(p.Chains, normChain) {
-			continue
-		}
-		filtered = append(filtered, p)
-	}
+	filtered := filterFeesProtocols(resp.Protocols, "", chain)
 
-	sort.Slice(filtered, func(i, j int) bool {
-		return valOrZero(filtered[i].Total24h) > valOrZero(filtered[j].Total24h)
-	})
-	if limit <= 0 || limit > len(filtered) {
-		limit = len(filtered)
-	}
-
-	out := make([]model.DexVolume, 0, limit)
-	for i := 0; i < limit; i++ {
+	out := make([]model.DexVolume, 0, capLimit(limit, len(filtered)))
+	for i := 0; i < capLimit(limit, len(filtered)); i++ {
 		item := filtered[i]
 		out = append(out, model.DexVolume{
 			Rank:         i + 1,
@@ -523,8 +481,16 @@ type stablecoinResp struct {
 	Price          *float64         `json:"price"`
 }
 
-type peggedAmount struct {
-	PeggedUSD float64 `json:"peggedUSD"`
+// peggedAmount is a map keyed by peg type (e.g. "peggedUSD", "peggedEUR").
+// DefiLlama uses peg-specific keys, so we sum all values for the total.
+type peggedAmount map[string]float64
+
+func (p peggedAmount) total() float64 {
+	var sum float64
+	for _, v := range p {
+		sum += v
+	}
+	return sum
 }
 
 type stablecoinsEnvelope struct {
@@ -552,7 +518,7 @@ func (c *Client) StablecoinsTop(ctx context.Context, pegType string, limit int) 
 	}
 
 	sort.Slice(filtered, func(i, j int) bool {
-		return filtered[i].Circulating.PeggedUSD > filtered[j].Circulating.PeggedUSD
+		return filtered[i].Circulating.total() > filtered[j].Circulating.total()
 	})
 	if limit <= 0 || limit > len(filtered) {
 		limit = len(filtered)
@@ -571,12 +537,12 @@ func (c *Client) StablecoinsTop(ctx context.Context, pegType string, limit int) 
 			Symbol:         item.Symbol,
 			PegType:        item.PegType,
 			PegMechanism:   item.PegMechanism,
-			CirculatingUSD: item.Circulating.PeggedUSD,
+			CirculatingUSD: item.Circulating.total(),
 			Price:          price,
 			Chains:         len(item.Chains),
-			DayChangeUSD:   item.Circulating.PeggedUSD - item.CircPrevDay.PeggedUSD,
-			WeekChangeUSD:  item.Circulating.PeggedUSD - item.CircPrevWeek.PeggedUSD,
-			MonthChangeUSD: item.Circulating.PeggedUSD - item.CircPrevMonth.PeggedUSD,
+			DayChangeUSD:   item.Circulating.total() - item.CircPrevDay.total(),
+			WeekChangeUSD:  item.Circulating.total() - item.CircPrevWeek.total(),
+			MonthChangeUSD: item.Circulating.total() - item.CircPrevMonth.total(),
 		})
 	}
 	return out, nil
