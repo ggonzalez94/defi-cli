@@ -131,8 +131,10 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 			if cmd.Name() == "help" {
 				return nil
 			}
-			if err := normalizeAndValidateCommandFlags(cmd); err != nil {
-				return err
+			if !commandUsesStructuredInput(cmd) {
+				if err := normalizeAndValidateCommandFlags(cmd); err != nil {
+					return err
+				}
 			}
 			settings, err := config.Load(s.flags)
 			if err != nil {
@@ -208,7 +210,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 			}
 
 			if settings.CacheEnabled && shouldOpenCache(path) && s.cache == nil {
-				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
+				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath, settings.MaxStale)
 				if err != nil {
 					// Cache should be best-effort; continue without it if initialization fails.
 					s.settings.CacheEnabled = false
@@ -259,6 +261,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 	cmd.AddCommand(s.newTransferCommand())
 	cmd.AddCommand(s.newActionsCommand())
 	cmd.AddCommand(s.newYieldCommand())
+	cmd.AddCommand(s.newWalletCommand())
 	cmd.AddCommand(newVersionCommand())
 
 	return cmd
@@ -755,6 +758,9 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
 	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
 	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
+	_ = marketsCmd.MarkFlagRequired("provider")
+	_ = marketsCmd.MarkFlagRequired("chain")
+	_ = marketsCmd.MarkFlagRequired("asset")
 
 	var ratesProvider, ratesChain, ratesAsset string
 	var ratesLimit int
@@ -793,6 +799,9 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
 	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
 	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
+	_ = ratesCmd.MarkFlagRequired("provider")
+	_ = ratesCmd.MarkFlagRequired("chain")
+	_ = ratesCmd.MarkFlagRequired("asset")
 
 	var positionsProvider, positionsChain, positionsAddress, positionsAsset, positionsType string
 	var positionsLimit int
@@ -867,6 +876,9 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 	positionsCmd.Flags().StringVar(&positionsAsset, "asset", "", "Optional asset filter (symbol/address/CAIP-19)")
 	positionsCmd.Flags().StringVar(&positionsType, "type", string(providers.LendPositionTypeAll), "Position type filter (all|supply|borrow|collateral)")
 	positionsCmd.Flags().IntVar(&positionsLimit, "limit", 20, "Maximum positions to return")
+	_ = positionsCmd.MarkFlagRequired("provider")
+	_ = positionsCmd.MarkFlagRequired("chain")
+	_ = positionsCmd.MarkFlagRequired("address")
 
 	root.AddCommand(marketsCmd)
 	root.AddCommand(ratesCmd)

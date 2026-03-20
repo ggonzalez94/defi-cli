@@ -301,3 +301,72 @@ func TestValidateBridgePolicyEndpointGuard(t *testing.T) {
 		t.Fatalf("expected unsafe provider override to pass, got err=%v", err)
 	}
 }
+
+func TestValidateBridgePolicyTargetGuard(t *testing.T) {
+	action := &Action{Provider: "lifi"}
+	step := &ActionStep{
+		Type:   StepTypeBridge,
+		Target: "0x1111111111111111111111111111111111111111",
+		ExpectedOutputs: map[string]string{
+			"settlement_provider":        "lifi",
+			"settlement_status_endpoint": "https://li.quest/v1/status",
+		},
+	}
+	err := validateStepPolicy(action, step, 1, []byte{0x01}, ExecuteOptions{})
+	if err == nil {
+		t.Fatal("expected disallowed bridge target to fail")
+	}
+	if !strings.Contains(err.Error(), "execution contract") {
+		t.Fatalf("expected target guard message, got err=%v", err)
+	}
+	if err := validateStepPolicy(action, step, 1, []byte{0x01}, ExecuteOptions{UnsafeProviderTx: true}); err != nil {
+		t.Fatalf("expected unsafe provider override to bypass target guard, got err=%v", err)
+	}
+}
+
+func TestValidateBridgePolicyAllowsCanonicalTarget(t *testing.T) {
+	action := &Action{Provider: "across"}
+	step := &ActionStep{
+		Type:   StepTypeBridge,
+		Target: "0x767e4c20F521a829dE4Ffc40C25176676878147f",
+		ExpectedOutputs: map[string]string{
+			"settlement_provider":        "across",
+			"settlement_status_endpoint": "https://app.across.to/api/deposit/status",
+		},
+	}
+	if err := validateStepPolicy(action, step, 8453, []byte{0x01}, ExecuteOptions{}); err != nil {
+		t.Fatalf("expected canonical across target to pass, got err=%v", err)
+	}
+}
+
+func TestValidateBridgePolicyAllowsCanonicalLiFiTarget(t *testing.T) {
+	action := &Action{Provider: "lifi"}
+	step := &ActionStep{
+		Type:   StepTypeBridge,
+		Target: "0x1231DEB6f5749EF6cE6943a275A1D3E7486F4EaE",
+		ExpectedOutputs: map[string]string{
+			"settlement_provider":        "lifi",
+			"settlement_status_endpoint": "https://li.quest/v1/status",
+		},
+	}
+	if err := validateStepPolicy(action, step, 1, []byte{0x01}, ExecuteOptions{}); err != nil {
+		t.Fatalf("expected canonical lifi target to pass, got err=%v", err)
+	}
+}
+
+func TestValidateBridgePolicySkipsTargetCheckOnUncoveredChain(t *testing.T) {
+	// Chain 43114 (Avalanche) has no Across target policy, so the target check
+	// should be skipped and the step should pass regardless of the target address.
+	action := &Action{Provider: "across"}
+	step := &ActionStep{
+		Type:   StepTypeBridge,
+		Target: "0x1111111111111111111111111111111111111111",
+		ExpectedOutputs: map[string]string{
+			"settlement_provider":        "across",
+			"settlement_status_endpoint": "https://app.across.to/api/deposit/status",
+		},
+	}
+	if err := validateStepPolicy(action, step, 43114, []byte{0x01}, ExecuteOptions{}); err != nil {
+		t.Fatalf("expected uncovered chain to skip target check, got err=%v", err)
+	}
+}

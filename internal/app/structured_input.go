@@ -179,6 +179,13 @@ func newStructuredInputSource() *structuredInputSource {
 	}
 }
 
+func commandUsesStructuredInput(cmd *cobra.Command) bool {
+	if cmd == nil {
+		return false
+	}
+	return cmd.LocalFlags().Lookup(inputJSONFlagName) != nil || cmd.LocalFlags().Lookup(inputFileFlagName) != nil
+}
+
 func commandFlagRequestSchema(cmd *cobra.Command) *schema.TypeSchema {
 	if cmd == nil {
 		return nil

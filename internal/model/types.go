@@ -384,6 +384,16 @@ type YieldPosition struct {
 	FetchedAt            string      `json:"fetched_at"`
 }
 
+type WalletBalance struct {
+	ChainID        string     `json:"chain_id"`
+	AccountAddress string     `json:"account_address"`
+	AssetType      string     `json:"asset_type"`
+	AssetID        string     `json:"asset_id"`
+	Symbol         string     `json:"symbol"`
+	Balance        AmountInfo `json:"balance"`
+	FetchedAt      string     `json:"fetched_at"`
+}
+
 type YieldHistoryPoint struct {
 	Timestamp string  `json:"timestamp"`
 	Value     float64 `json:"value"`

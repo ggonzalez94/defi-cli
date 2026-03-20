@@ -229,7 +229,7 @@ func TestRunCachedCommandStrictPartialErrorPreservesDiagnostics(t *testing.T) {
 func newCachePolicyTestState(t *testing.T, maxStale time.Duration, noStale bool) (*runtimeState, *bytes.Buffer) {
 	t.Helper()
 	tmp := t.TempDir()
-	store, err := cache.Open(filepath.Join(tmp, "cache.db"), filepath.Join(tmp, "cache.lock"))
+	store, err := cache.Open(filepath.Join(tmp, "cache.db"), filepath.Join(tmp, "cache.lock"), maxStale)
 	if err != nil {
 		t.Fatalf("open cache failed: %v", err)
 	}

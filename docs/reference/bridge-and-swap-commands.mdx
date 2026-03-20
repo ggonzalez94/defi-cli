@@ -121,7 +121,7 @@ Explicit flags override structured input values.
 - `--step-timeout` applies to each bridge wait stage (receipt and settlement polling).
 - Global `--timeout` controls provider/planning requests; execution wait budget is derived from `--step-timeout` and remaining action stages.
 - `--allow-max-approval` lets execution continue when provider approval calldata exceeds planned input amount (needed for some Across routes).
-- `--unsafe-provider-tx` bypasses settlement metadata/endpoint guardrails for provider-generated bridge payloads.
+- `--unsafe-provider-tx` bypasses canonical execution-target and settlement guardrails for provider-generated bridge payloads on covered provider/chain combinations.
 
 Recommended slow-route settings:
 

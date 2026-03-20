@@ -19,6 +19,8 @@ Format:
 - Added `stablecoins top` command to list top stablecoins by circulating market cap with price, chain count, and day/week/month supply changes (no API key required, uses DefiLlama stablecoins API). Supports `--peg-type` filter (e.g. `peggedUSD`, `peggedEUR`) and `--limit`.
 - Added `chains gas` command to query current EVM gas prices (base fee, priority fee, gas price in gwei) with block number and EIP-1559 detection (no keys required, bypasses cache, supports `--rpc-url` override). Accepts comma-separated chains for multi-chain batch queries with parallel RPC fetching and partial-result support.
 - Added `chains list` command to enumerate all supported chains with slugs, CAIP-2 identifiers, namespaces, and accepted aliases (no keys required, bypasses cache).
+- Added `wallet balance` command to query native or ERC-20 token balances by address and chain, using on-chain RPC calls (no API key required).
+- Cache auto-pruning: expired entries (past TTL + `max_stale`) are automatically deleted on startup to prevent unbounded `cache.db` growth.
 - Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.
 - Added the `tempo` swap provider with on-chain quote and execution planning against the Tempo Stablecoin DEX, including `exact-input` and `exact-output` support.
 - Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
@@ -43,7 +45,7 @@ Format:
 - Updated Tempo swap examples to use supported USD TIP-20 pairs and documented that the DEX auto-routes supported pairs through quote-token relationships.
 
 ### Security
-- None yet.
+- Bridge `submit` now validates canonical Across/LiFi execution targets on covered source chains before signing, while keeping `--unsafe-provider-tx` as the explicit provider-payload override.
 
 ## [v0.4.0] - 2026-03-07
 
