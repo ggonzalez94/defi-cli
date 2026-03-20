@@ -12,7 +12,7 @@ defi lend markets --provider kamino --chain solana --asset USDC --limit 20 --res
 
 Flags:
 
-- `--provider string` (`aave`, `morpho`, `kamino`) required
+- `--provider string` (`aave`, `morpho`, `kamino`, `moonwell`) required
 - `--chain string` required
 - `--asset string` required
 - `--limit int` (default `20`)
@@ -35,7 +35,7 @@ defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borro
 
 Flags:
 
-- `--provider string` (`aave`, `morpho`) required
+- `--provider string` (`aave`, `morpho`, `moonwell`) required
 - `--chain string` required
 - `--address string` required
 - `--asset string` optional filter (`symbol`/address/CAIP-19)
@@ -62,7 +62,7 @@ Flags:
 - `--limit int` (default `20`)
 - `--min-tvl-usd float` (default `0`)
 - `--min-apy float` (default `0`)
-- `--providers string` (`aave,morpho,kamino`)
+- `--providers string` (`aave,morpho,kamino,moonwell`)
 - `--sort string` (`apy_total|tvl_usd|liquidity_usd`, default `apy_total`)
 - `--include-incomplete` bool (default `false`)
 
@@ -83,7 +83,7 @@ Flags:
 - `--chain string` required
 - `--address string` required
 - `--asset string` optional filter (`symbol`/address/CAIP-19)
-- `--providers string` (`aave,morpho,kamino`)
+- `--providers string` (`aave,morpho,kamino,moonwell`)
 - `--limit int` (default `20`)
 - `--rpc-url string` optional provider RPC override (only used by providers that need on-chain valuation)
 
@@ -105,7 +105,7 @@ Flags:
 
 - `--chain string` required
 - `--asset string` required
-- `--providers string` (`aave,morpho,kamino`)
+- `--providers string` (`aave,morpho,kamino,moonwell`)
 - `--metrics string` (`apy_total,tvl_usd`, default `apy_total`)
 - `--interval string` (`hour|day`, default `day`)
 - `--window string` lookback duration (for example `24h`, `7d`, `30d`)
@@ -124,7 +124,7 @@ defi yield deposit submit --action-id <action_id> --results-only
 
 Flags (`plan`):
 
-- `--provider string` (`aave|morpho`) required
+- `--provider string` (`aave|morpho|moonwell`) required
 - `--chain string` required
 - `--asset string` required
 - `--amount string` or `--amount-decimal string` required
@@ -159,7 +159,7 @@ defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x...
 defi lend supply submit --action-id <action_id> --results-only
 ```
 
-Execution providers: `aave|morpho`. Morpho requires `--market-id`. `plan` and `submit` accept `--input-json` / `--input-file`.
+Execution providers: `aave|morpho|moonwell`. Morpho requires `--market-id`. Moonwell uses `--pool-address` for explicit mToken or auto-resolves by underlying asset. `plan` and `submit` accept `--input-json` / `--input-file`.
 
 ## `rewards claim|compound plan|submit|status`
 
@@ -176,7 +176,7 @@ Execution provider: `aave`. `--assets` expects comma-separated on-chain addresse
 
 ## Routing note
 
-`lend` and `yield` routes are direct-provider only (`aave`, `morpho`, `kamino`).
+`lend` and `yield` routes are direct-provider only (`aave`, `morpho`, `kamino`, `moonwell`).
 `yield` and `lend` intentionally represent different user intents:
 
 - `yield`: passive deposit/withdraw flows (Morpho vaults, Aave reserve-yield alias)

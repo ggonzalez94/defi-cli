@@ -21,8 +21,8 @@ Execution is integrated inside existing domain commands (for example `swap`, `br
 | Swap | `swap plan|submit|status` | `--provider` required | `taikoswap` execution today |
 | Bridge | `bridge plan|submit|status` | `--provider` required | `across`, `lifi` execution |
 | Transfer | `transfer plan|submit|status` | no provider selector | native ERC-20 wallet transfer execution |
-| Lend | `lend (supply|withdraw|borrow|repay) plan|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--market-id`) |
-| Yield | `yield (deposit|withdraw) plan|submit|status` | `--provider` required | `aave`, `morpho` execution (`morpho` requires `--vault-address`) |
+| Lend | `lend (supply|withdraw|borrow|repay) plan|submit|status` | `--provider` required | `aave`, `morpho`, `moonwell` execution (`morpho` requires `--market-id`) |
+| Yield | `yield (deposit|withdraw) plan|submit|status` | `--provider` required | `aave`, `morpho`, `moonwell` execution (`morpho` requires `--vault-address`) |
 | Rewards | `rewards (claim|compound) plan|submit|status` | `--provider` required | `aave` execution |
 | Approvals | `approvals plan|submit|status` | no provider selector | native ERC-20 approval execution |
 | Action inspection | `actions list|show|estimate` | optional `--status` / `--action-id` filters | persisted action inspection + gas/fee estimation |

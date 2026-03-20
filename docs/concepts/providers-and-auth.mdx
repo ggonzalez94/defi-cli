@@ -11,6 +11,7 @@ description: Provider coverage, key requirements, and routing behavior.
 | `aave` | lend (read + execution), yield (read + execution), rewards (execution) | No |
 | `morpho` | lend (read + execution), yield (read + execution) | No |
 | `kamino` | lend, yield (Solana mainnet, read only) | No |
+| `moonwell` | lend (read + execution), yield (read + execution) | No |
 | `across` | bridge quote + execution | No |
 | `lifi` | bridge quote + execution | No |
 | `bungee` | bridge quote, swap quote | No (default mode) |
@@ -39,10 +40,10 @@ If either is missing, bungee quotes use public backend.
 
 ## Routing and fallback
 
-- Lending routes by `--provider` (`aave`, `morpho`, `kamino`) using direct adapters only.
-- `lend positions` currently supports `--provider aave|morpho`.
-- `yield positions` currently supports `--providers aave,morpho`.
-- `yield opportunities` aggregates direct providers and accepts `--providers aave,morpho,kamino`.
+- Lending routes by `--provider` (`aave`, `morpho`, `kamino`, `moonwell`) using direct adapters only.
+- `lend positions` currently supports `--provider aave|morpho|moonwell`.
+- `yield positions` currently supports `--providers aave,morpho,moonwell`.
+- `yield opportunities` aggregates direct providers and accepts `--providers aave,morpho,kamino,moonwell`.
 - `yield history` uses the same direct providers and accepts `--providers aave,morpho,kamino`.
 - `bridge quote` and `swap quote` require explicit `--provider`; there are no implicit provider defaults.
 - Execution commands (`plan`, `run`, `submit`, `status`) require `--provider` for multi-provider surfaces.
@@ -62,3 +63,4 @@ If either is missing, bungee quotes use public backend.
 - Tempo DEX swap execution settles to the caller; `--recipient` must match `--from-address` (or be omitted).
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
 - `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys, spending limits, and expiry checks. Requires the Tempo CLI installed.
+- Moonwell uses on-chain RPC reads (no API key); supported on Base and Optimism. Execution targets mToken contracts (Compound v2 style); use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset. Moonwell does not support `--on-behalf-of`.

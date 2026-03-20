@@ -68,7 +68,7 @@ defi yield positions --chain 1 --address 0xYourEOA --providers aave,morpho --lim
 defi yield positions --chain 1 --address 0xYourEOA --providers morpho --asset USDC --results-only
 ```
 
-Supported providers: `aave`, `morpho`.
+Supported providers: `aave`, `morpho`, `moonwell`.
 
 ## Execution (deposit, withdraw)
 
@@ -90,6 +90,7 @@ defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address
 - APY values are percentage points (`2.3` = `2.3%`).
 - Morpho may produce extreme APY for very small markets; use `--min-tvl-usd`.
 - Kamino yield routes currently support Solana mainnet only (read only, no execution).
+- Moonwell yield routes are supported on Base and Optimism; Moonwell does not support `--on-behalf-of`.
 - `yield opportunities` no longer includes subjective risk/score fields.
 - `yield history --metrics` supports `apy_total` and `tvl_usd`; Aave currently supports `apy_total` only.
 - Aave history is lookback-window based and effectively ends near current time.

@@ -18,7 +18,7 @@ This lets agents and humans move from quote/data discovery to deterministic plan
 - Added local signer support for execution (`env`, `file`, `keystore`, plus one-off `--private-key`).
 - Added execution support for:
   - bridge: `across`, `lifi`
-  - lend: `aave`, `morpho`
+  - lend: `aave`, `morpho`, `moonwell`
   - rewards: `aave`
   - swap: `taikoswap` (same interface as Univ3)
   - approvals: native ERC-20 approvals
@@ -29,7 +29,7 @@ This is the initial execution-capable set; more providers will be added under th
 - `swap plan|submit|status`
 - `bridge plan|submit|status` (provider: `across|lifi`)
 - `approvals plan|submit|status`
-- `lend supply|withdraw|borrow|repay plan|submit|status` (provider: `aave|morpho`)
+- `lend supply|withdraw|borrow|repay plan|submit|status` (provider: `aave|morpho|moonwell`)
 - `rewards claim|compound plan|submit|status` (provider: `aave`)
 - `actions list|show`
 

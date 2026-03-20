@@ -22,6 +22,7 @@ defi lend rates --provider kamino --chain solana --asset USDC --limit 10 --resul
 - `--provider aave` -> Aave adapter
 - `--provider morpho` -> Morpho adapter
 - `--provider kamino` -> Kamino adapter (Solana mainnet only)
+- `--provider moonwell` -> Moonwell adapter (Base, Optimism)
 
 ## Positions
 
@@ -31,7 +32,7 @@ defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borro
 ```
 
 `--type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
-Supported providers: `aave`, `morpho`.
+Supported providers: `aave`, `morpho`, `moonwell`.
 
 ## Execution (supply, withdraw, borrow, repay)
 
@@ -47,6 +48,14 @@ defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x...
 ```
 
 Aave auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche. Use `--pool-address` on other chains.
+
+Moonwell execution targets mToken contracts (Compound v2 style) on Base and Optimism:
+
+```bash
+defi lend supply plan --provider moonwell --chain 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+```
+
+Use `--pool-address` to specify the mToken directly, or omit it to auto-resolve by underlying asset. Moonwell does not support `--on-behalf-of`.
 
 ## Suggested filters and reliability defaults
 
