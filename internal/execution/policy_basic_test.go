@@ -264,7 +264,7 @@ func TestValidateTempoSwapBatchedCallsRejectsApproveOnly(t *testing.T) {
 		t.Fatalf("pack approve calldata: %v", err)
 	}
 
-	action := &Action{Provider: "tempo", InputAmount: "1000"}
+	action := &Action{Provider: "tempo", InputAmount: "1000", Metadata: map[string]any{"token_in": tokenIn}}
 	step := &ActionStep{
 		Type:   StepTypeSwap,
 		Target: "",
@@ -402,6 +402,43 @@ func TestValidateTempoSwapBatchedCallsRejectsApproveWithValue(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "zero value") {
 		t.Fatalf("expected zero value message, got err=%v", err)
+	}
+}
+
+func TestValidateTempoSwapBatchedCallsRejectsMissingTokenInMetadata(t *testing.T) {
+	dexAddr := "0xdec0000000000000000000000000000000000000"
+	tokenIn := "0x20c0000000000000000000000000000000000000"
+
+	approveData, err := policyERC20ABI.Pack("approve", common.HexToAddress(dexAddr), big.NewInt(1000))
+	if err != nil {
+		t.Fatalf("pack approve calldata: %v", err)
+	}
+	swapData, err := policyTempoDEXABI.Pack("swapExactAmountIn",
+		common.HexToAddress(tokenIn),
+		common.HexToAddress("0x20c000000000000000000000b9537d11c60e8b50"),
+		big.NewInt(1000),
+		big.NewInt(990),
+	)
+	if err != nil {
+		t.Fatalf("pack swap calldata: %v", err)
+	}
+
+	// Action with no token_in metadata — must be rejected.
+	action := &Action{Provider: "tempo", InputAmount: "1000"}
+	step := &ActionStep{
+		Type: StepTypeSwap,
+		Calls: []StepCall{
+			{Target: tokenIn, Data: "0x" + common.Bytes2Hex(approveData), Value: "0"},
+			{Target: dexAddr, Data: "0x" + common.Bytes2Hex(swapData), Value: "0"},
+		},
+	}
+
+	err = validateSwapPolicy(action, step, 4217, nil, ExecuteOptions{})
+	if err == nil {
+		t.Fatal("expected missing token_in metadata to fail")
+	}
+	if !strings.Contains(err.Error(), "token_in metadata") {
+		t.Fatalf("expected token_in metadata message, got err=%v", err)
 	}
 }
 

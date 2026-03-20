@@ -205,10 +205,15 @@ func validateTempoSwapCalls(chainID int64, calls []StepCall, action *Action, opt
 			if strings.TrimSpace(call.Value) != "" && strings.TrimSpace(call.Value) != "0" {
 				return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d approve must have zero value", i))
 			}
-			// Approve target must be the action's input token.
+			// Approve target must be the action's input token. Reject if
+			// token_in metadata is missing — it is required for safe
+			// validation and its absence may indicate a tampered action.
 			if action != nil {
 				expectedToken := strings.TrimSpace(metadataString(action.Metadata, "token_in"))
-				if expectedToken != "" && !strings.EqualFold(common.HexToAddress(call.Target).Hex(), common.HexToAddress(expectedToken).Hex()) {
+				if expectedToken == "" {
+					return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d cannot validate approve target: action missing token_in metadata", i))
+				}
+				if !strings.EqualFold(common.HexToAddress(call.Target).Hex(), common.HexToAddress(expectedToken).Hex()) {
 					return clierr.New(clierr.CodeActionPlan, fmt.Sprintf("tempo swap call %d approve target does not match action input token", i))
 				}
 			}
