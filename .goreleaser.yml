@@ -39,6 +39,9 @@ checksum:
 snapshot:
   version_template: "{{ incpatch .Version }}-dev"
 
+release:
+  prerelease: auto
+
 changelog:
   use: git
   sort: asc

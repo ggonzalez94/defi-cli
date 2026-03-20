@@ -1,0 +1,67 @@
+---
+title: Lending
+description: Query lending markets and rates across direct protocol adapters.
+---
+
+## Markets
+
+```bash
+defi lend markets --provider aave --chain 1 --asset USDC --limit 10 --results-only
+defi lend markets --provider kamino --chain solana --asset USDC --limit 10 --results-only
+```
+
+## Rates
+
+```bash
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 10 --results-only
+defi lend rates --provider kamino --chain solana --asset USDC --limit 10 --results-only
+```
+
+## Protocol routing
+
+- `--provider aave` -> Aave adapter
+- `--provider morpho` -> Morpho adapter
+- `--provider kamino` -> Kamino adapter (Solana mainnet only)
+
+## Positions
+
+```bash
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
+defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borrow --asset USDC --results-only
+```
+
+`--type all` returns disjoint rows: `supply`, `collateral`, and `borrow`.
+Supported providers: `aave`, `morpho`.
+
+## Execution (supply, withdraw, borrow, repay)
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply submit --action-id <action_id> --results-only
+```
+
+Morpho lend execution requires `--market-id`:
+
+```bash
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+```
+
+Aave auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche. Use `--pool-address` on other chains.
+
+## Suggested filters and reliability defaults
+
+```bash
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 20 --timeout 12s --retries 2 --max-stale 5m --results-only
+```
+
+## Output fields
+
+`lend markets` returns:
+
+- `protocol`, `chain_id`, `asset_id`
+- `provider`, `provider_native_id`, `provider_native_id_kind`
+- `supply_apy`, `borrow_apy`
+- `tvl_usd`, `liquidity_usd`
+- `source_url`, `fetched_at`
+
+`lend rates` adds `utilization`.

@@ -1,0 +1,183 @@
+---
+title: Lending, Yield, and Rewards Commands
+description: Full reference for lend, yield, and rewards command flags and examples.
+---
+
+## `lend markets`
+
+```bash
+defi lend markets --provider aave --chain 1 --asset USDC --limit 20 --results-only
+defi lend markets --provider kamino --chain solana --asset USDC --limit 20 --results-only
+```
+
+Flags:
+
+- `--provider string` (`aave`, `morpho`, `kamino`) required
+- `--chain string` required
+- `--asset string` required
+- `--limit int` (default `20`)
+
+## `lend rates`
+
+```bash
+defi lend rates --provider morpho --chain 1 --asset USDC --limit 20 --results-only
+defi lend rates --provider kamino --chain solana --asset USDC --limit 20 --results-only
+```
+
+Flags are the same as `lend markets`.
+
+## `lend positions`
+
+```bash
+defi lend positions --provider aave --chain 1 --address 0xYourEOA --type all --limit 20 --results-only
+defi lend positions --provider morpho --chain 1 --address 0xYourEOA --type borrow --asset USDC --results-only
+```
+
+Flags:
+
+- `--provider string` (`aave`, `morpho`) required
+- `--chain string` required
+- `--address string` required
+- `--asset string` optional filter (`symbol`/address/CAIP-19)
+- `--type string` (`all|supply|borrow|collateral`, default `all`)
+- `--limit int` (default `20`)
+
+## `yield opportunities`
+
+```bash
+defi yield opportunities \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --min-tvl-usd 1000000 \
+  --sort liquidity_usd \
+  --limit 20 \
+  --results-only
+```
+
+Flags:
+
+- `--chain string` required
+- `--asset string` required
+- `--limit int` (default `20`)
+- `--min-tvl-usd float` (default `0`)
+- `--min-apy float` (default `0`)
+- `--providers string` (`aave,morpho,kamino`)
+- `--sort string` (`apy_total|tvl_usd|liquidity_usd`, default `apy_total`)
+- `--include-incomplete` bool (default `false`)
+
+Output notes:
+
+- `backing_assets` includes the full reported backing composition for each opportunity.
+- `tvl_usd` and `liquidity_usd` are provider-sourced objective metrics (not inferred risk labels).
+
+## `yield positions`
+
+```bash
+defi yield positions --chain 1 --address 0xYourEOA --providers aave,morpho --limit 20 --results-only
+defi yield positions --chain 1 --address 0xYourEOA --providers morpho --asset USDC --results-only
+```
+
+Flags:
+
+- `--chain string` required
+- `--address string` required
+- `--asset string` optional filter (`symbol`/address/CAIP-19)
+- `--providers string` (`aave,morpho,kamino`)
+- `--limit int` (default `20`)
+- `--rpc-url string` optional provider RPC override (only used by providers that need on-chain valuation)
+
+## `yield history`
+
+```bash
+defi yield history \
+  --chain 1 \
+  --asset USDC \
+  --providers aave,morpho \
+  --metrics apy_total,tvl_usd \
+  --interval day \
+  --window 7d \
+  --limit 1 \
+  --results-only
+```
+
+Flags:
+
+- `--chain string` required
+- `--asset string` required
+- `--providers string` (`aave,morpho,kamino`)
+- `--metrics string` (`apy_total,tvl_usd`, default `apy_total`)
+- `--interval string` (`hour|day`, default `day`)
+- `--window string` lookback duration (for example `24h`, `7d`, `30d`)
+- `--from string` optional RFC3339 start time (`--window` is ignored when set)
+- `--to string` optional RFC3339 end time (default `now`)
+- `--opportunity-ids string` optional CSV filter from `yield opportunities`
+- `--limit int` max opportunities per provider (default `20`)
+
+## `yield deposit|withdraw plan|submit|status`
+
+```bash
+defi yield deposit plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --from-address 0xYourEOA --results-only
+defi yield deposit submit --action-id <action_id> --results-only
+```
+
+Flags (`plan`):
+
+- `--provider string` (`aave|morpho`) required
+- `--chain string` required
+- `--asset string` required
+- `--amount string` or `--amount-decimal string` required
+- `--from-address string` required
+- `--vault-address string` required for `--provider morpho`
+- `--recipient string` optional (defaults to sender)
+- `--on-behalf-of string` optional (defaults to sender)
+- `--rpc-url string` optional
+- `--pool-address string` / `--pool-address-provider string` optional Aave overrides
+- planning controls: `--simulate`
+- structured input: `--input-json string` or `--input-file string` (`-` reads stdin)
+
+Flags (`submit`):
+
+- `--action-id string` required
+- `--input-json string` optional structured payload
+- `--input-file string` optional structured payload file or `-` for stdin
+- `submit` also supports signer/simulation/gas/policy override flags (`--from-address`, signer flags, gas/fee flags, `--allow-max-approval`, `--unsafe-provider-tx`)
+- explicit flags override structured input values
+
+Flags (`status`):
+
+- `--action-id string` required
+
+`lend ... plan|submit`, `yield ... plan|submit`, and `rewards ... plan|submit` follow the same structured-input pattern. For rewards structured input, `assets` accepts a JSON string array while the CLI flag remains comma-separated.
+
+## `lend supply|withdraw|borrow|repay plan|submit|status`
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply submit --action-id <action_id> --results-only
+```
+
+Execution providers: `aave|morpho`. Morpho requires `--market-id`. `plan` and `submit` accept `--input-json` / `--input-file`.
+
+## `rewards claim|compound plan|submit|status`
+
+```bash
+defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --assets 0xAsset1,0xAsset2 --reward-token 0xReward --results-only
+defi rewards claim submit --action-id <action_id> --results-only
+```
+
+Execution provider: `aave`. `--assets` expects comma-separated on-chain addresses (structured input accepts a JSON string array). `plan` and `submit` accept `--input-json` / `--input-file`.
+
+## Provider-selection note
+
+`--providers` accepts provider names, not protocol categories.
+
+## Routing note
+
+`lend` and `yield` routes are direct-provider only (`aave`, `morpho`, `kamino`).
+`yield` and `lend` intentionally represent different user intents:
+
+- `yield`: passive deposit/withdraw flows (Morpho vaults, Aave reserve-yield alias)
+- `lend`: loan lifecycle operations (`supply|withdraw|borrow|repay`; Morpho Blue uses `--market-id`)

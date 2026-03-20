@@ -1,0 +1,124 @@
+name: install-metrics
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  snapshot-install-events:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: collect release counters
+        id: collect
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -eu
+
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          releases_json="$(mktemp)"
+
+          gh api "repos/${GITHUB_REPOSITORY}/releases?per_page=100" --paginate > "$releases_json"
+
+          marker_total="$(jq '[ .[] | .assets[]? | select(.name == "install-marker.txt") | .download_count ] | add // 0' "$releases_json")"
+          checksums_total="$(jq '[ .[] | .assets[]? | select(.name == "checksums.txt") | .download_count ] | add // 0' "$releases_json")"
+          binaries_total="$(jq '[ .[] | .assets[]? | select(.name != "checksums.txt" and .name != "install-marker.txt") | .download_count ] | add // 0' "$releases_json")"
+          by_release="$(jq '[ .[] | {tag: .tag_name, marker_downloads: ([.assets[]? | select(.name == "install-marker.txt") | .download_count] | add // 0), checksums_downloads: ([.assets[]? | select(.name == "checksums.txt") | .download_count] | add // 0), binary_downloads: ([.assets[]? | select(.name != "checksums.txt" and .name != "install-marker.txt") | .download_count] | add // 0)} ]' "$releases_json")"
+
+          jq -cn \
+            --arg timestamp "$timestamp" \
+            --arg repo "$GITHUB_REPOSITORY" \
+            --arg metric "install_events" \
+            --arg marker_asset "install-marker.txt" \
+            --argjson install_events_total "$marker_total" \
+            --argjson checksums_total "$checksums_total" \
+            --argjson binaries_total "$binaries_total" \
+            --argjson releases "$by_release" \
+            '{timestamp:$timestamp, repo:$repo, metric:$metric, marker_asset:$marker_asset, install_events_total:$install_events_total, checksums_total:$checksums_total, binary_downloads_total:$binaries_total, releases:$releases}' \
+            > /tmp/install-events-snapshot.json
+
+          echo "snapshot_path=/tmp/install-events-snapshot.json" >> "$GITHUB_OUTPUT"
+          echo "install_events_total=$marker_total" >> "$GITHUB_OUTPUT"
+
+      - name: persist snapshot
+        id: persist
+        run: |
+          set -eu
+
+          stats_branch="analytics"
+          stats_dir="analytics"
+          stats_jsonl="$stats_dir/install-events.jsonl"
+          latest_json="$stats_dir/latest.json"
+          latest_md="$stats_dir/latest.md"
+          snapshot_path="${{ steps.collect.outputs.snapshot_path }}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+          if git ls-remote --exit-code --heads origin "$stats_branch" >/dev/null 2>&1; then
+            git fetch origin "$stats_branch"
+            git checkout -B "$stats_branch" "origin/$stats_branch"
+          else
+            git checkout --orphan "$stats_branch"
+            git rm -rf . >/dev/null 2>&1 || true
+          fi
+
+          mkdir -p "$stats_dir"
+
+          previous_total=0
+          if [ -s "$stats_jsonl" ]; then
+            previous_total="$(tail -n 1 "$stats_jsonl" | jq -r '.install_events_total // 0')"
+          fi
+
+          current_total="$(jq -r '.install_events_total' "$snapshot_path")"
+          delta=$((current_total - previous_total))
+
+          cat "$snapshot_path" >> "$stats_jsonl"
+          cp "$snapshot_path" "$latest_json"
+
+          {
+            echo "# defi-cli install events"
+            echo
+            echo "- Timestamp (UTC): $(jq -r '.timestamp' "$snapshot_path")"
+            echo "- Metric: release asset download counter for \`install-marker.txt\`"
+            echo "- Total install events: $current_total"
+            echo "- Delta since previous snapshot: $delta"
+            echo
+            echo "## Per release"
+            echo
+            echo "| Tag | Marker | Checksums | Binaries |"
+            echo "| --- | ---: | ---: | ---: |"
+            jq -r '.releases[] | "| \(.tag) | \(.marker_downloads) | \(.checksums_downloads) | \(.binary_downloads) |"' "$snapshot_path"
+          } > "$latest_md"
+
+          git add "$stats_jsonl" "$latest_json" "$latest_md"
+
+          changed="false"
+          if ! git diff --cached --quiet; then
+            git commit -m "chore(analytics): snapshot install events"
+            git push origin "$stats_branch"
+            changed="true"
+          fi
+
+          echo "delta=$delta" >> "$GITHUB_OUTPUT"
+          echo "changed=$changed" >> "$GITHUB_OUTPUT"
+
+      - name: write summary
+        run: |
+          {
+            echo "### Install events snapshot"
+            echo
+            echo "- Repository: \`${GITHUB_REPOSITORY}\`"
+            echo "- Install events total (marker): **${{ steps.collect.outputs.install_events_total }}**"
+            echo "- Delta vs previous snapshot: **${{ steps.persist.outputs.delta }}**"
+            echo "- Snapshot branch: \`analytics\`"
+            echo "- Branch updated: **${{ steps.persist.outputs.changed }}**"
+          } >> "$GITHUB_STEP_SUMMARY"

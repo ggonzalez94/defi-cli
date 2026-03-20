@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/ggonzalez94/defi-cli/internal/fsutil"
 	"gopkg.in/yaml.v3"
 )
 
@@ -40,9 +41,14 @@ type Settings struct {
 	CacheEnabled    bool
 	CachePath       string
 	CacheLockPath   string
+	ActionStorePath string
+	ActionLockPath  string
 	DefiLlamaAPIKey string
 	UniswapAPIKey   string
 	OneInchAPIKey   string
+	JupiterAPIKey   string
+	BungeeAPIKey    string
+	BungeeAffiliate string
 }
 
 type fileConfig struct {
@@ -56,6 +62,10 @@ type fileConfig struct {
 		Path     string `yaml:"path"`
 		LockPath string `yaml:"lock_path"`
 	} `yaml:"cache"`
+	Execution struct {
+		ActionsPath     string `yaml:"actions_path"`
+		ActionsLockPath string `yaml:"actions_lock_path"`
+	} `yaml:"execution"`
 	Providers struct {
 		DefiLlama struct {
 			APIKey    string `yaml:"api_key"`
@@ -69,6 +79,16 @@ type fileConfig struct {
 			APIKey    string `yaml:"api_key"`
 			APIKeyEnv string `yaml:"api_key_env"`
 		} `yaml:"oneinch"`
+		Jupiter struct {
+			APIKey    string `yaml:"api_key"`
+			APIKeyEnv string `yaml:"api_key_env"`
+		} `yaml:"jupiter"`
+		Bungee struct {
+			APIKey       string `yaml:"api_key"`
+			APIKeyEnv    string `yaml:"api_key_env"`
+			Affiliate    string `yaml:"affiliate"`
+			AffiliateEnv string `yaml:"affiliate_env"`
+		} `yaml:"bungee"`
 	} `yaml:"providers"`
 }
 
@@ -114,20 +134,23 @@ func defaultSettings() (Settings, error) {
 	if err != nil {
 		return Settings{}, err
 	}
+	cacheDir := filepath.Dir(cachePath)
 	return Settings{
-		OutputMode:    "json",
-		Timeout:       10 * time.Second,
-		Retries:       2,
-		MaxStale:      5 * time.Minute,
-		CacheEnabled:  true,
-		CachePath:     cachePath,
-		CacheLockPath: lockPath,
+		OutputMode:      "json",
+		Timeout:         10 * time.Second,
+		Retries:         2,
+		MaxStale:        5 * time.Minute,
+		CacheEnabled:    true,
+		CachePath:       cachePath,
+		CacheLockPath:   lockPath,
+		ActionStorePath: filepath.Join(cacheDir, "actions.db"),
+		ActionLockPath:  filepath.Join(cacheDir, "actions.lock"),
 	}, nil
 }
 
 func resolveConfigPath(input string) (string, error) {
 	if strings.TrimSpace(input) != "" {
-		return input, nil
+		return fsutil.NormalizePath(input)
 	}
 	base := os.Getenv("XDG_CONFIG_HOME")
 	if base == "" {
@@ -199,6 +222,12 @@ func applyFileConfig(path string, settings *Settings) error {
 	if cfg.Cache.LockPath != "" {
 		settings.CacheLockPath = cfg.Cache.LockPath
 	}
+	if cfg.Execution.ActionsPath != "" {
+		settings.ActionStorePath = cfg.Execution.ActionsPath
+	}
+	if cfg.Execution.ActionsLockPath != "" {
+		settings.ActionLockPath = cfg.Execution.ActionsLockPath
+	}
 	if cfg.Providers.Uniswap.APIKey != "" {
 		settings.UniswapAPIKey = cfg.Providers.Uniswap.APIKey
 	}
@@ -216,6 +245,24 @@ func applyFileConfig(path string, settings *Settings) error {
 	}
 	if cfg.Providers.OneInch.APIKeyEnv != "" {
 		settings.OneInchAPIKey = os.Getenv(cfg.Providers.OneInch.APIKeyEnv)
+	}
+	if cfg.Providers.Jupiter.APIKey != "" {
+		settings.JupiterAPIKey = cfg.Providers.Jupiter.APIKey
+	}
+	if cfg.Providers.Jupiter.APIKeyEnv != "" {
+		settings.JupiterAPIKey = os.Getenv(cfg.Providers.Jupiter.APIKeyEnv)
+	}
+	if cfg.Providers.Bungee.APIKey != "" {
+		settings.BungeeAPIKey = cfg.Providers.Bungee.APIKey
+	}
+	if cfg.Providers.Bungee.APIKeyEnv != "" {
+		settings.BungeeAPIKey = os.Getenv(cfg.Providers.Bungee.APIKeyEnv)
+	}
+	if cfg.Providers.Bungee.Affiliate != "" {
+		settings.BungeeAffiliate = cfg.Providers.Bungee.Affiliate
+	}
+	if cfg.Providers.Bungee.AffiliateEnv != "" {
+		settings.BungeeAffiliate = os.Getenv(cfg.Providers.Bungee.AffiliateEnv)
 	}
 
 	return nil
@@ -261,6 +308,12 @@ func applyEnv(settings *Settings) {
 	if v := os.Getenv("DEFI_CACHE_LOCK_PATH"); v != "" {
 		settings.CacheLockPath = v
 	}
+	if v := os.Getenv("DEFI_ACTIONS_PATH"); v != "" {
+		settings.ActionStorePath = v
+	}
+	if v := os.Getenv("DEFI_ACTIONS_LOCK_PATH"); v != "" {
+		settings.ActionLockPath = v
+	}
 	if v := os.Getenv("DEFI_UNISWAP_API_KEY"); v != "" {
 		settings.UniswapAPIKey = v
 	}
@@ -269,6 +322,15 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_1INCH_API_KEY"); v != "" {
 		settings.OneInchAPIKey = v
+	}
+	if v := os.Getenv("DEFI_JUPITER_API_KEY"); v != "" {
+		settings.JupiterAPIKey = v
+	}
+	if v := os.Getenv("DEFI_BUNGEE_API_KEY"); v != "" {
+		settings.BungeeAPIKey = v
+	}
+	if v := os.Getenv("DEFI_BUNGEE_AFFILIATE"); v != "" {
+		settings.BungeeAffiliate = v
 	}
 }
 

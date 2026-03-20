@@ -1,0 +1,42 @@
+---
+title: Schema-Driven Integration
+description: Use the machine-readable command schema to generate dynamic tooling.
+---
+
+## Fetch schema
+
+```bash
+defi schema --results-only
+```
+
+Scope to a specific command path:
+
+```bash
+defi schema "yield opportunities" --results-only
+defi schema "bridge quote" --results-only
+```
+
+## Schema model
+
+Each node contains:
+
+- `path`
+- `use`
+- `short`
+- `flags[]` (`name`, `type`, `usage`, typed `default`, optional `shorthand`, `required`, `enum`, `format`, `scope`)
+- optional command metadata such as `mutation`, `input_modes`, `auth`, `request`, and `response`
+- `subcommands[]`
+
+## Practical uses
+
+- Generate UI forms from flag metadata.
+- Validate requested flags before execution.
+- Discover auth requirements and structured input modes at runtime.
+- Produce autocomplete for command builders.
+- Build policy-aware execution layers with `--enable-commands`.
+
+## Notes
+
+- Hidden commands are not included.
+- Execution `plan` and `submit` commands expose the same request fields through flags and structured JSON/file input; flags override structured input values.
+- Runtime constraints (for example, mutually exclusive amount flags) still require command execution validation.

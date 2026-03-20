@@ -4,7 +4,7 @@ Short guide for agents working on `defi-cli`.
 
 ## Project intent
 
-`defi-cli` is an agent-first DeFi retrieval CLI. Core priorities are:
+`defi-cli` is an agent-first DeFi CLI for querying and acting on-chain. Core priorities are:
 
 - stable JSON contract (envelope + fields + deterministic ordering)
 - stable exit codes
@@ -19,8 +19,10 @@ go test -race ./...
 go vet ./...
 
 ./defi providers list --results-only
-./defi lend markets --protocol aave --chain 1 --asset USDC --results-only
+./defi lend markets --provider aave --chain 1 --asset USDC --results-only
+./defi lend positions --provider aave --chain 1 --address 0x000000000000000000000000000000000000dEaD --type all --limit 3 --results-only
 ./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
+./defi yield positions --chain 1 --address 0x000000000000000000000000000000000000dEaD --providers aave,morpho --limit 5 --results-only
 ```
 
 ## Folder structure
@@ -32,11 +34,13 @@ cmd/
 internal/
   app/runner.go                   # command wiring, provider routing, cache flow
   providers/                      # external adapters
-    aave/ morpho/                 # direct GraphQL lending + yield
+    aave/ morpho/                 # lending + yield (read + execution)
     defillama/                    # market/yield normalization + fallback + bridge analytics
-    across/ lifi/                 # bridge quotes
-    oneinch/ uniswap/             # swap quotes
+    across/ lifi/                 # bridge quotes + lifi execution planning
+    oneinch/ uniswap/ taikoswap/ tempo/ # swap quotes + execution planning providers
     types.go                      # provider interfaces
+  execution/                      # action persistence + planner helpers + signer abstraction + tx execution
+  registry/                       # canonical execution endpoints/contracts/ABI fragments + default chain RPC map
   config/                         # defaults + file/env/flags precedence
   cache/                          # sqlite cache + file lock
   id/                             # CAIP parsing + amount normalization
@@ -48,10 +52,14 @@ internal/
   httpx/                          # shared HTTP client/retry behavior
 
 .github/workflows/ci.yml          # CI (test/vet/build)
+.github/workflows/nightly-execution-smoke.yml # nightly execution planning drift checks
 .github/workflows/release.yml     # tagged release pipeline (GoReleaser)
 scripts/install.sh                # macOS/Linux installer from GitHub Releases
 .goreleaser.yml                   # cross-platform release artifact config
 assets/                            # static assets (logo, images)
+docs/                             # Mintlify docs site
+  docs.json                       # Mintlify docs site config
+  *.mdx + concepts/ guides/ ...   # Mintlify docs content pages
 README.md                         # user-facing usage + caveats
 ```
 
@@ -59,22 +67,70 @@ README.md                         # user-facing usage + caveats
 
 - Error output always returns a full envelope, even with `--results-only` or `--select`.
 - Config precedence is `flags > env > config file > defaults`.
-- `yield --providers` expects provider names (`defillama,aave,morpho`), not protocol categories.
-- Lending routes by `--protocol` to direct adapters when available, then may fallback to DefiLlama on selected failures.
+- `yield --providers` expects provider names (`aave,morpho,kamino`), not protocol categories.
+- Lending routes by `--provider` use direct protocol adapters (`aave`, `morpho`, `kamino`).
+- `lend positions` currently supports `--provider aave|morpho`; `kamino` does not expose positions yet.
+- `yield positions` currently supports `aave|morpho`; `kamino` does not expose positions yet.
+- `lend positions --type all` intentionally returns non-overlapping intents (`supply`, `borrow`, `collateral`) for automation-friendly filtering.
 - Most commands do not require provider API keys.
 - Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
+- Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
+- Tempo quote/planning does not require an API key; execution uses native Tempo type 0x76 transactions via the TempoStepExecutor and currently settles Tempo DEX swaps back to the sender only.
+- Tempo Stablecoin DEX swaps are currently USD TIP-20 only; the DEX auto-routes supported pairs through quote-token relationships, so non-USD assets should fail as `unsupported` rather than `unavailable`.
+- TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
+- `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
+- Execution `plan` and `submit` commands also support `--input-json` and `--input-file` (`-` reads stdin); explicit flags override structured input values.
+- Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.
+- `schema` now includes inherited flags plus command/flag metadata (`required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints).
+- Metadata ownership is split by intent:
+  - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
+  - `internal/providers/*/client.go`: provider quote/read API base URLs.
+  - `internal/id/id.go`: bootstrap token symbol/address registry for deterministic asset parsing.
+- Execution commands currently available:
+  - `swap plan|submit|status`
+  - `bridge plan|submit|status` (Across, LiFi)
+  - `approvals plan|submit|status`
+  - `transfer plan|submit|status`
+  - `lend supply|withdraw|borrow|repay plan|submit|status` (Aave, Morpho)
+  - `yield deposit|withdraw plan|submit|status` (Aave, Morpho)
+  - `rewards claim|compound plan|submit|status` (Aave)
+  - `actions list|show|estimate`
+- Execution builder architecture is intentionally split:
+  - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
+  - `lend`/`yield`/`rewards`/`approvals`/`transfer` action construction uses internal planners for deterministic contract-call composition.
+- All execution `submit` commands can broadcast transactions.
+- Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts into larger approvals when required.
+- Bridge execution pre-sign checks validate provider settlement metadata/endpoints by default; `--unsafe-provider-tx` bypasses these guardrails.
+- LiFi bridge quote/plan support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
+- Bridge execution status for Across/LiFi waits for destination settlement (`/deposit/status` or `/status`) before marking bridge steps complete.
+- Rewards `--assets` flag accepts comma-separated on-chain addresses used by Aave incentives contracts; structured input accepts a JSON string array.
+- Aave execution has default pool-address-provider coverage for chain IDs `1`, `10`, `137`, `8453`, `42161`, and `43114`; override with `--pool-address` / `--pool-address-provider` otherwise.
+- Morpho lend execution requires `--market-id` (Morpho market unique key bytes32).
+- Morpho yield execution requires `--vault-address` (Morpho vault contract address).
 - Key requirements are command + provider specific; `providers list` is metadata only and should remain callable without provider keys.
 - Prefer env vars for provider keys in docs/examples; keep config file usage optional and focused on non-secret defaults.
-- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `mantle`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, and `zksync`.
+- `--chain` supports CAIP-2, numeric chain IDs, and aliases; aliases include `tempo`/`tempo mainnet`/`presto`, `tempo testnet`/`moderato`, `tempo devnet`, `mantle`, `megaeth`/`mega eth`/`mega-eth`, `ink`, `scroll`, `berachain`, `gnosis`/`xdai`, `linea`, `sonic`, `blast`, `fraxtal`, `world-chain`, `celo`, `taiko`/`taiko alethia`, `taiko hoodi`/`hoodi`, `zksync`, `hyperevm`/`hyper evm`/`hyper-evm`, `monad`, and `citrea`.
+- Bungee Auto quote calls use deterministic placeholder sender/receiver addresses for quote-only mode (`0x000...001`).
+- Swap quote type defaults to `exact-input`; `exact-output` currently routes through Uniswap and Tempo (`--type exact-output` with `--amount-out` or `--amount-out-decimal`).
+- Swap planning supports Tempo exact-output execution; TaikoSwap remains exact-input only.
+- Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on EVM chains).
+- `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys and expiry checks.
+- Tempo execution uses type 0x76 transactions with batched calls (approve+swap are atomic in a single transaction).
+- `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
+- MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
 - Symbol parsing depends on the local bootstrap token registry; on chains without registry entries use token address or CAIP-19.
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
 - Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
 - Metadata commands (`version`, `schema`, `providers list`) bypass cache initialization.
-- For `lend`/`yield`, unresolved asset symbols skip DefiLlama symbol matching and fallback/provider selection where symbol-based matching would be unsafe.
+- Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache initialization.
+- For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
 - Amounts used for swaps/bridges are base units; keep both base and decimal forms consistent.
 - Release artifacts are built on `v*` tags via `.github/workflows/release.yml` and `.goreleaser.yml`.
+- Mintlify production docs should use the `docs-live` branch; the release workflow force-syncs `docs-live` only for stable release tags (non-prerelease).
 - `scripts/install.sh` installs the latest tagged release artifact into a writable user-space `PATH` directory by default (fallback `~/.local/bin`) and never uses sudo unless explicitly requested.
+- Docs site local checks (from `docs/`): `npx --yes mint@4.2.378 validate`, `npx --yes mint@4.2.378 broken-links`, and `npx --yes mint@4.2.378 a11y`.
 
 ## Change patterns
 
@@ -83,13 +139,17 @@ README.md                         # user-facing usage + caveats
   2. register routes/info in `internal/app/runner.go`
   3. add `httptest`-based adapter tests
   4. update README caveats if data quality/semantics differ
-  5. document any command that requires an API key explicitely
+  5. document any command that requires an API key explicitly
 - Contract changes:
   1. treat as breaking unless explicitly intended
   2. update `internal/model` + `internal/out` tests first
 - Behavior changes:
   1. keep cache keys deterministic
   2. add runner-level tests for routing/fallback/strict mode
+- Docs sync for user-facing changes:
+  1. if adding a feature/command or changing behavior, update Mintlify docs + README + CHANGELOG
+  2. if changing output schema/fields/exit codes, update contract/reference docs before merge
+  3. if adding providers/chains/assets/aliases/key requirements, update provider/auth and examples docs
 
 ## Quality bar
 
@@ -107,9 +167,10 @@ README.md                         # user-facing usage + caveats
 - Keep entries concise and action-oriented (what changed for users, not internal refactors unless user impact exists).
 - On release, move `Unreleased` items into `## [vX.Y.Z] - YYYY-MM-DD` and update compare links at the bottom.
 - If a section has no updates while editing, use `- None yet.` to keep structure stable.
+- Keep README/AGENTS focused on current behavior; track version-to-version deltas in CHANGELOG/release notes instead of adding temporary in-progress migration notes.
 
 ## Maintenance note
 
-- Keep `README.md`, `AGENTS.md`, and `CHANGELOG.md` aligned when commands, routing, caveats, or release-relevant behavior change.
+- Keep `README.md`, `AGENTS.md`, `CHANGELOG.md`, and Mintlify docs (`docs/docs.json` + `docs/**/*.mdx`) aligned when commands, routing, caveats, or release-relevant behavior change.
 
 Do not commit transient binaries like `./defi`.

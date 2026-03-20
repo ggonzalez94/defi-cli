@@ -1,0 +1,102 @@
+---
+title: Swap
+description: Get swap quotes across 1inch, Uniswap, Tempo, Jupiter, Fibrous, Bungee, and TaikoSwap.
+---
+
+## 1inch (key required)
+
+```bash
+export DEFI_1INCH_API_KEY=...
+defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --results-only
+```
+
+## Uniswap (key required)
+
+```bash
+export DEFI_UNISWAP_API_KEY=...
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --from-address 0xYourEOA --results-only
+# Exact-output on Uniswap
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --from-address 0xYourEOA --results-only
+# Optional manual slippage override (percent). Default uses provider auto slippage.
+defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --slippage-pct 1.0 --from-address 0xYourEOA --results-only
+```
+
+## Tempo (keyless, on-chain)
+
+```bash
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --results-only
+# Exact-output on Tempo
+defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --results-only
+```
+
+## Jupiter (Solana, key optional)
+
+```bash
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+Optional higher-limit setup:
+
+```bash
+export DEFI_JUPITER_API_KEY=...
+defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
+```
+
+## Fibrous (keyless)
+
+```bash
+defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
+```
+
+## TaikoSwap (keyless, on-chain)
+
+```bash
+defi swap quote --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --results-only
+```
+
+## Bungee auto (keyless default)
+
+```bash
+defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 5000000 --results-only
+```
+
+## Execution (plan, run, submit, status)
+
+Swap execution is currently available for Tempo and TaikoSwap:
+
+```bash
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --from-address 0xYourEOA --results-only
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
+defi swap submit --action-id <action_id> --results-only
+```
+
+### Tempo execution
+
+Tempo swaps use native type 0x76 transactions that batch approve+swap into a single atomic call. Fee payment is in a fee token (defaults to USDC.e on mainnet).
+
+```bash
+# Plan a Tempo swap
+defi swap plan --provider tempo --chain tempo --from-asset USDC.e --to-asset pathUSD --amount 1000000 --from-address 0xYourWallet --results-only
+
+# Submit with agent wallet
+defi swap submit --action-id <id> --signer tempo --results-only
+
+# Or submit with local key
+defi swap submit --action-id <id> --results-only
+```
+
+## Notes
+
+- `swap quote` requires an explicit `--provider`.
+- `--type` defaults to `exact-input`.
+- `--amount` and `--amount-decimal` are for `--type exact-input`.
+- `--amount-out` and `--amount-out-decimal` are for `--type exact-output`.
+- Providers currently supporting `exact-output`: `uniswap`, `tempo`.
+- `--from-address` is required for `--provider uniswap`.
+- `--slippage-pct` is optional and currently applies to Uniswap quotes only.
+- Tempo DEX currently supports USD-denominated TIP-20s only and auto-routes supported pairs through quote-token relationships.
+- Tempo DEX swap execution settles to the caller, so `--recipient` must be omitted or match `--from-address`.
+- `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
+- Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
+- Fibrous currently supports `base`, `hyperevm`, and `citrea`.
