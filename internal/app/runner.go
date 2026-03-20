@@ -205,7 +205,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 			}
 
 			if settings.CacheEnabled && shouldOpenCache(path) && s.cache == nil {
-				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath)
+				cacheStore, err := cache.Open(settings.CachePath, settings.CacheLockPath, settings.MaxStale)
 				if err != nil {
 					// Cache should be best-effort; continue without it if initialization fails.
 					s.settings.CacheEnabled = false

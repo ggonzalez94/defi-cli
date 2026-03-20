@@ -10,6 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Added
+- Cache auto-pruning: expired entries (past TTL + `max_stale`) are automatically deleted on startup to prevent unbounded `cache.db` growth.
 - Added Tempo chain normalization, RPC defaults, and bootstrap stablecoin registries for mainnet (`tempo`/`presto`), Moderato testnet, and Tempo devnet.
 - Added the `tempo` swap provider with on-chain quote and execution planning against the Tempo Stablecoin DEX, including `exact-input` and `exact-output` support.
 - Added Tempo coverage to generic ERC-20 approval and transfer planning through shared chain/token registry support.
