@@ -27,7 +27,7 @@ Format:
 - Tempo swap planning/quotes now validate TIP-20 currency metadata up front and return `unsupported` for non-USD assets or DEX reverts such as missing pairs, instead of reporting them as transient provider outages.
 
 ### Fixed
-- None yet.
+- `lend markets`, `lend rates`, and `lend positions` now mark required flags (`--provider`, `--chain`, `--asset`/`--address`) via Cobra so `--help` and `schema` output reflect them as required.
 
 ### Docs
 - Documented Tempo chain aliases, provider support, native DEX caveats, and execution examples across README, AGENTS, and Mintlify docs.
