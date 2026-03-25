@@ -137,7 +137,10 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("assets")
 	_ = planCmd.MarkFlagRequired("reward-token")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[claimArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[claimArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit claimSubmitArgs
 	submitCmd := &cobra.Command{
@@ -363,7 +366,10 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("reward-token")
 	_ = planCmd.MarkFlagRequired("amount")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[compoundArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[compoundArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit compoundSubmitArgs
 	submitCmd := &cobra.Command{

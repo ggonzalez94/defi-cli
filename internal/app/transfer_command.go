@@ -105,7 +105,10 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("recipient")
-	configureStructuredInput[transferArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[transferArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit transferSubmitArgs
 	submitCmd := &cobra.Command{

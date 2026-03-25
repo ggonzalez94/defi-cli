@@ -34,6 +34,7 @@ Format:
 
 ### Changed
 - OWS-first execution is now the primary path for new standard EVM actions, with `--wallet` as the preferred planning identity and local signing retained only as deprecated compatibility.
+- Command schema now exposes machine-readable `input_constraints` metadata so agents can detect rules such as `exactly_one_of(wallet, from_address)` without inferring them from help text.
 - `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
 - `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
 - `actions estimate` now returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields, instead of rejecting them.

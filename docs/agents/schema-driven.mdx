@@ -24,13 +24,14 @@ Each node contains:
 - `use`
 - `short`
 - `flags[]` (`name`, `type`, `usage`, typed `default`, optional `shorthand`, `required`, `enum`, `format`, `scope`)
-- optional command metadata such as `mutation`, `input_modes`, `auth`, `request`, and `response`
+- optional command metadata such as `mutation`, `input_modes`, `input_constraints`, `auth`, `request`, and `response`
 - `subcommands[]`
 
 ## Practical uses
 
 - Generate UI forms from flag metadata.
 - Validate requested flags before execution.
+- Enforce cross-field rules like `exactly_one_of(wallet, from_address)` before execution.
 - Discover auth requirements and structured input modes at runtime.
 - Produce autocomplete for command builders.
 - Build policy-aware execution layers with `--enable-commands`.

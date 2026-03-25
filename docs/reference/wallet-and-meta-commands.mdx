@@ -38,8 +38,14 @@ Schema output includes:
 
 - inherited and local flags
 - typed defaults plus `required`, `enum`, `format`, and `scope`
-- command metadata such as `mutation`, `input_modes`, `auth`, and request/response structure hints when available
+- command metadata such as `mutation`, `input_modes`, `input_constraints`, `auth`, and request/response structure hints when available
 - mutation commands advertise whether they accept `flags`, `json`, `file`, and `stdin` input modes
+
+Common `input_constraints` examples:
+
+- `exactly_one_of` for mutually exclusive identity or amount inputs
+- `required` for provider-specific inputs that only apply on some routes
+- `forbidden` for inputs that must not be combined with a selected provider/runtime
 
 ## `version`
 

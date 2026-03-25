@@ -30,10 +30,11 @@ type structuredInputSource struct {
 }
 
 type structuredInputOptions struct {
-	Mutation bool
-	Auth     []schema.AuthRequirement
-	Response *schema.TypeSchema
-	Request  *schema.TypeSchema
+	Mutation         bool
+	InputConstraints []schema.InputConstraint
+	Auth             []schema.AuthRequirement
+	Response         *schema.TypeSchema
+	Request          *schema.TypeSchema
 }
 
 func configureStructuredInput[T any](cmd *cobra.Command, opts structuredInputOptions) {
@@ -53,11 +54,12 @@ func configureStructuredInput[T any](cmd *cobra.Command, opts structuredInputOpt
 		response = &defaultResponse
 	}
 	setCommandMetadataOrPanic(cmd, schema.CommandMetadata{
-		Mutation:   opts.Mutation,
-		InputModes: []string{"flags", "json", "file", "stdin"},
-		Auth:       opts.Auth,
-		Request:    request,
-		Response:   response,
+		Mutation:         opts.Mutation,
+		InputModes:       []string{"flags", "json", "file", "stdin"},
+		InputConstraints: opts.InputConstraints,
+		Auth:             opts.Auth,
+		Request:          request,
+		Response:         response,
 	})
 
 	prevPreRunE := cmd.PreRunE
@@ -100,11 +102,12 @@ func annotateStructuredFlagCommand(cmd *cobra.Command, opts structuredInputOptio
 		request = commandFlagRequestSchema(cmd)
 	}
 	setCommandMetadataOrPanic(cmd, schema.CommandMetadata{
-		Mutation:   opts.Mutation,
-		InputModes: []string{"flags", "json", "file", "stdin"},
-		Auth:       opts.Auth,
-		Request:    request,
-		Response:   opts.Response,
+		Mutation:         opts.Mutation,
+		InputModes:       []string{"flags", "json", "file", "stdin"},
+		InputConstraints: opts.InputConstraints,
+		Auth:             opts.Auth,
+		Request:          request,
+		Response:         opts.Response,
 	})
 
 	prevPreRunE := cmd.PreRunE
@@ -159,6 +162,37 @@ func executionSubmitAuthRequirements() []schema.AuthRequirement {
 			},
 			Optional:    true,
 			Description: "Deprecated compatibility auth for legacy_local actions only: provide a local signer via --private-key or env/file/keystore inputs.",
+		},
+	}
+}
+
+func standardExecutionIdentityInputConstraints() []schema.InputConstraint {
+	return []schema.InputConstraint{{
+		Kind:        "exactly_one_of",
+		Fields:      []string{"wallet", "from_address"},
+		Description: "Provide exactly one execution identity input. Prefer wallet-backed planning with `wallet`; `from_address` is deprecated compatibility for legacy local signing.",
+	}}
+}
+
+func swapPlanIdentityInputConstraints() []schema.InputConstraint {
+	return []schema.InputConstraint{
+		{
+			Kind:        "required",
+			Fields:      []string{"from_address"},
+			When:        map[string][]string{"provider": {"tempo"}},
+			Description: "Tempo planning requires `from_address` and does not support `wallet` yet.",
+		},
+		{
+			Kind:        "forbidden",
+			Fields:      []string{"wallet"},
+			When:        map[string][]string{"provider": {"tempo"}},
+			Description: "Tempo planning rejects `wallet`; use `from_address`.",
+		},
+		{
+			Kind:        "exactly_one_of",
+			Fields:      []string{"wallet", "from_address"},
+			When:        map[string][]string{"provider": {"taikoswap"}},
+			Description: "TaikoSwap planning requires exactly one execution identity input. Prefer wallet-backed planning with `wallet`; `from_address` is deprecated compatibility.",
 		},
 	}
 }

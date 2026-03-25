@@ -155,7 +155,10 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	_ = planCmd.MarkFlagRequired("to")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[bridgePlanArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[bridgePlanArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit bridgeSubmitArgs
 	submitCmd := &cobra.Command{

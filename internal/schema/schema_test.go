@@ -27,6 +27,11 @@ func TestBuildSchema(t *testing.T) {
 	if err := SetCommandMetadata(leaf, CommandMetadata{
 		Mutation:   true,
 		InputModes: []string{"flags", "json"},
+		InputConstraints: []InputConstraint{{
+			Kind:        "exactly_one_of",
+			Fields:      []string{"wallet", "from_address"},
+			Description: "Provide exactly one execution identity input.",
+		}},
 		Request:    &req,
 		Response:   &TypeSchema{Type: "object"},
 	}); err != nil {
@@ -47,6 +52,12 @@ func TestBuildSchema(t *testing.T) {
 	}
 	if len(s.InputModes) != 2 {
 		t.Fatalf("unexpected input modes: %#v", s.InputModes)
+	}
+	if len(s.InputConstraints) != 1 {
+		t.Fatalf("expected one input constraint, got %#v", s.InputConstraints)
+	}
+	if got := s.InputConstraints[0]; got.Kind != "exactly_one_of" || len(got.Fields) != 2 || got.Fields[0] != "wallet" || got.Fields[1] != "from_address" {
+		t.Fatalf("unexpected input constraint: %#v", got)
 	}
 	if s.Request == nil || len(s.Request.Fields) != 2 {
 		t.Fatalf("expected request schema fields, got %#v", s.Request)

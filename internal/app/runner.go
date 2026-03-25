@@ -1449,7 +1449,10 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("from-asset")
 	_ = planCmd.MarkFlagRequired("to-asset")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[swapPlanArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[swapPlanArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: swapPlanIdentityInputConstraints(),
+	})
 
 	var submit swapSubmitArgs
 	submitCmd := &cobra.Command{

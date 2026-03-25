@@ -111,7 +111,10 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("spender")
-	configureStructuredInput[approvalArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[approvalArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit approvalSubmitArgs
 	submitCmd := &cobra.Command{

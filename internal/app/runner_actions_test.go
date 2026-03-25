@@ -264,6 +264,93 @@ func TestTransferPlanSchemaIncludesWallet(t *testing.T) {
 	}
 }
 
+func TestTransferPlanSchemaIncludesIdentityInputConstraint(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "transfer plan", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+
+	constraints, ok := doc["input_constraints"].([]any)
+	if !ok || len(constraints) == 0 {
+		t.Fatalf("expected input constraints in schema, got %#v", doc["input_constraints"])
+	}
+	first, ok := constraints[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object constraint, got %#v", constraints[0])
+	}
+	if got, _ := first["kind"].(string); got != "exactly_one_of" {
+		t.Fatalf("expected exactly_one_of constraint, got %#v", first)
+	}
+	fields, ok := first["fields"].([]any)
+	if !ok || len(fields) != 2 || fields[0] != "wallet" || fields[1] != "from_address" {
+		t.Fatalf("expected wallet/from_address fields, got %#v", first["fields"])
+	}
+}
+
+func TestSwapPlanSchemaIncludesProviderSpecificIdentityConstraints(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "swap plan", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+
+	constraints, ok := doc["input_constraints"].([]any)
+	if !ok || len(constraints) < 2 {
+		t.Fatalf("expected provider-specific input constraints, got %#v", doc["input_constraints"])
+	}
+
+	var foundTempoRequired bool
+	var foundTempoForbidden bool
+	var foundTaiko bool
+	for _, item := range constraints {
+		constraint, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		when, _ := constraint["when"].(map[string]any)
+		providers, _ := when["provider"].([]any)
+		if len(providers) != 1 {
+			continue
+		}
+		switch providers[0] {
+		case "tempo":
+			kind, _ := constraint["kind"].(string)
+			switch kind {
+			case "required":
+				foundTempoRequired = true
+			case "forbidden":
+				foundTempoForbidden = true
+			}
+		case "taikoswap":
+			foundTaiko = true
+			if got, _ := constraint["kind"].(string); got != "exactly_one_of" {
+				t.Fatalf("expected taikoswap exactly_one_of constraint, got %#v", constraint)
+			}
+		}
+	}
+	if !foundTempoRequired || !foundTempoForbidden {
+		t.Fatalf("expected tempo required+forbidden identity constraints, got %#v", constraints)
+	}
+	if !foundTaiko {
+		t.Fatalf("expected taikoswap-specific identity constraint, got %#v", constraints)
+	}
+}
+
 func TestRunnerTransferSubmitSchemaIncludesStructuredInputMetadata(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer

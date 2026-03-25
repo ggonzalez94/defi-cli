@@ -17,7 +17,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
 - **Wallet** — query native and ERC-20 token balances on any supported EVM chain (no API key required).
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, track stablecoin market caps, resolve asset identifiers.
-- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
+- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, input constraints, auth, and request/response metadata.
 
 ## Documentation Site (Mintlify)
 

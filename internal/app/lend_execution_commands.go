@@ -145,7 +145,10 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[lendArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[lendArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit lendSubmitArgs
 	submitCmd := &cobra.Command{
