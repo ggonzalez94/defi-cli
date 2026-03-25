@@ -64,3 +64,28 @@ func TestStoreGetMissingAction(t *testing.T) {
 		t.Fatal("expected missing action error")
 	}
 }
+
+func TestStoreSaveGetPreservesExecutionBackend(t *testing.T) {
+	dir := t.TempDir()
+	store, err := OpenStore(filepath.Join(dir, "actions.db"), filepath.Join(dir, "actions.lock"))
+	if err != nil {
+		t.Fatalf("OpenStore failed: %v", err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+
+	action := NewAction(NewActionID(), "swap", "eip155:167000", Constraints{})
+	action.ExecutionBackend = ExecutionBackendTempo
+	action.WalletID = "wallet-tempo"
+	action.WalletName = "Tempo Agent Wallet"
+	if err := store.Save(action); err != nil {
+		t.Fatalf("Save failed: %v", err)
+	}
+
+	got, err := store.Get(action.ActionID)
+	if err != nil {
+		t.Fatalf("Get failed: %v", err)
+	}
+	if got.ExecutionBackend != action.ExecutionBackend {
+		t.Fatalf("execution backend mismatch: %s vs %s", got.ExecutionBackend, action.ExecutionBackend)
+	}
+}
