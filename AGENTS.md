@@ -80,7 +80,9 @@ README.md                         # user-facing usage + caveats
 - TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
 - `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
 - Execution `plan` and `submit` commands also support `--input-json` and `--input-file` (`-` reads stdin); explicit flags override structured input values.
+- Standard EVM execution planning is OWS-first: use `--wallet` as the primary identity input for new `bridge|approvals|transfer|lend|yield|rewards` plans and TaikoSwap `swap plan`.
 - Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.
+- `--from-address` remains as deprecated compatibility for planning; it produces `legacy_local` actions intended for the legacy local-key submit lane.
 - `schema` now includes inherited flags plus command/flag metadata (`required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints).
 - Metadata ownership is split by intent:
   - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
@@ -99,6 +101,7 @@ README.md                         # user-facing usage + caveats
   - `swap`/`bridge` action construction is provider capability based (`BuildSwapAction` / `BuildBridgeAction`) because route payloads are provider-specific.
   - `lend`/`yield`/`rewards`/`approvals`/`transfer` action construction uses internal planners for deterministic contract-call composition.
 - All execution `submit` commands can broadcast transactions.
+- Wallet-backed submit for standard EVM actions uses persisted `wallet_id` plus `DEFI_OWS_TOKEN`; normal OWS-backed submit does not take owner-mode private keys or legacy signer flags.
 - Execution pre-sign checks enforce bounded ERC-20 approvals by default; `--allow-max-approval` opts into larger approvals when required.
 - Bridge execution pre-sign checks validate canonical execution targets plus provider settlement metadata/endpoints on covered Across/LiFi source chains by default; `--unsafe-provider-tx` bypasses these guardrails.
 - LiFi bridge quote/plan support optional `--from-amount-for-gas` (source token base units reserved for destination native gas top-up).
@@ -119,6 +122,7 @@ README.md                         # user-facing usage + caveats
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on EVM chains).
 - `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys and expiry checks.
+- Tempo remains the explicit execution exception in the OWS migration: Tempo `swap plan` still uses `--from-address`, and Tempo submit stays on the Tempo-specific signer/backend path.
 - Tempo execution uses type 0x76 transactions with batched calls (approve+swap are atomic in a single transaction).
 - `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.

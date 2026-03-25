@@ -24,6 +24,21 @@ description: Provider coverage, key requirements, and routing behavior.
 
 API keys in `defi-cli` are provider constraints, not CLI monetization/auth. If a provider endpoint requires credentials, the corresponding command requires that provider key.
 
+## Execution auth model
+
+Standard EVM execution is now wallet-first:
+
+- Use `--wallet` on new standard EVM `plan` commands (`bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`, and TaikoSwap `swap plan`).
+- Wallet-backed `submit` uses the action's persisted `wallet_id` and requires `DEFI_OWS_TOKEN`.
+- Wallet-backed submit does not accept owner-mode private keys or legacy signer flags.
+- `--from-address` remains as deprecated compatibility for planning legacy local-signing actions.
+
+Tempo is the explicit exception:
+
+- Tempo swap planning still uses `--from-address`.
+- Tempo submit remains on the Tempo-specific signer/backend path (`--signer tempo` or local-key compatibility).
+- Do not assume OWS covers Tempo execution in this migration.
+
 ## Key requirements by route
 
 - `swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
@@ -63,5 +78,6 @@ If either is missing, bungee quotes use public backend.
 - Tempo DEX swap execution settles to the caller; `--recipient` must match `--from-address` (or be omitted).
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
 - `--signer tempo` enables agent wallet support via the Tempo CLI (`tempo wallet -j whoami`), with delegated access keys and expiry checks. Requires the Tempo CLI installed.
+- Legacy local signing remains available only as deprecated compatibility for actions planned via `--from-address`.
 - Moonwell uses on-chain RPC reads (no API key); supported on Base and Optimism. Execution targets mToken contracts (Compound v2 style); use `--pool-address` to specify the mToken directly or let auto-resolution match by underlying asset. Moonwell does not support `--on-behalf-of`.
 - Moonwell's mWETH market auto-unwraps to native ETH on borrow/withdraw and may expect native ETH for supply/repay. The CLI planner uses the standard ERC-20 path (`approve` + call with `value=0`), so callers must handle ETH/WETH wrapping externally.

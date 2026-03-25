@@ -117,8 +117,8 @@ Flags:
 ## `yield deposit|withdraw plan|submit|status`
 
 ```bash
-defi yield deposit plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --from-address 0xYourEOA --results-only
+defi yield deposit plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --wallet agent-treasury --results-only
 defi yield deposit submit --action-id <action_id> --results-only
 ```
 
@@ -128,7 +128,8 @@ Flags (`plan`):
 - `--chain string` required
 - `--asset string` required
 - `--amount string` or `--amount-decimal string` required
-- `--from-address string` required
+- `--wallet string` recommended primary identity input
+- `--from-address string` deprecated compatibility identity input
 - `--vault-address string` required for `--provider morpho`
 - `--recipient string` optional (defaults to sender)
 - `--on-behalf-of string` optional (defaults to sender)
@@ -142,7 +143,9 @@ Flags (`submit`):
 - `--action-id string` required
 - `--input-json string` optional structured payload
 - `--input-file string` optional structured payload file or `-` for stdin
-- `submit` also supports signer/simulation/gas/policy override flags (`--from-address`, signer flags, gas/fee flags, `--allow-max-approval`, `--unsafe-provider-tx`)
+- wallet-backed submit uses persisted `wallet_id` plus `DEFI_OWS_TOKEN`
+- legacy signer flags are deprecated compatibility for `legacy_local` actions only
+- `submit` also supports sender guard / simulation / gas / policy override flags (`--from-address`, gas/fee flags, `--allow-max-approval`, `--unsafe-provider-tx`)
 - explicit flags override structured input values
 
 Flags (`status`):
@@ -154,21 +157,29 @@ Flags (`status`):
 ## `lend supply|withdraw|borrow|repay plan|submit|status`
 
 ```bash
-defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
-defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --wallet agent-treasury --results-only
 defi lend supply submit --action-id <action_id> --results-only
 ```
 
 Execution providers: `aave|morpho|moonwell`. Morpho requires `--market-id`. Moonwell uses `--pool-address` for explicit mToken or auto-resolves by underlying asset. `plan` and `submit` accept `--input-json` / `--input-file`.
 
+Standard EVM lending execution is wallet-first:
+
+- Use `--wallet` on `plan` for the primary path.
+- `--from-address` remains documented only as deprecated compatibility for planning.
+- Wallet-backed `submit` uses the persisted `wallet_id` and `DEFI_OWS_TOKEN`.
+
 ## `rewards claim|compound plan|submit|status`
 
 ```bash
-defi rewards claim plan --provider aave --chain 1 --from-address 0xYourEOA --assets 0xAsset1,0xAsset2 --reward-token 0xReward --results-only
+defi rewards claim plan --provider aave --chain 1 --wallet agent-treasury --assets 0xAsset1,0xAsset2 --reward-token 0xReward --results-only
 defi rewards claim submit --action-id <action_id> --results-only
 ```
 
 Execution provider: `aave`. `--assets` expects comma-separated on-chain addresses (structured input accepts a JSON string array). `plan` and `submit` accept `--input-json` / `--input-file`.
+
+Rewards planning follows the same OWS-first rules as lend and yield: prefer `--wallet`, keep `--from-address` only for deprecated compatibility, and use `DEFI_OWS_TOKEN` for wallet-backed submit.
 
 ## Provider-selection note
 

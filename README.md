@@ -114,15 +114,24 @@ defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset U
 ### Act: plan and execute transactions
 
 ```bash
-# Plan a swap (dry-run, no signer needed)
+# Plan standard EVM actions with an OWS wallet reference
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --wallet agent-treasury --results-only
+
+# Tempo remains the explicit exception and still plans with --from-address
 defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
 
-# Execute a planned action (requires signer)
+# Execute a wallet-backed action
+export DEFI_OWS_TOKEN=...
+defi lend supply submit --action-id <action_id> --results-only
+
+# Deprecated compatibility: local-key submit for actions planned with --from-address
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
 defi swap submit --action-id <action_id> --results-only
 
 # Structured input for agents
-defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","from_address":"0xYourEOA"}' --results-only
+defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","wallet":"agent-treasury"}' --results-only
 
 # Inspect actions
 defi actions list --results-only
@@ -188,14 +197,30 @@ For persistent shell setup, add exports to your shell profile (for example `~/.z
 
 If a keyed provider is used without a key, CLI exits with code `10`.
 
-## Execution Signer Inputs (Submit Commands)
+## Execution Auth (Submit Commands)
 
-Execution `submit` commands support a local key signer and (on Tempo) an agent wallet signer.
+Standard EVM execution is OWS-first:
 
-Signer selection:
+- Plan commands use `--wallet` as the primary identity input for new standard EVM actions.
+- Wallet-backed `submit` uses the persisted `wallet_id` from the action plus `DEFI_OWS_TOKEN`.
+- Wallet-backed actions do not accept legacy signer flags or owner-mode private keys during `submit`.
+- `--from-address` planning remains available as deprecated compatibility only.
 
-- `--signer tempo` — use the Tempo CLI agent wallet (`tempo wallet -j whoami`); requires the Tempo CLI installed and configured with delegated access keys.
-- Local key signer (default) — uses the key input precedence below.
+```bash
+export DEFI_OWS_TOKEN=...
+defi bridge submit --action-id <action_id> --results-only
+```
+
+Tempo remains the explicit exception:
+
+- Tempo swap planning still uses `--from-address`.
+- Tempo submit still uses the separate Tempo signer path (`--signer tempo`) or local-key compatibility.
+- OWS does not currently cover Tempo-native execution.
+
+Deprecated compatibility lane for legacy local signing:
+
+- Applies only to actions planned through `--from-address`.
+- `--signer local` / private-key inputs remain supported for those legacy actions.
 
 Key input precedence:
 
@@ -211,7 +236,7 @@ Key env/file inputs (in precedence order when `--key-source auto` and `--private
 
 You can force source selection with `--key-source env|file|keystore`.
 
-`submit` commands support optional `--from-address` as an explicit signer-address guard.
+`submit` commands support optional `--from-address` as an explicit sender-address guard.
 
 ## Config (Optional)
 
