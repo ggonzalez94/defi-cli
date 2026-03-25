@@ -126,9 +126,10 @@ defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset US
 export DEFI_OWS_TOKEN=...
 defi lend supply submit --action-id <action_id> --results-only
 
-# Deprecated compatibility: local-key submit for actions planned with --from-address
+# Deprecated compatibility: local-key submit for standard EVM actions planned with --from-address
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
-defi swap submit --action-id <action_id> --results-only
+defi lend supply submit --action-id <action_id> --results-only
 
 # Structured input for agents
 defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","wallet":"agent-treasury"}' --results-only
@@ -220,6 +221,7 @@ Tempo remains the explicit exception:
 Deprecated compatibility lane for legacy local signing:
 
 - Applies only to actions planned through `--from-address`.
+- Tempo-planned actions (`execution_backend=tempo`) are not eligible for this lane.
 - `--signer local` / private-key inputs remain supported for those legacy actions.
 
 Key input precedence:
