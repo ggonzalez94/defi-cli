@@ -13,6 +13,7 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
+	"github.com/ggonzalez94/defi-cli/internal/ows"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -142,6 +143,12 @@ func setCommandMetadataOrPanic(cmd *cobra.Command, meta schema.CommandMetadata) 
 func executionSubmitAuthRequirements() []schema.AuthRequirement {
 	return []schema.AuthRequirement{
 		{
+			Kind:    "wallet",
+			EnvVars: []string{ows.EnvOWSToken},
+			Description: "Primary auth for wallet-backed execution (execution_backend=ows): set DEFI_OWS_TOKEN in the environment. " +
+				"Submit uses the persisted wallet_id and does not accept owner private keys.",
+		},
+		{
 			Kind: "signer",
 			EnvVars: []string{
 				execsigner.EnvPrivateKey,
@@ -150,7 +157,8 @@ func executionSubmitAuthRequirements() []schema.AuthRequirement {
 				execsigner.EnvKeystorePassword,
 				execsigner.EnvKeystorePasswordFile,
 			},
-			Description: "Provide a local signer via --private-key or env/file/keystore inputs.",
+			Optional:    true,
+			Description: "Deprecated compatibility auth for legacy_local actions only: provide a local signer via --private-key or env/file/keystore inputs.",
 		},
 	}
 }

@@ -1,0 +1,74 @@
+package execution
+
+import (
+	"context"
+	"math/big"
+	"testing"
+
+	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/core/types"
+)
+
+type stubEVMSubmitBackend struct {
+	sender common.Address
+}
+
+func (s stubEVMSubmitBackend) EffectiveSender() common.Address {
+	return s.sender
+}
+
+func (s stubEVMSubmitBackend) SubmitDynamicFeeTx(context.Context, string, *big.Int, *types.Transaction) (common.Hash, error) {
+	return common.Hash{}, nil
+}
+
+func TestResolveExecutionBackendUsesOWSForWalletActions(t *testing.T) {
+	backend := stubEVMSubmitBackend{sender: common.HexToAddress("0x00000000000000000000000000000000000000aa")}
+	action := &Action{
+		ChainID:          "eip155:1",
+		ExecutionBackend: ExecutionBackendOWS,
+		WalletID:         "wallet-123",
+	}
+
+	exec, err := ResolveExecutionBackend(action, staticSigner{}, backend)
+	if err != nil {
+		t.Fatalf("ResolveExecutionBackend failed: %v", err)
+	}
+	evmExec, ok := exec.(*EVMStepExecutor)
+	if !ok {
+		t.Fatalf("expected EVMStepExecutor, got %T", exec)
+	}
+	if evmExec.backend != backend {
+		t.Fatalf("expected OWS backend to be preserved")
+	}
+}
+
+func TestResolveExecutionBackendUsesLegacyForLegacyActions(t *testing.T) {
+	backend := stubEVMSubmitBackend{sender: common.HexToAddress("0x00000000000000000000000000000000000000aa")}
+	action := &Action{
+		ChainID:          "eip155:1",
+		ExecutionBackend: ExecutionBackendLegacyLocal,
+	}
+
+	exec, err := ResolveExecutionBackend(action, staticSigner{}, backend)
+	if err != nil {
+		t.Fatalf("ResolveExecutionBackend failed: %v", err)
+	}
+	if _, ok := exec.(*EVMStepExecutor); !ok {
+		t.Fatalf("expected EVMStepExecutor, got %T", exec)
+	}
+}
+
+func TestResolveExecutionBackendUsesTempoForTempoActions(t *testing.T) {
+	action := &Action{
+		ChainID:          "eip155:4217",
+		ExecutionBackend: ExecutionBackendTempo,
+	}
+
+	exec, err := ResolveExecutionBackend(action, staticSigner{}, nil)
+	if err != nil {
+		t.Fatalf("ResolveExecutionBackend failed: %v", err)
+	}
+	if _, ok := exec.(*TempoStepExecutor); !ok {
+		t.Fatalf("expected TempoStepExecutor, got %T", exec)
+	}
+}

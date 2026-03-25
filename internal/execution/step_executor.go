@@ -79,5 +79,5 @@ func ResolveStepExecutor(chainID int64, txSigner signer.Signer) StepExecutor {
 	if IsTempoChain(chainID) {
 		return NewTempoStepExecutor(txSigner)
 	}
-	return NewEVMStepExecutor(txSigner)
+	return NewEVMStepExecutor(NewLocalSubmitBackend(txSigner))
 }

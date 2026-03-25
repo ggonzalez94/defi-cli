@@ -65,12 +65,9 @@ func DefaultExecuteOptions() ExecuteOptions {
 	}
 }
 
-func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner signer.Signer, opts ExecuteOptions) error {
+func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner signer.Signer, evmBackend EVMSubmitBackend, opts ExecuteOptions) error {
 	if action == nil {
 		return clierr.New(clierr.CodeInternal, "missing action")
-	}
-	if txSigner == nil {
-		return clierr.New(clierr.CodeSigner, "missing signer")
 	}
 	if len(action.Steps) == 0 {
 		return clierr.New(clierr.CodeUsage, "action has no executable steps")
@@ -94,16 +91,10 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 		return nil
 	}
 
-	// Resolve the chain ID from the first step to select the executor.
-	firstChainID := strings.TrimSpace(action.Steps[0].ChainID)
-	if firstChainID == "" {
-		firstChainID = strings.TrimSpace(action.ChainID)
-	}
-	numericChainID, err := ParseEVMChainID(firstChainID)
+	executor, err := ResolveExecutionBackend(action, txSigner, evmBackend)
 	if err != nil {
-		return clierr.Wrap(clierr.CodeUsage, "parse chain id for executor selection", err)
+		return err
 	}
-	executor := ResolveStepExecutor(numericChainID, txSigner)
 	if evmExec, ok := executor.(*EVMStepExecutor); ok {
 		defer evmExec.Close()
 	}
@@ -216,7 +207,6 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 	}
 	return nil
 }
-
 
 func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step *ActionStep, msg ethereum.CallMsg, txHash common.Hash, opts ExecuteOptions, persist func() error) (*big.Int, error) {
 	waitCtx, cancel := context.WithTimeout(ctx, opts.StepTimeout)

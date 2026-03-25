@@ -12,28 +12,30 @@ import (
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
-	"github.com/ggonzalez94/defi-cli/internal/execution/signer"
 )
 
 // EVMStepExecutor executes action steps as EIP-1559 transactions on
 // EVM-compatible chains. It manages its own RPC client connections internally.
 type EVMStepExecutor struct {
-	txSigner   signer.Signer
+	backend    EVMSubmitBackend
 	rpcClients map[string]*ethclient.Client
 	mu         sync.Mutex
 }
 
-// NewEVMStepExecutor creates an EVMStepExecutor backed by the given signer.
-func NewEVMStepExecutor(txSigner signer.Signer) *EVMStepExecutor {
+// NewEVMStepExecutor creates an EVMStepExecutor backed by the given submit backend.
+func NewEVMStepExecutor(backend EVMSubmitBackend) *EVMStepExecutor {
 	return &EVMStepExecutor{
-		txSigner:   txSigner,
+		backend:    backend,
 		rpcClients: make(map[string]*ethclient.Client),
 	}
 }
 
 // EffectiveSender returns the address that will sign and send transactions.
 func (e *EVMStepExecutor) EffectiveSender() common.Address {
-	return e.txSigner.Address()
+	if e == nil || e.backend == nil {
+		return common.Address{}
+	}
+	return e.backend.EffectiveSender()
 }
 
 // Close closes all cached RPC client connections.
@@ -103,7 +105,11 @@ func (e *EVMStepExecutor) ExecuteStep(ctx context.Context, store *Store, action 
 	if !ok {
 		return clierr.New(clierr.CodeUsage, "invalid step value")
 	}
-	msg := ethereum.CallMsg{From: e.txSigner.Address(), To: &target, Value: value, Data: data}
+	sender := e.EffectiveSender()
+	if sender == (common.Address{}) {
+		return clierr.New(clierr.CodeSigner, "missing EVM submission backend sender")
+	}
+	msg := ethereum.CallMsg{From: sender, To: &target, Value: value, Data: data}
 
 	// Build a persist callback for the receipt-polling phase.
 	persist := func() error {
@@ -166,9 +172,9 @@ func (e *EVMStepExecutor) ExecuteStep(ctx context.Context, store *Store, action 
 	if err != nil {
 		return err
 	}
-	unlockNonce := acquireSignerNonceLock(chainID, e.txSigner.Address())
+	unlockNonce := acquireSignerNonceLock(chainID, sender)
 	defer unlockNonce()
-	nonce, err := client.PendingNonceAt(ctx, e.txSigner.Address())
+	nonce, err := client.PendingNonceAt(ctx, sender)
 	if err != nil {
 		return clierr.Wrap(clierr.CodeUnavailable, "fetch nonce", err)
 	}
@@ -183,20 +189,17 @@ func (e *EVMStepExecutor) ExecuteStep(ctx context.Context, store *Store, action 
 		Value:     value,
 		Data:      data,
 	})
-	signed, err := e.txSigner.SignTx(chainID, tx)
+	txHash, err := e.backend.SubmitDynamicFeeTx(ctx, rpcURL, chainID, tx)
 	if err != nil {
-		return clierr.Wrap(clierr.CodeSigner, "sign transaction", err)
-	}
-	if err := client.SendTransaction(ctx, signed); err != nil {
-		return wrapEVMExecutionError(clierr.CodeUnavailable, "broadcast transaction", err)
+		return err
 	}
 	step.Status = StepStatusSubmitted
-	step.TxHash = signed.Hash().Hex()
+	step.TxHash = txHash.Hex()
 	step.Error = ""
 	if err := safePersist(persist); err != nil {
 		return err
 	}
-	confirmedBlock, err := waitForStepConfirmation(ctx, client, step, msg, signed.Hash(), opts, persist)
+	confirmedBlock, err := waitForStepConfirmation(ctx, client, step, msg, txHash, opts, persist)
 	if err != nil {
 		return err
 	}

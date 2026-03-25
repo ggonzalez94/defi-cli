@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"time"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -130,16 +129,17 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
+			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
+				Signer:      submit.Signer,
+				KeySource:   submit.KeySource,
+				PrivateKey:  submit.PrivateKey,
+				FromAddress: submit.FromAddress,
+			})
 			if err != nil {
 				return err
 			}
-			senderAddr := effectiveSenderAddress(txSigner)
-			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
+			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
+				return err
 			}
 			execOpts, err := parseExecuteOptions(
 				submit.Simulate,
@@ -155,7 +155,7 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
