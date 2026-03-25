@@ -43,14 +43,14 @@ func resolveExecutionIdentity(walletRef, fromAddress, chainArg string) (executio
 
 		wallet, err := ows.ResolveWalletRef("", walletRef)
 		if err != nil {
-			return executionIdentity{}, clierr.Wrap(clierr.CodeUsage, "resolve --wallet", err)
+			return executionIdentity{}, clierr.Wrap(classifyWalletResolveErrorCode(err), "resolve --wallet", err)
 		}
 		sender, err := ows.SenderAddressForChain(wallet, chain.CAIP2)
 		if err != nil {
-			return executionIdentity{}, clierr.Wrap(clierr.CodeUsage, "resolve wallet sender for chain", err)
+			return executionIdentity{}, clierr.Wrap(classifyWalletSenderErrorCode(err), "resolve wallet sender for chain", err)
 		}
 		if !common.IsHexAddress(sender) {
-			return executionIdentity{}, clierr.New(clierr.CodeUsage, "wallet sender address must be a valid EVM hex address")
+			return executionIdentity{}, clierr.New(clierr.CodeUnavailable, "wallet sender address must be a valid EVM hex address")
 		}
 
 		return executionIdentity{
@@ -77,5 +77,35 @@ func isTempoChain(chainID string) bool {
 		return true
 	default:
 		return false
+	}
+}
+
+func classifyWalletResolveErrorCode(err error) clierr.Code {
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(msg, "wallet reference is required"),
+		strings.Contains(msg, "wallet \"") && strings.Contains(msg, " not found"),
+		strings.Contains(msg, "ambiguous wallet id"),
+		strings.Contains(msg, "ambiguous wallet name"):
+		return clierr.CodeUsage
+	case strings.Contains(msg, "list wallet metadata"),
+		strings.Contains(msg, "read wallet metadata"),
+		strings.Contains(msg, "decode wallet metadata"),
+		strings.Contains(msg, "resolve home directory"),
+		strings.Contains(msg, "resolve absolute path"):
+		return clierr.CodeUnavailable
+	default:
+		return clierr.CodeUnavailable
+	}
+}
+
+func classifyWalletSenderErrorCode(err error) clierr.Code {
+	msg := strings.ToLower(strings.TrimSpace(err.Error()))
+	switch {
+	case strings.Contains(msg, "chain id is required"),
+		strings.Contains(msg, "has no account for chain"):
+		return clierr.CodeUsage
+	default:
+		return clierr.CodeUnavailable
 	}
 }
