@@ -77,7 +77,7 @@ README.md                         # user-facing usage + caveats
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
 - Tempo quote/planning does not require an API key; execution uses native Tempo type 0x76 transactions via the TempoStepExecutor and currently settles Tempo DEX swaps back to the sender only.
 - Tempo Stablecoin DEX swaps are currently USD TIP-20 only; the DEX auto-routes supported pairs through quote-token relationships, so non-USD assets should fail as `unsupported` rather than `unavailable`.
-- TaikoSwap quote/planning does not require an API key; execution uses local signer inputs (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, or keystore envs) and also auto-discovers `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`) when present.
+- TaikoSwap quote/planning does not require an API key; standard EVM/TaikoSwap execution is now OWS-first via `--wallet`, while local signing remains only as deprecated compatibility for `legacy_local` actions (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, keystore envs, or auto-discovered `~/.config/defi/key.hex` / `$XDG_CONFIG_HOME/defi/key.hex`).
 - `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
 - Execution `plan` and `submit` commands also support `--input-json` and `--input-file` (`-` reads stdin); explicit flags override structured input values.
 - Standard EVM execution planning is OWS-first: use `--wallet` as the primary identity input for new `bridge|approvals|transfer|lend|yield|rewards` plans and TaikoSwap `swap plan`.

@@ -90,11 +90,8 @@ Tempo swaps use native type 0x76 transactions that batch approve+swap into a sin
 # Plan a Tempo swap
 defi swap plan --provider tempo --chain tempo --from-asset USDC.e --to-asset pathUSD --amount 1000000 --from-address 0xYourWallet --results-only
 
-# Submit with agent wallet
+# Submit through the Tempo signer/backend path
 defi swap submit --action-id <id> --signer tempo --results-only
-
-# Or submit with local key
-defi swap submit --action-id <id> --results-only
 ```
 
 ## Notes

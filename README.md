@@ -214,7 +214,7 @@ defi bridge submit --action-id <action_id> --results-only
 Tempo remains the explicit exception:
 
 - Tempo swap planning still uses `--from-address`.
-- Tempo submit still uses the separate Tempo signer path (`--signer tempo`) or local-key compatibility.
+- Tempo submit still uses the separate Tempo signer/backend path (`--signer tempo`).
 - OWS does not currently cover Tempo-native execution.
 
 Deprecated compatibility lane for legacy local signing:
