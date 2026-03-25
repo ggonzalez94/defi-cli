@@ -88,4 +88,10 @@ func TestStoreSaveGetPreservesExecutionBackend(t *testing.T) {
 	if got.ExecutionBackend != action.ExecutionBackend {
 		t.Fatalf("execution backend mismatch: %s vs %s", got.ExecutionBackend, action.ExecutionBackend)
 	}
+	if got.WalletID != action.WalletID {
+		t.Fatalf("wallet id mismatch: %s vs %s", got.WalletID, action.WalletID)
+	}
+	if got.WalletName != action.WalletName {
+		t.Fatalf("wallet name mismatch: %s vs %s", got.WalletName, action.WalletName)
+	}
 }

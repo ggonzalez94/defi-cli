@@ -134,6 +134,9 @@ func TestActionRoundTripIncludesWalletMetadata(t *testing.T) {
 	if !strings.Contains(jsonBody, `"wallet_name":"Agent Wallet"`) {
 		t.Fatalf("expected wallet_name in JSON, got: %s", jsonBody)
 	}
+	if !strings.Contains(jsonBody, `"from_address":"0x00000000000000000000000000000000000000aa"`) {
+		t.Fatalf("expected from_address in JSON, got: %s", jsonBody)
+	}
 	if !strings.Contains(jsonBody, `"execution_backend":"ows"`) {
 		t.Fatalf("expected execution_backend in JSON, got: %s", jsonBody)
 	}
@@ -150,5 +153,8 @@ func TestActionRoundTripIncludesWalletMetadata(t *testing.T) {
 	}
 	if decoded.ExecutionBackend != action.ExecutionBackend {
 		t.Fatalf("execution_backend mismatch: %s vs %s", decoded.ExecutionBackend, action.ExecutionBackend)
+	}
+	if decoded.FromAddress != action.FromAddress {
+		t.Fatalf("from_address mismatch: %s vs %s", decoded.FromAddress, action.FromAddress)
 	}
 }
