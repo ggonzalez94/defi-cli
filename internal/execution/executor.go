@@ -102,8 +102,15 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 		defer tempoExec.Close()
 	}
 
+	effectiveSender := executor.EffectiveSender()
+	if err := validatePersistedActionSender(action, effectiveSender); err != nil {
+		return err
+	}
+
 	action.Status = ActionStatusRunning
-	action.FromAddress = executor.EffectiveSender().Hex()
+	if strings.TrimSpace(action.FromAddress) == "" {
+		action.FromAddress = effectiveSender.Hex()
+	}
 	if err := persist(); err != nil {
 		return err
 	}
@@ -204,6 +211,24 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 	action.Status = ActionStatusCompleted
 	if err := persist(); err != nil {
 		return err
+	}
+	return nil
+}
+
+func validatePersistedActionSender(action *Action, effectiveSender common.Address) error {
+	if action == nil {
+		return clierr.New(clierr.CodeInternal, "missing action")
+	}
+	if effectiveSender == (common.Address{}) {
+		return clierr.New(clierr.CodeSigner, "execution backend returned empty sender")
+	}
+	if persistedSender := strings.TrimSpace(action.FromAddress); persistedSender != "" {
+		if !common.IsHexAddress(persistedSender) {
+			return clierr.New(clierr.CodeSigner, "planned action sender must be a valid EVM hex address")
+		}
+		if !strings.EqualFold(common.HexToAddress(persistedSender).Hex(), effectiveSender.Hex()) {
+			return clierr.New(clierr.CodeSigner, "execution backend sender does not match planned action sender")
+		}
 	}
 	return nil
 }
