@@ -147,7 +147,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	planCmd.Flags().StringVar(&plan.FromAmountForGas, "from-amount-for-gas", "", "Optional amount in source token base units to reserve for destination native gas (LiFi)")
 	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
+	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to the resolved sender address)")
 	planCmd.Flags().Int64Var(&plan.SlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for source chain")

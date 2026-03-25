@@ -725,6 +725,85 @@ func TestRunnerSwapPlanRequiresFromAddress(t *testing.T) {
 	}
 }
 
+func TestRunnerSwapPlanTempoSetsTempoExecutionBackend(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	state, stdout, stderr := newExecutionTestState(actionStorePath, actionLockPath)
+	state.swapProviders = map[string]providers.SwapProvider{
+		"tempo": stubSwapExecutionProvider{},
+	}
+
+	root := &cobra.Command{Use: "defi", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "plan",
+		"--provider", "tempo",
+		"--chain", "taiko",
+		"--from-asset", "USDC",
+		"--to-asset", "WETH",
+		"--amount", "1000000",
+		"--from-address", "0x00000000000000000000000000000000000000aa",
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected tempo swap plan to succeed, got err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse swap plan output: %v output=%s", err, stdout.String())
+	}
+	action, _ := env["data"].(map[string]any)
+	if action["execution_backend"] != string(execution.ExecutionBackendTempo) {
+		t.Fatalf("expected execution_backend tempo, got %#v", action["execution_backend"])
+	}
+}
+
+func TestRunnerSwapPlanTempoRejectsWallet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeOWSWalletFixture(t, home, ows.Wallet{
+		ID:        "wallet-123",
+		Name:      "Agent Wallet",
+		CreatedAt: "2026-03-25T00:00:00Z",
+		Accounts: []ows.WalletAccount{
+			{
+				AccountID:      "acc-1",
+				Address:        "0x000000000000000000000000000000000000dead",
+				ChainID:        "eip155:167000",
+				DerivationPath: "m/44'/60'/0'/0/0",
+			},
+		},
+	})
+
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	state, stdout, stderr := newExecutionTestState(actionStorePath, actionLockPath)
+	state.swapProviders = map[string]providers.SwapProvider{
+		"tempo": stubSwapExecutionProvider{},
+	}
+
+	root := &cobra.Command{Use: "defi", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "plan",
+		"--provider", "tempo",
+		"--chain", "taiko",
+		"--from-asset", "USDC",
+		"--to-asset", "WETH",
+		"--amount", "1000000",
+		"--wallet", "wallet-123",
+	})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected tempo swap plan with --wallet to fail stdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "--wallet planning is not supported on Tempo chains yet") {
+		t.Fatalf("expected tempo wallet rejection, got err=%v stderr=%s", err, stderr.String())
+	}
+}
+
 func TestRunnerTransferPlanRequiresRecipient(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -956,6 +1035,25 @@ func (stubBridgeExecutionProvider) QuoteBridge(context.Context, providers.Bridge
 func (stubBridgeExecutionProvider) BuildBridgeAction(_ context.Context, req providers.BridgeQuoteRequest, opts providers.BridgeExecutionOptions) (execution.Action, error) {
 	action := execution.NewAction(execution.NewActionID(), "bridge", req.FromChain.CAIP2, execution.Constraints{Simulate: opts.Simulate})
 	action.Provider = "stub"
+	action.FromAddress = opts.Sender
+	action.ToAddress = opts.Recipient
+	action.InputAmount = req.AmountBaseUnits
+	return action, nil
+}
+
+type stubSwapExecutionProvider struct{}
+
+func (stubSwapExecutionProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{Name: "stub-swap"}
+}
+
+func (stubSwapExecutionProvider) QuoteSwap(context.Context, providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	return model.SwapQuote{}, nil
+}
+
+func (stubSwapExecutionProvider) BuildSwapAction(_ context.Context, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, error) {
+	action := execution.NewAction(execution.NewActionID(), "swap", req.Chain.CAIP2, execution.Constraints{Simulate: opts.Simulate})
+	action.Provider = "tempo"
 	action.FromAddress = opts.Sender
 	action.ToAddress = opts.Recipient
 	action.InputAmount = req.AmountBaseUnits

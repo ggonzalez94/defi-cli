@@ -1441,7 +1441,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	planCmd.Flags().StringVar(&plan.AmountOutDecimal, "amount-out-decimal", "", "Exact-output amount in decimal units")
 	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
+	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to the resolved sender address)")
 	planCmd.Flags().Int64Var(&plan.SlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
