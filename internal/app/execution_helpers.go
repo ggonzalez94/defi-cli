@@ -37,7 +37,14 @@ func (s *runtimeState) executeActionWithTimeout(action *execution.Action, txSign
 func resolveActionExecutionBackend(cmd *cobra.Command, action execution.Action, input submitExecutionInputs) (resolvedSubmitExecution, error) {
 	switch strings.ToLower(strings.TrimSpace(string(action.ExecutionBackend))) {
 	case "", string(execution.ExecutionBackendLegacyLocal):
-		txSigner, err := newExecutionSigner(input.Signer, input.KeySource, input.PrivateKey)
+		signerBackend := strings.ToLower(strings.TrimSpace(input.Signer))
+		if signerBackend == "" {
+			signerBackend = "local"
+		}
+		if signerBackend != "local" {
+			return resolvedSubmitExecution{}, clierr.New(clierr.CodeUsage, "legacy actions only support --signer local; tempo submit requires execution_backend=tempo")
+		}
+		txSigner, err := newExecutionSigner("local", input.KeySource, input.PrivateKey)
 		if err != nil {
 			return resolvedSubmitExecution{}, err
 		}

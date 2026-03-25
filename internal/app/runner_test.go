@@ -1943,3 +1943,38 @@ func TestLegacySubmitStillLoadsLocalSigner(t *testing.T) {
 		t.Fatalf("expected submit to get past signer loading, got stderr=%s", stderr.String())
 	}
 }
+
+func TestLegacySubmitRejectsTempoSignerOverride(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	store, err := execution.OpenStore(actionStorePath, actionLockPath)
+	if err != nil {
+		t.Fatalf("open action store: %v", err)
+	}
+	defer store.Close()
+
+	action := execution.NewAction("act_00112233445566778899aabbccddeeff", "transfer", "eip155:167000", execution.Constraints{Simulate: true})
+	action.FromAddress = "0x00000000000000000000000000000000000000AA"
+	action.ExecutionBackend = execution.ExecutionBackendLegacyLocal
+	if err := store.Save(action); err != nil {
+		t.Fatalf("save action: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"transfer", "submit",
+		"--action-id", action.ActionID,
+		"--signer", "tempo",
+	})
+	if code != 2 {
+		t.Fatalf("expected usage exit 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "legacy") || !strings.Contains(strings.ToLower(stderr.String()), "local") {
+		t.Fatalf("expected legacy local-only rejection, got stderr=%s", stderr.String())
+	}
+}
