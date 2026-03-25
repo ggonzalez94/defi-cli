@@ -7,6 +7,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 )
 
 type stubEVMSubmitBackend struct {
@@ -70,5 +71,36 @@ func TestResolveExecutionBackendUsesTempoForTempoActions(t *testing.T) {
 	}
 	if _, ok := exec.(*TempoStepExecutor); !ok {
 		t.Fatalf("expected TempoStepExecutor, got %T", exec)
+	}
+}
+
+func TestOWSSubmitRejectsMalformedTxHash(t *testing.T) {
+	prevSendUnsignedTx := sendUnsignedTxFunc
+	sendUnsignedTxFunc = func(context.Context, string, string, []byte, string) (string, error) {
+		return "0xabc123", nil
+	}
+	t.Cleanup(func() {
+		sendUnsignedTxFunc = prevSendUnsignedTx
+	})
+
+	backend := NewOWSSubmitBackend("wallet-123", common.HexToAddress("0x00000000000000000000000000000000000000aa"))
+	target := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   big.NewInt(1),
+		Nonce:     7,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2),
+		Gas:       21_000,
+		To:        &target,
+		Value:     big.NewInt(0),
+	})
+
+	_, err := backend.SubmitDynamicFeeTx(context.Background(), "https://rpc.example", big.NewInt(1), tx)
+	if err == nil {
+		t.Fatal("expected malformed tx hash to fail")
+	}
+	typed, ok := clierr.As(err)
+	if !ok || typed.Code != clierr.CodeSigner {
+		t.Fatalf("expected signer error, got %v", err)
 	}
 }

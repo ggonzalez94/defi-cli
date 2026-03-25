@@ -105,6 +105,9 @@ func parseSendTxResult(out []byte, fallbackChain string) (SendTxResult, error) {
 	if txHash == "" {
 		return SendTxResult{}, fmt.Errorf("missing tx hash in ows response")
 	}
+	if !IsTxHash(txHash) {
+		return SendTxResult{}, fmt.Errorf("invalid tx hash in ows response: %q", txHash)
+	}
 
 	chain := strings.TrimSpace(parsed.Chain)
 	if chain == "" {
@@ -145,4 +148,13 @@ func isPolicyDeniedDetail(detail string) bool {
 	}
 	normalized := strings.NewReplacer("_", " ", "-", " ").Replace(lower)
 	return strings.Contains(normalized, "policy denied") || strings.Contains(normalized, "denied by policy")
+}
+
+func IsTxHash(value string) bool {
+	trimmed := strings.TrimSpace(value)
+	if len(trimmed) != 66 || !strings.HasPrefix(trimmed, "0x") {
+		return false
+	}
+	_, err := hex.DecodeString(trimmed[2:])
+	return err == nil
 }

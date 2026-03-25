@@ -53,6 +53,9 @@ func (b *owsSubmitBackend) SubmitDynamicFeeTx(ctx context.Context, rpcURL string
 	if err != nil {
 		return common.Hash{}, err
 	}
+	if !ows.IsTxHash(txHash) {
+		return common.Hash{}, clierr.New(clierr.CodeSigner, fmt.Sprintf("ows submit returned invalid tx hash %q", txHash))
+	}
 	hash := common.HexToHash(txHash)
 	if hash == (common.Hash{}) {
 		return common.Hash{}, clierr.New(clierr.CodeSigner, "ows submit returned empty tx hash")

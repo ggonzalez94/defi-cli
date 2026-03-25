@@ -9,6 +9,7 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
+	"github.com/ggonzalez94/defi-cli/internal/ows"
 	"github.com/spf13/cobra"
 )
 
@@ -61,13 +62,13 @@ func resolveActionExecutionBackend(cmd *cobra.Command, action execution.Action, 
 		if usesLegacySignerFlags(cmd) {
 			return resolvedSubmitExecution{}, clierr.New(clierr.CodeUsage, "wallet-backed actions do not accept legacy signer flags (--signer, --key-source, --private-key)")
 		}
-		if !common.IsHexAddress(action.FromAddress) {
-			return resolvedSubmitExecution{}, clierr.New(clierr.CodeUsage, "wallet-backed action is missing a valid planned sender address")
+		sender, err := resolvePersistedOWSSender(action)
+		if err != nil {
+			return resolvedSubmitExecution{}, err
 		}
-		sender := common.HexToAddress(action.FromAddress)
 		return resolvedSubmitExecution{
-			evmBackend: execution.NewOWSSubmitBackend(action.WalletID, sender),
-			sender:     sender.Hex(),
+			evmBackend: execution.NewOWSSubmitBackend(action.WalletID, common.HexToAddress(sender)),
+			sender:     sender,
 		}, nil
 	case string(execution.ExecutionBackendTempo):
 		txSigner, err := newExecutionSigner("tempo", input.KeySource, input.PrivateKey)
@@ -94,6 +95,38 @@ func usesLegacySignerFlags(cmd *cobra.Command) bool {
 		}
 	}
 	return false
+}
+
+func resolvePersistedOWSSender(action execution.Action) (string, error) {
+	chainID := strings.TrimSpace(action.ChainID)
+	if chainID == "" {
+		for _, step := range action.Steps {
+			if strings.TrimSpace(step.ChainID) != "" {
+				chainID = strings.TrimSpace(step.ChainID)
+				break
+			}
+		}
+	}
+	if chainID == "" {
+		return "", clierr.New(clierr.CodeUsage, "wallet-backed action is missing chain id for sender resolution")
+	}
+
+	wallet, err := ows.ResolveWalletRef("", action.WalletID)
+	if err != nil {
+		return "", clierr.Wrap(classifyWalletResolveErrorCode(err), "resolve persisted wallet_id", err)
+	}
+	sender, err := ows.SenderAddressForChain(wallet, chainID)
+	if err != nil {
+		return "", clierr.Wrap(classifyWalletSenderErrorCode(err), "resolve wallet sender for action chain", err)
+	}
+	if !common.IsHexAddress(sender) {
+		return "", clierr.New(clierr.CodeUnavailable, "resolved wallet sender must be a valid EVM hex address")
+	}
+	canonicalSender := common.HexToAddress(sender).Hex()
+	if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), canonicalSender) {
+		return "", clierr.New(clierr.CodeSigner, "planned action sender does not match resolved wallet sender")
+	}
+	return canonicalSender, nil
 }
 
 func validateExecutionSender(action execution.Action, expectedSender, actualSender string) error {

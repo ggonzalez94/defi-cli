@@ -322,6 +322,46 @@ func TestRunnerTransferSubmitSchemaIncludesStructuredInputMetadata(t *testing.T)
 	}
 }
 
+func TestTransferSubmitAuthMetadataPrefersOWSAndKeepsLegacyCompatibility(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "transfer submit", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+	auth, ok := doc["auth"].([]any)
+	if !ok || len(auth) < 2 {
+		t.Fatalf("expected two auth entries, got %#v", doc["auth"])
+	}
+
+	first, ok := auth[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected first auth entry shape: %#v", auth[0])
+	}
+	firstEnv, _ := first["env_vars"].([]any)
+	if len(firstEnv) != 1 || firstEnv[0] != "DEFI_OWS_TOKEN" {
+		t.Fatalf("expected OWS token auth first, got %#v", first["env_vars"])
+	}
+
+	second, ok := auth[1].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected second auth entry shape: %#v", auth[1])
+	}
+	if optional, _ := second["optional"].(bool); !optional {
+		t.Fatalf("expected legacy signer auth to be optional compatibility metadata, got %#v", second)
+	}
+	description, _ := second["description"].(string)
+	if !strings.Contains(strings.ToLower(description), "deprecated") {
+		t.Fatalf("expected deprecated compatibility description, got %#v", second["description"])
+	}
+}
+
 func TestRunnerTransferPlanAcceptsStructuredInputJSON(t *testing.T) {
 	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
 	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
