@@ -67,7 +67,8 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		AmountBase       string `json:"amount" flag:"amount" format:"base-units"`
 		AmountDecimal    string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
 		FromAmountForGas string `json:"from_amount_for_gas" flag:"from-amount-for-gas" format:"base-units"`
-		FromAddress      string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef        string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress      string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Recipient        string `json:"recipient" flag:"recipient" format:"evm-address"`
 		SlippageBps      int64  `json:"slippage_bps" flag:"slippage-bps"`
 		Simulate         bool   `json:"simulate" flag:"simulate"`
@@ -98,6 +99,10 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
+			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.FromArg)
+			if err != nil {
+				return err
+			}
 			reqStruct, err := buildRequest(plan.FromArg, plan.ToArg, plan.AssetArg, plan.ToAssetArg, plan.AmountBase, plan.AmountDecimal, plan.FromAmountForGas)
 			if err != nil {
 				return err
@@ -106,7 +111,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 			defer cancel()
 			start := time.Now()
 			action, providerInfoName, err := s.actionBuilderRegistry().BuildBridgeAction(ctx, providerName, reqStruct, providers.BridgeExecutionOptions{
-				Sender:           plan.FromAddress,
+				Sender:           identity.FromAddress,
 				Recipient:        plan.Recipient,
 				SlippageBps:      plan.SlippageBps,
 				Simulate:         plan.Simulate,
@@ -121,6 +126,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
+			applyExecutionIdentityToAction(&action, identity)
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -128,7 +134,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Bridge provider (across|lifi)")
@@ -139,6 +145,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
 	planCmd.Flags().StringVar(&plan.FromAmountForGas, "from-amount-for-gas", "", "Optional amount in source token base units to reserve for destination native gas (LiFi)")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	planCmd.Flags().Int64Var(&plan.SlippageBps, "slippage-bps", 50, "Max slippage in basis points")
@@ -147,7 +154,6 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 	_ = planCmd.MarkFlagRequired("from")
 	_ = planCmd.MarkFlagRequired("to")
 	_ = planCmd.MarkFlagRequired("asset")
-	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
 	configureStructuredInput[bridgePlanArgs](planCmd, structuredInputOptions{Mutation: true})
 

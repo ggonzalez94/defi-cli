@@ -33,7 +33,8 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		VaultAddress        string `json:"vault_address" flag:"vault-address" format:"evm-address"`
 		AmountBase          string `json:"amount" flag:"amount" format:"base-units"`
 		AmountDecimal       string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
-		FromAddress         string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef           string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress         string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Recipient           string `json:"recipient" flag:"recipient" format:"evm-address"`
 		OnBehalfOf          string `json:"on_behalf_of" flag:"on-behalf-of" format:"evm-address"`
 		Simulate            bool   `json:"simulate" flag:"simulate"`
@@ -92,10 +93,16 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		Use:   "plan",
 		Short: "Create and persist a yield action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
+			if err != nil {
+				return err
+			}
+			resolvedPlan := plan
+			resolvedPlan.FromAddress = identity.FromAddress
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := buildAction(ctx, plan)
+			action, err := buildAction(ctx, resolvedPlan)
 			providerName := normalizeLendingProvider(plan.Provider)
 			if providerName == "" {
 				providerName = "yield"
@@ -105,6 +112,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
+			applyExecutionIdentityToAction(&action, identity)
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -112,7 +120,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Yield provider (aave|morpho|moonwell)")
@@ -121,6 +129,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 	planCmd.Flags().StringVar(&plan.VaultAddress, "vault-address", "", "Morpho vault address (required for --provider morpho)")
 	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	planCmd.Flags().StringVar(&plan.OnBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
@@ -130,7 +139,6 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 	planCmd.Flags().StringVar(&plan.PoolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
-	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
 	configureStructuredInput[yieldArgs](planCmd, structuredInputOptions{Mutation: true})
 

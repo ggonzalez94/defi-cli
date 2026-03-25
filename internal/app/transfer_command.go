@@ -21,7 +21,8 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 		AssetArg      string `json:"asset" flag:"asset" required:"true" format:"asset"`
 		AmountBase    string `json:"amount" flag:"amount" format:"base-units"`
 		AmountDecimal string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
-		FromAddress   string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef     string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress   string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Recipient     string `json:"recipient" flag:"recipient" required:"true" format:"evm-address"`
 		Simulate      bool   `json:"simulate" flag:"simulate"`
 		RPCURL        string `json:"rpc_url" flag:"rpc-url" format:"url"`
@@ -69,13 +70,20 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 		Use:   "plan",
 		Short: "Create and persist an ERC-20 transfer action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
+			if err != nil {
+				return err
+			}
+			resolvedPlan := plan
+			resolvedPlan.FromAddress = identity.FromAddress
 			start := time.Now()
-			action, err := buildAction(plan)
+			action, err := buildAction(resolvedPlan)
 			status := []model.ProviderStatus{{Name: "native", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, status, false)
 				return err
 			}
+			applyExecutionIdentityToAction(&action, identity)
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -83,20 +91,20 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, status, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), status, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), status, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
 	planCmd.Flags().StringVar(&plan.AssetArg, "asset", "", "Asset symbol/address/CAIP-19")
 	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient EOA address")
 	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
-	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("recipient")
 	configureStructuredInput[transferArgs](planCmd, structuredInputOptions{Mutation: true})
 

@@ -36,7 +36,8 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		MarketID            string `json:"market_id" flag:"market-id" format:"bytes32"`
 		AmountBase          string `json:"amount" flag:"amount" format:"base-units"`
 		AmountDecimal       string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
-		FromAddress         string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef           string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress         string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Recipient           string `json:"recipient" flag:"recipient" format:"evm-address"`
 		OnBehalfOf          string `json:"on_behalf_of" flag:"on-behalf-of" format:"evm-address"`
 		InterestRateMode    int64  `json:"interest_rate_mode" flag:"interest-rate-mode"`
@@ -97,10 +98,16 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		Use:   "plan",
 		Short: "Create and persist a lend action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
+			if err != nil {
+				return err
+			}
+			resolvedPlan := plan
+			resolvedPlan.FromAddress = identity.FromAddress
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := buildAction(ctx, plan)
+			action, err := buildAction(ctx, resolvedPlan)
 			providerName := normalizeLendingProvider(plan.Provider)
 			if providerName == "" {
 				providerName = "lend"
@@ -110,6 +117,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
+			applyExecutionIdentityToAction(&action, identity)
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -117,7 +125,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Lending provider (aave|morpho|moonwell)")
@@ -126,6 +134,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	planCmd.Flags().StringVar(&plan.MarketID, "market-id", "", "Morpho market unique key (required for --provider morpho)")
 	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
 	planCmd.Flags().StringVar(&plan.OnBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
@@ -136,7 +145,6 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 	planCmd.Flags().StringVar(&plan.PoolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
-	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
 	configureStructuredInput[lendArgs](planCmd, structuredInputOptions{Mutation: true})
 
