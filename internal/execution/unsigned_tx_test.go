@@ -1,40 +1,17 @@
 package execution
 
 import (
-	"bytes"
 	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/rlp"
+	"github.com/ethereum/go-ethereum/crypto"
 )
 
-type unsignedDynamicFeeEnvelope struct {
-	ChainID   *big.Int
-	Nonce     uint64
-	GasTipCap *big.Int
-	GasFeeCap *big.Int
-	Gas       uint64
-	To        *common.Address `rlp:"nil"`
-	Value     *big.Int
-	Data      []byte
-	Access    types.AccessList
-}
-
-type unsignedAccessListEnvelope struct {
-	ChainID    *big.Int
-	Nonce      uint64
-	GasPrice   *big.Int
-	Gas        uint64
-	To         *common.Address `rlp:"nil"`
-	Value      *big.Int
-	Data       []byte
-	AccessList types.AccessList
-}
-
 func TestEncodeUnsignedDynamicFeeTx(t *testing.T) {
+	chainID := big.NewInt(1)
 	to := common.HexToAddress("0x1111111111111111111111111111111111111111")
 	accessList := types.AccessList{
 		{
@@ -45,7 +22,7 @@ func TestEncodeUnsignedDynamicFeeTx(t *testing.T) {
 		},
 	}
 	tx := types.NewTx(&types.DynamicFeeTx{
-		ChainID:    big.NewInt(1),
+		ChainID:    chainID,
 		Nonce:      7,
 		GasTipCap:  big.NewInt(2_000_000_000),
 		GasFeeCap:  big.NewInt(30_000_000_000),
@@ -61,27 +38,19 @@ func TestEncodeUnsignedDynamicFeeTx(t *testing.T) {
 		t.Fatalf("EncodeUnsignedTypedTx failed: %v", err)
 	}
 
-	payload, err := rlp.EncodeToBytes(unsignedDynamicFeeEnvelope{
-		ChainID:   big.NewInt(1),
-		Nonce:     7,
-		GasTipCap: big.NewInt(2_000_000_000),
-		GasFeeCap: big.NewInt(30_000_000_000),
-		Gas:       21000,
-		To:        &to,
-		Value:     big.NewInt(12345),
-		Data:      []byte{0x12, 0x34},
-		Access:    accessList,
-	})
-	if err != nil {
-		t.Fatalf("rlp encode expected payload: %v", err)
+	if len(got) == 0 || got[0] != types.DynamicFeeTxType {
+		t.Fatalf("expected type prefix 0x%02x, got %x", types.DynamicFeeTxType, got)
 	}
-	want := append([]byte{types.DynamicFeeTxType}, payload...)
-	if !bytes.Equal(got, want) {
-		t.Fatalf("unexpected unsigned encoding: got %x want %x", got, want)
+
+	gotHash := crypto.Keccak256Hash(got)
+	wantHash := types.NewLondonSigner(chainID).Hash(tx)
+	if gotHash != wantHash {
+		t.Fatalf("unexpected signing hash: got %s want %s", gotHash.Hex(), wantHash.Hex())
 	}
 }
 
 func TestEncodeUnsignedAccessListTx(t *testing.T) {
+	chainID := big.NewInt(10)
 	to := common.HexToAddress("0xaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 	accessList := types.AccessList{
 		{
@@ -89,7 +58,7 @@ func TestEncodeUnsignedAccessListTx(t *testing.T) {
 		},
 	}
 	tx := types.NewTx(&types.AccessListTx{
-		ChainID:    big.NewInt(10),
+		ChainID:    chainID,
 		Nonce:      19,
 		GasPrice:   big.NewInt(3_000_000_000),
 		Gas:        85_000,
@@ -104,22 +73,14 @@ func TestEncodeUnsignedAccessListTx(t *testing.T) {
 		t.Fatalf("EncodeUnsignedTypedTx failed: %v", err)
 	}
 
-	payload, err := rlp.EncodeToBytes(unsignedAccessListEnvelope{
-		ChainID:    big.NewInt(10),
-		Nonce:      19,
-		GasPrice:   big.NewInt(3_000_000_000),
-		Gas:        85_000,
-		To:         &to,
-		Value:      big.NewInt(77),
-		Data:       []byte{0xde, 0xad, 0xbe, 0xef},
-		AccessList: accessList,
-	})
-	if err != nil {
-		t.Fatalf("rlp encode expected payload: %v", err)
+	if len(got) == 0 || got[0] != types.AccessListTxType {
+		t.Fatalf("expected type prefix 0x%02x, got %x", types.AccessListTxType, got)
 	}
-	want := append([]byte{types.AccessListTxType}, payload...)
-	if !bytes.Equal(got, want) {
-		t.Fatalf("unexpected unsigned encoding: got %x want %x", got, want)
+
+	gotHash := crypto.Keccak256Hash(got)
+	wantHash := types.NewLondonSigner(chainID).Hash(tx)
+	if gotHash != wantHash {
+		t.Fatalf("unexpected signing hash: got %s want %s", gotHash.Hex(), wantHash.Hex())
 	}
 }
 

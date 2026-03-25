@@ -121,9 +121,8 @@ func classifyCommandFailure(runErr error, stdout, stderr []byte) error {
 	if detail == "" {
 		detail = strings.TrimSpace(string(stdout))
 	}
-	lower := strings.ToLower(detail)
 
-	if strings.Contains(lower, "policy denied") || strings.Contains(lower, "denied by policy") {
+	if isPolicyDeniedDetail(detail) {
 		if detail == "" {
 			return clierr.Wrap(clierr.CodeActionPolicy, "ows policy denied transaction", runErr)
 		}
@@ -134,4 +133,16 @@ func classifyCommandFailure(runErr error, stdout, stderr []byte) error {
 		return clierr.Wrap(clierr.CodeSigner, "ows send-tx command failed", runErr)
 	}
 	return clierr.Wrap(clierr.CodeSigner, "ows send-tx command failed", fmt.Errorf("%s: %w", detail, runErr))
+}
+
+func isPolicyDeniedDetail(detail string) bool {
+	lower := strings.ToLower(strings.TrimSpace(detail))
+	if lower == "" {
+		return false
+	}
+	if strings.Contains(lower, "policy_denied") {
+		return true
+	}
+	normalized := strings.NewReplacer("_", " ", "-", " ").Replace(lower)
+	return strings.Contains(normalized, "policy denied") || strings.Contains(normalized, "denied by policy")
 }

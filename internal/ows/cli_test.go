@@ -94,7 +94,35 @@ func TestSendUnsignedTxMapsPolicyDenial(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected policy denial to return an error")
 	}
+	assertActionPolicyCode(t, err)
+}
 
+func TestSendUnsignedTxMapsPolicyDeniedCodeStyle(t *testing.T) {
+	t.Setenv(EnvOWSToken, "test-passphrase")
+
+	origLookPath := lookPathFunc
+	origRunner := runCommandFunc
+	t.Cleanup(func() {
+		lookPathFunc = origLookPath
+		runCommandFunc = origRunner
+	})
+
+	lookPathFunc = func(string) (string, error) {
+		return "/usr/local/bin/ows", nil
+	}
+	runCommandFunc = func(context.Context, string, []string, []string) ([]byte, []byte, error) {
+		return nil, []byte(`{"code":"POLICY_DENIED","message":"blocked by wallet policy"}`), errors.New("exit status 1")
+	}
+
+	_, err := SendUnsignedTx(context.Background(), "wallet-1", "eip155:1", []byte{0x02}, "")
+	if err == nil {
+		t.Fatal("expected policy denial to return an error")
+	}
+	assertActionPolicyCode(t, err)
+}
+
+func assertActionPolicyCode(t *testing.T, err error) {
+	t.Helper()
 	typed, ok := clierr.As(err)
 	if !ok {
 		t.Fatalf("expected cli error type, got %T", err)
