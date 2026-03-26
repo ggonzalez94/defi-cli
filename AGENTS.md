@@ -77,12 +77,12 @@ README.md                         # user-facing usage + caveats
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
 - Tempo quote/planning does not require an API key; execution uses native Tempo type 0x76 transactions via the TempoStepExecutor and currently settles Tempo DEX swaps back to the sender only.
 - Tempo Stablecoin DEX swaps are currently USD TIP-20 only; the DEX auto-routes supported pairs through quote-token relationships, so non-USD assets should fail as `unsupported` rather than `unavailable`.
-- TaikoSwap quote/planning does not require an API key; standard EVM/TaikoSwap execution is now OWS-first via `--wallet`, while local signing remains only as deprecated compatibility for `legacy_local` actions (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, keystore envs, or auto-discovered `~/.config/defi/key.hex` / `$XDG_CONFIG_HOME/defi/key.hex`).
+- TaikoSwap quote/planning does not require an API key; standard EVM/TaikoSwap execution supports `--wallet` (OWS, recommended) and `--from-address` (local signer) (`--private-key` override, `DEFI_PRIVATE_KEY{,_FILE}`, keystore envs, or auto-discovered `~/.config/defi/key.hex` / `$XDG_CONFIG_HOME/defi/key.hex`).
 - `swap quote` (on-chain quote providers) and execution `plan` commands support optional `--rpc-url` overrides (`swap`, `bridge`, `approvals`, `transfer`, `lend`, `yield`, `rewards`); `submit`/`status` use stored action step RPC URLs.
 - Execution `plan` and `submit` commands also support `--input-json` and `--input-file` (`-` reads stdin); explicit flags override structured input values.
 - Standard EVM execution planning is OWS-first: use `--wallet` as the primary identity input for new `bridge|approvals|transfer|lend|yield|rewards` plans and TaikoSwap `swap plan`.
 - Swap execution planning validates sender/recipient inputs as EVM hex addresses before building calldata.
-- `--from-address` remains as deprecated compatibility for planning; it produces `legacy_local` actions intended for the legacy local-key submit lane.
+- `--from-address` is the local signer identity input for planning; it produces `legacy_local` actions that use local key inputs for submit.
 - `schema` now includes inherited flags plus command/flag metadata (`required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints).
 - Metadata ownership is split by intent:
   - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
@@ -122,7 +122,7 @@ README.md                         # user-facing usage + caveats
 - Uniswap quote calls require a real `swapper` address via `swap quote --from-address` and default to provider auto slippage unless `swap quote --slippage-pct` is provided.
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields (instead of EIP-1559 native-gas pricing used on EVM chains).
 - `--signer tempo` reads the agent wallet from `tempo wallet -j whoami` and requires the Tempo CLI installed and configured with delegated access keys and expiry checks.
-- Tempo remains the explicit execution exception in the OWS migration: Tempo `swap plan` still uses `--from-address`, and Tempo submit stays on the Tempo-specific signer/backend path.
+- Tempo is a separate execution path: Tempo `swap plan` uses `--from-address` (not `--wallet`), and Tempo submit uses `--signer tempo`.
 - Tempo execution uses type 0x76 transactions with batched calls (approve+swap are atomic in a single transaction).
 - `--fee-token` defaults to USDC.e on Tempo mainnet; applies to Tempo execution commands only.
 - MegaETH bootstrap symbol parsing currently supports `MEGA`, `WETH`, and `USDT` (`USDT` maps to the chain's `USDT0` contract address on `eip155:4326`). Official Mega token list currently has no Ethereum L1 `MEGA` token entry.
