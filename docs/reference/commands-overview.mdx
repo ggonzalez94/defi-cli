@@ -61,6 +61,4 @@ defi actions estimate --action-id <action_id> --results-only
 
 Execution note:
 
-- Standard EVM `plan` commands are wallet-first and use `--wallet`.
-- `--from-address` remains available as deprecated compatibility for planning.
-- Tempo swap planning is the explicit exception and still uses `--from-address`.
+Standard EVM `plan` commands accept `--wallet` (OWS, recommended) or `--from-address` (local signer). Tempo swap planning always uses `--from-address`. See [Execution & Signing](/concepts/execution-auth).

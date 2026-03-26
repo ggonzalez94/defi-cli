@@ -119,7 +119,7 @@ Explicit flags override structured input values.
 
 - Wallet-backed bridge actions use the persisted `wallet_id` and require `DEFI_OWS_TOKEN` in the environment.
 - Wallet-backed actions do not accept legacy signer flags (`--signer`, `--key-source`, `--private-key`).
-- `--from-address` on `plan` is deprecated compatibility only and produces a legacy local-signing action.
+- `--from-address` on `plan` creates a local-signer action. `--wallet` (OWS) is recommended. See [Execution & Signing](/concepts/execution-auth).
 - `bridge` steps are marked complete only after source-chain confirmation and destination settlement confirmation from provider status APIs.
 - `--step-timeout` applies to each bridge wait stage (receipt and settlement polling).
 - Global `--timeout` controls provider/planning requests; execution wait budget is derived from `--step-timeout` and remaining action stages.
@@ -159,7 +159,7 @@ Tempo execution notes:
 Standard EVM swap notes:
 
 - TaikoSwap `swap plan` is wallet-first and prefers `--wallet`.
-- `--from-address` remains deprecated compatibility for planning legacy local-signing actions.
+- Plan with `--wallet` (OWS, recommended) or `--from-address` (local signer). See [Execution & Signing](/concepts/execution-auth) for submit auth.
 - Wallet-backed `submit` uses the action's persisted `wallet_id` and `DEFI_OWS_TOKEN`.
 
 ## `transfer plan|submit|status`
@@ -178,7 +178,7 @@ defi transfer status --action-id <action_id> --results-only
 - `--asset string` required
 - `--amount string` or `--amount-decimal string`
 - `--wallet string` recommended primary identity input
-- `--from-address string` deprecated compatibility identity input
+- `--from-address string` local signer identity input
 - `--recipient string` required
 - `--rpc-url string` optional
 - `--simulate bool` optional (default `true`)
@@ -200,7 +200,7 @@ defi transfer status --action-id <action_id> --results-only
 
 Explicit flags override structured input values on `submit` as well.
 
-Wallet-backed transfer submit requires `DEFI_OWS_TOKEN`. Legacy signer flags are deprecated compatibility for legacy local-signing actions only.
+Wallet-backed transfer submit requires `DEFI_OWS_TOKEN`. Local signer flags apply to actions planned with `--from-address`. See [Execution & Signing](/concepts/execution-auth).
 
 ## `approvals plan|submit|status`
 
@@ -212,7 +212,7 @@ defi approvals status --action-id <action_id> --results-only
 
 Creates and executes ERC-20 approval transactions for a given spender and amount. `plan` and `submit` accept `--input-json` / `--input-file`.
 
-Approval planning is wallet-first on standard EVM chains. `--from-address` remains deprecated compatibility only, and wallet-backed submit requires `DEFI_OWS_TOKEN`.
+Plan with `--wallet` (OWS, recommended) or `--from-address` (local signer). See [Execution & Signing](/concepts/execution-auth). Wallet-backed submit requires `DEFI_OWS_TOKEN`.
 
 ## `actions list|show|estimate`
 
