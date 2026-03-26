@@ -5,17 +5,27 @@ description: How to use the defi-cli tool for on-chain DeFi queries and executio
 
 # defi-cli — Agent Usage Guide
 
-`defi` is an agent-first DeFi CLI. Every command returns structured JSON with a stable envelope, typed exit codes, and deterministic field ordering. This makes it ideal for programmatic use — parse stdout as JSON, branch on exit codes, and pipe between commands.
+`defi` is an agent-first DeFi CLI. Every command returns structured JSON with a stable envelope, typed exit codes, and deterministic field ordering — parse stdout as JSON, branch on exit codes, and pipe between commands.
 
 ## Install
+
+Check if already installed: `defi version`. If not:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
 ```
 
-Installs the latest release binary to `~/.local/bin/defi` (or first writable `PATH` dir). Pin a version: `curl ... | sh -s v0.5.0`.
+Installs to `~/.local/bin/defi` (or first writable `PATH` dir). Pin a version: `curl ... | sh -s v0.5.0`.
 
-Verify: `defi version`
+### Quick smoke test
+
+After install, verify the CLI works end-to-end:
+
+```bash
+defi version                                    # should print version
+defi providers list --results-only | head -20   # should print JSON array of providers
+defi chains list --results-only | head -20      # should print supported chains
+```
 
 ## Core Concepts
 
@@ -47,10 +57,9 @@ On error, the envelope goes to **stderr** (not stdout) — always a full envelop
 
 | Flag | What it does | When to use |
 |------|-------------|-------------|
-| `--results-only` | Emit only the `data` payload, skip envelope | Default for agents — less to parse |
+| `--results-only` | Emit only the `data` payload, skip envelope | Always use in automation — less to parse |
 | `--select f1,f2` | Project specific fields from each result | When you only need a few fields |
-| `--json` | Force JSON (already the default) | Explicit in scripts |
-| `--no-cache` | Skip cache reads/writes | When you need fresh data |
+| `--no-cache` | Skip cache reads/writes | When you need guaranteed-fresh data |
 | `--strict` | Fail (exit 15) if any provider returns partial | When you need complete data or nothing |
 
 **Example — get just APY and TVL:**
@@ -388,6 +397,24 @@ done
 ```bash
 defi bridge quote --provider across --from 1 --to 42161 --asset USDC --amount 1000000000 --select provider,estimated_out,estimated_fee_usd,estimated_time_s --results-only
 defi bridge quote --provider lifi --from 1 --to 42161 --asset USDC --amount 1000000000 --select provider,estimated_out,estimated_fee_usd,estimated_time_s --results-only
+```
+
+### Error handling in scripts
+
+Errors go to stderr as JSON. Use this pattern in bash:
+
+```bash
+output=$(defi lend markets --provider aave --chain 1 --asset USDC --results-only 2>/dev/null) || {
+  exit_code=$?
+  case $exit_code in
+    10) echo "Missing API key" ;;
+    11) echo "Rate limited — back off" ;;
+    12) echo "Provider down — retry later" ;;
+    *)  echo "Failed with exit code $exit_code" ;;
+  esac
+  exit 1
+}
+# Success — parse $output as JSON
 ```
 
 ## Gotchas

@@ -3,6 +3,20 @@ title: Agent Overview
 description: Build robust agent workflows on top of deterministic CLI contracts.
 ---
 
+## Install the agent skill
+
+If you use Claude Code, Cursor, Codex, or another AI coding agent that supports [open skills](https://agentskills.io), install the defi-cli skill to give your agent precise knowledge of every command, flag, output field, and gotcha:
+
+```bash
+# Install the CLI
+curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh
+
+# Install the agent skill
+npx skills add ggonzalez94/defi-cli
+```
+
+The skill teaches agents correct field names for `--select` and `jq`, the plan/submit/status execution pattern, OWS wallet usage, and pitfalls like the missing `health_factor` field in position data.
+
 ## Why agents like defi-cli
 
 - Stable envelope schema (`version`, `success`, `error`, `meta`)
