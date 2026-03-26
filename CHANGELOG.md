@@ -7,7 +7,7 @@ Format:
 - Group notes by section in this order: `Added`, `Changed`, `Deprecated`, `Fixed`, `Docs`, `Security`.
 - Keep bullets short and focused on user impact.
 
-## [Unreleased]
+## [v0.5.0] - 2026-03-26
 
 ### Added
 - Moonwell lending provider (Base, Optimism) — markets, rates, positions, yield opportunities/positions, and execution (supply, withdraw, borrow, repay).

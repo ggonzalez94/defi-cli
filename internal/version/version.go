@@ -4,7 +4,7 @@ import "fmt"
 
 var (
 	CLIName    = "defi"
-	CLIVersion = "0.3.1"
+	CLIVersion = "0.5.0"
 	Commit     = "unknown"
 	BuildDate  = "unknown"
 )
