@@ -32,7 +32,8 @@
               "concepts/output-contract",
               "concepts/ids-and-amounts",
               "concepts/config-and-cache",
-              "concepts/providers-and-auth"
+              "concepts/providers-and-auth",
+              "concepts/execution-auth"
             ]
           },
           {

@@ -1,0 +1,100 @@
+---
+title: Execution & Signing
+description: How defi-cli signs and submits transactions — OWS wallets and local signers.
+---
+
+## Overview
+
+Execution commands (`plan`, `submit`, `status`) require a signing backend. The backend is selected at **plan time** and persisted with the action — `submit` reads the stored backend and routes accordingly.
+
+Two backends are supported:
+
+| Backend | Plan flag | Submit auth | Best for |
+| --- | --- | --- | --- |
+| **OWS** (recommended) | `--wallet <name-or-id>` | `DEFI_OWS_TOKEN` env var | Agent automation, policy-controlled signing, encrypted key storage |
+| **Local signer** | `--from-address <0x...>` | `--private-key` / env vars / keystore | Quick scripting, CI pipelines, environments without OWS |
+
+Tempo swap planning is a separate path — it always uses `--from-address` and `--signer tempo` for submit. OWS does not cover Tempo-native execution yet.
+
+## OWS (recommended)
+
+[Open Wallet Standard](https://docs.openwallet.sh/) keeps private keys encrypted at rest. The CLI shells out to `ows sign send-tx` when broadcasting.
+
+**Why OWS:**
+
+- Keys encrypted at rest, never exposed as plaintext env vars
+- Built-in policy engine (spend limits, asset allowlists, chain restrictions)
+- Multi-chain with a single wallet identity
+- Agent-friendly token access via `DEFI_OWS_TOKEN`
+
+**Setup:**
+
+```bash
+npm install -g @open-wallet-standard/core
+ows wallet create --name agent-treasury
+```
+
+**Plan and submit:**
+
+```bash
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --wallet agent-treasury
+export DEFI_OWS_TOKEN=$(ows token create --wallet agent-treasury --ttl 24h)
+defi swap submit --action-id <action_id>
+```
+
+OWS-backed submit does not accept local signer flags (`--private-key`, `--signer`, `--key-source`).
+
+## Local signer
+
+Sign directly with a local private key. No external tooling required.
+
+**Plan and submit:**
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
+defi lend supply submit --action-id <action_id>
+```
+
+**Key input precedence** (when `--key-source auto` and `--private-key` is unset):
+
+1. `--private-key` flag (hex string, one-off override)
+2. `DEFI_PRIVATE_KEY` env var (hex string)
+3. `DEFI_PRIVATE_KEY_FILE` env var (path to key file)
+4. Default key file: `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`)
+5. `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
+
+Force source selection with `--key-source env|file|keystore`.
+
+## Tempo exception
+
+Tempo swap planning uses `--from-address` directly — not `--wallet`:
+
+```bash
+defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA
+defi swap submit --action-id <action_id> --signer tempo
+```
+
+Tempo uses type 0x76 transactions with its own signer backend. `--signer tempo` reads the agent wallet from `tempo wallet -j whoami`.
+
+## Structured input
+
+Both backends work with `--input-json` / `--input-file`:
+
+```bash
+# OWS
+defi transfer plan --input-json '{"chain":"8453","asset":"USDC","amount":"1000000","wallet":"agent-treasury","recipient":"0x..."}'
+
+# Local signer
+defi transfer plan --input-json '{"chain":"8453","asset":"USDC","amount":"1000000","from_address":"0xYourEOA","recipient":"0x..."}'
+```
+
+## How it works internally
+
+The `execution_backend` field in the persisted action determines submit routing:
+
+- `ows` — wallet-backed submit via OWS CLI subprocess
+- `legacy_local` — local key signing via go-ethereum
+- `tempo` — Tempo-native signer backend
+
+Submit commands inspect this field and route to the matching backend. You cannot mix backends for the same action.
