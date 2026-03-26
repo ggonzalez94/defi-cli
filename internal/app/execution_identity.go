@@ -67,7 +67,7 @@ func resolveExecutionIdentity(walletRef, fromAddress, chainArg string) (executio
 	return executionIdentity{
 		FromAddress:      common.HexToAddress(fromAddress).Hex(),
 		ExecutionBackend: execution.ExecutionBackendLegacyLocal,
-		Warnings:         []string{"--from-address is deprecated for planning; use --wallet instead"},
+		Warnings:         []string{"--wallet (OWS) is recommended over --from-address for planning; see docs for details"},
 	}, nil
 }
 

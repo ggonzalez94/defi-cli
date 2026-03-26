@@ -161,7 +161,7 @@ func executionSubmitAuthRequirements() []schema.AuthRequirement {
 				execsigner.EnvKeystorePasswordFile,
 			},
 			Optional:    true,
-			Description: "Deprecated compatibility auth for legacy_local actions only: provide a local signer via --private-key or env/file/keystore inputs.",
+			Description: "Local signer auth for actions planned with --from-address: provide a local signer via --private-key or env/file/keystore inputs.",
 		},
 	}
 }
@@ -170,7 +170,7 @@ func standardExecutionIdentityInputConstraints() []schema.InputConstraint {
 	return []schema.InputConstraint{{
 		Kind:        "exactly_one_of",
 		Fields:      []string{"wallet", "from_address"},
-		Description: "Provide exactly one execution identity input. Prefer wallet-backed planning with `wallet`; `from_address` is deprecated compatibility for legacy local signing.",
+		Description: "Provide exactly one execution identity input: `wallet` (OWS, recommended) or `from_address` (local signer).",
 	}}
 }
 
@@ -192,7 +192,7 @@ func swapPlanIdentityInputConstraints() []schema.InputConstraint {
 			Kind:        "exactly_one_of",
 			Fields:      []string{"wallet", "from_address"},
 			When:        map[string][]string{"provider": {"taikoswap"}},
-			Description: "TaikoSwap planning requires exactly one execution identity input. Prefer wallet-backed planning with `wallet`; `from_address` is deprecated compatibility.",
+			Description: "TaikoSwap planning requires exactly one execution identity input: `wallet` (OWS, recommended) or `from_address` (local signer).",
 		},
 	}
 }

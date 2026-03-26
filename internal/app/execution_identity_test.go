@@ -50,7 +50,7 @@ func TestResolveExecutionIdentityFromWallet(t *testing.T) {
 	}
 }
 
-func TestResolveExecutionIdentityFromDeprecatedFromAddress(t *testing.T) {
+func TestResolveExecutionIdentityFromFromAddress(t *testing.T) {
 	got, err := resolveExecutionIdentity("", "0x000000000000000000000000000000000000dead", "1")
 	if err != nil {
 		t.Fatalf("resolveExecutionIdentity failed: %v", err)
@@ -64,8 +64,8 @@ func TestResolveExecutionIdentityFromDeprecatedFromAddress(t *testing.T) {
 	if got.ExecutionBackend != execution.ExecutionBackendLegacyLocal {
 		t.Fatalf("expected backend %q, got %q", execution.ExecutionBackendLegacyLocal, got.ExecutionBackend)
 	}
-	if len(got.Warnings) != 1 || !strings.Contains(strings.ToLower(got.Warnings[0]), "deprecated") {
-		t.Fatalf("expected one deprecation warning, got %#v", got.Warnings)
+	if len(got.Warnings) != 1 || !strings.Contains(strings.ToLower(got.Warnings[0]), "recommended") {
+		t.Fatalf("expected one recommendation warning, got %#v", got.Warnings)
 	}
 }
 

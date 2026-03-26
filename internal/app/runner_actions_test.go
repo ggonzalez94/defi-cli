@@ -444,8 +444,8 @@ func TestTransferSubmitAuthMetadataPrefersOWSAndKeepsLegacyCompatibility(t *test
 		t.Fatalf("expected legacy signer auth to be optional compatibility metadata, got %#v", second)
 	}
 	description, _ := second["description"].(string)
-	if !strings.Contains(strings.ToLower(description), "deprecated") {
-		t.Fatalf("expected deprecated compatibility description, got %#v", second["description"])
+	if !strings.Contains(strings.ToLower(description), "local signer") {
+		t.Fatalf("expected local signer description, got %#v", second["description"])
 	}
 }
 
