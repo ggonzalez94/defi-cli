@@ -83,39 +83,42 @@ Verify install:
 defi version --long
 ```
 
-## Wallet Setup (OWS)
+## Signing Backends
 
-[Open Wallet Standard (OWS)](https://docs.openwallet.sh/) is the signing backend for `defi-cli` execution commands — your private keys stay encrypted at rest and the CLI shells out to `ows sign send-tx` when broadcasting transactions.
+Execution commands (`plan`, `submit`, `status`) support two signing backends:
 
-**Why OWS?**
+### OWS (recommended)
 
-- Keys are encrypted at rest, never exposed as plaintext environment variables.
-- Built-in policy engine for spend limits, asset allowlists, and chain restrictions.
-- Multi-chain support with a single wallet identity.
-- Agent-friendly token access via `DEFI_OWS_TOKEN`.
+[Open Wallet Standard (OWS)](https://docs.openwallet.sh/) keeps keys encrypted at rest with built-in policy controls.
 
-**Install:**
+**Setup:**
 
 ```bash
 npm install -g @open-wallet-standard/core
-```
-
-See the [OWS docs](https://docs.openwallet.sh/) for advanced setup, policies, and key management.
-
-**Create a wallet:**
-
-```bash
 ows wallet create --name agent-treasury
+export DEFI_OWS_TOKEN=$(ows token create --wallet agent-treasury --ttl 24h)
 ```
 
-**Configure for defi-cli:**
+**Plan and submit:**
 
 ```bash
-export DEFI_OWS_TOKEN=$(ows token create --wallet agent-treasury --ttl 24h)
-defi swap plan --wallet agent-treasury --chain base --from USDC --to WETH --amount 1000000 --provider taikoswap
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury
+defi lend supply submit --action-id <action_id>
 ```
 
-> **Note:** OWS is only needed for execution commands (`plan`, `submit`, `status`). Read-only commands (`markets`, `positions`, `quote`, etc.) work without it.
+### Local signer
+
+Sign directly with a local private key — no external tooling required.
+
+**Plan and submit:**
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
+defi lend supply submit --action-id <action_id>
+```
+
+> Read-only commands (`markets`, `positions`, `quote`, etc.) do not require either backend.
 
 ## Quick Start
 
@@ -160,7 +163,7 @@ defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset US
 export DEFI_OWS_TOKEN=...
 defi lend supply submit --action-id <action_id> --results-only
 
-# Deprecated compatibility: local-key submit for standard EVM actions planned with --from-address
+# Local signer: plan and submit with a local private key
 defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
 defi lend supply submit --action-id <action_id> --results-only
@@ -234,43 +237,37 @@ If a keyed provider is used without a key, CLI exits with code `10`.
 
 ## Execution Auth (Submit Commands)
 
-Standard EVM execution is OWS-first:
+Two signing backends are supported. The backend is determined at plan time and persisted with the action.
 
-- Plan commands use `--wallet` as the primary identity input for new standard EVM actions.
-- Wallet-backed `submit` uses the persisted `wallet_id` from the action plus `DEFI_OWS_TOKEN`.
-- Wallet-backed actions do not accept legacy signer flags or owner-mode private keys during `submit`.
-- `--from-address` planning remains available as deprecated compatibility only.
+**OWS (recommended):**
+
+- Plan with `--wallet` to create an `ows`-backed action.
+- Submit reads the persisted `wallet_id` and requires `DEFI_OWS_TOKEN`.
+- Does not accept local signer flags during submit.
 
 ```bash
 export DEFI_OWS_TOKEN=...
 defi bridge submit --action-id <action_id> --results-only
 ```
 
-Tempo remains the explicit exception:
+**Local signer:**
 
-- Tempo swap planning still uses `--from-address`.
-- Tempo submit still uses the separate Tempo signer/backend path (`--signer tempo`).
-- OWS does not currently cover Tempo-native execution.
+- Plan with `--from-address` to create a `legacy_local`-backed action.
+- Submit uses local key inputs (`--private-key`, env vars, keystore).
 
-Deprecated compatibility lane for legacy local signing:
+Key input precedence (when `--key-source auto` and `--private-key` is unset):
 
-- Applies only to actions planned through `--from-address`.
-- Tempo-planned actions (`execution_backend=tempo`) are not eligible for this lane.
-- `--signer local` / private-key inputs remain supported for those legacy actions.
+1. `DEFI_PRIVATE_KEY` (hex string)
+2. `DEFI_PRIVATE_KEY_FILE` (key file path)
+3. `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`)
+4. `DEFI_KEYSTORE_PATH` + password env
 
-Key input precedence:
+Force source with `--key-source env|file|keystore`.
 
-- `--private-key` (hex string, one-off override; less safe)
-- env/file/keystore inputs below (when `--private-key` is not provided)
+**Tempo exception:**
 
-Key env/file inputs (in precedence order when `--key-source auto` and `--private-key` is unset):
-
-- `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
-- `DEFI_PRIVATE_KEY_FILE` (preferred explicit key-file path)
-- default key file: `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex` when `XDG_CONFIG_HOME` is set)
-- `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
-
-You can force source selection with `--key-source env|file|keystore`.
+- Tempo swap planning uses `--from-address` (OWS does not cover Tempo-native execution yet).
+- Tempo submit uses `--signer tempo`.
 
 `submit` commands support optional `--from-address` as an explicit sender-address guard.
 
