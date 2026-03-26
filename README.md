@@ -91,9 +91,7 @@ If your AI agent uses [Claude Code](https://claude.com/claude-code), [Cursor](ht
 npx skills add ggonzalez94/defi-cli
 ```
 
-Or install manually: copy `.claude/skills/defi-cli/` from this repo to `~/.claude/skills/defi-cli/`.
-
-The skill is also available as a project-level skill when working inside this repo (automatically loaded from `.claude/skills/`).
+Or install manually: copy `skills/defi-cli/` from this repo to `~/.claude/skills/defi-cli/`.
 
 ## Signing Backends
 
