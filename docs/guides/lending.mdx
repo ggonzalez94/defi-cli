@@ -58,7 +58,7 @@ defi lend supply plan --provider moonwell --chain 8453 --asset USDC --amount 100
 
 Use `--pool-address` to specify the mToken directly, or omit it to auto-resolve by underlying asset. Moonwell does not support `--on-behalf-of`.
 
-Standard EVM lending plans are now wallet-first. `--from-address` is retained only as deprecated compatibility for planning legacy local-signing actions.
+Plan with `--wallet` (OWS) or `--from-address` (local signer). See [Execution & Signing](/concepts/execution-auth) for submit auth details.
 
 ## Suggested filters and reliability defaults
 

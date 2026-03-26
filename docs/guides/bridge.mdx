@@ -34,7 +34,7 @@ export DEFI_OWS_TOKEN=...
 defi bridge submit --action-id <action_id> --results-only
 ```
 
-Standard EVM bridge planning is wallet-first. `--from-address` remains available as deprecated compatibility only, and wallet-backed submit uses the persisted `wallet_id` plus `DEFI_OWS_TOKEN`.
+Plan with `--wallet` (OWS) or `--from-address` (local signer). See [Execution & Signing](/concepts/execution-auth) for submit auth details.
 
 ## Bridge analytics
 

@@ -62,7 +62,7 @@ defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --
 defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
 ```
 
-For new standard EVM actions, `--wallet` is the primary planning identity. `--from-address` remains as deprecated compatibility only. Tempo is the explicit exception and still uses `--from-address`.
+Both `--wallet` (OWS, recommended) and `--from-address` (local signer) are supported. Tempo plans always use `--from-address`. See [Execution & Signing](/concepts/execution-auth) for setup details.
 
 ## 8. Submit a wallet-backed action
 
@@ -71,7 +71,7 @@ export DEFI_OWS_TOKEN=...
 defi lend supply submit --action-id <action_id> --results-only
 ```
 
-Wallet-backed submit uses the action's persisted `wallet_id`. It does not take owner-mode private keys or legacy signer flags.
+Wallet-backed submit uses the action's persisted `wallet_id` and `DEFI_OWS_TOKEN`. Local-signer submit uses `--private-key` or key env vars. See [Execution & Signing](/concepts/execution-auth).
 
 ## 9. Use schema for machine integration
 
