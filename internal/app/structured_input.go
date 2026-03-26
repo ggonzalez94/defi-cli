@@ -13,6 +13,7 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
+	"github.com/ggonzalez94/defi-cli/internal/ows"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
@@ -29,10 +30,11 @@ type structuredInputSource struct {
 }
 
 type structuredInputOptions struct {
-	Mutation bool
-	Auth     []schema.AuthRequirement
-	Response *schema.TypeSchema
-	Request  *schema.TypeSchema
+	Mutation         bool
+	InputConstraints []schema.InputConstraint
+	Auth             []schema.AuthRequirement
+	Response         *schema.TypeSchema
+	Request          *schema.TypeSchema
 }
 
 func configureStructuredInput[T any](cmd *cobra.Command, opts structuredInputOptions) {
@@ -52,11 +54,12 @@ func configureStructuredInput[T any](cmd *cobra.Command, opts structuredInputOpt
 		response = &defaultResponse
 	}
 	setCommandMetadataOrPanic(cmd, schema.CommandMetadata{
-		Mutation:   opts.Mutation,
-		InputModes: []string{"flags", "json", "file", "stdin"},
-		Auth:       opts.Auth,
-		Request:    request,
-		Response:   response,
+		Mutation:         opts.Mutation,
+		InputModes:       []string{"flags", "json", "file", "stdin"},
+		InputConstraints: opts.InputConstraints,
+		Auth:             opts.Auth,
+		Request:          request,
+		Response:         response,
 	})
 
 	prevPreRunE := cmd.PreRunE
@@ -99,11 +102,12 @@ func annotateStructuredFlagCommand(cmd *cobra.Command, opts structuredInputOptio
 		request = commandFlagRequestSchema(cmd)
 	}
 	setCommandMetadataOrPanic(cmd, schema.CommandMetadata{
-		Mutation:   opts.Mutation,
-		InputModes: []string{"flags", "json", "file", "stdin"},
-		Auth:       opts.Auth,
-		Request:    request,
-		Response:   opts.Response,
+		Mutation:         opts.Mutation,
+		InputModes:       []string{"flags", "json", "file", "stdin"},
+		InputConstraints: opts.InputConstraints,
+		Auth:             opts.Auth,
+		Request:          request,
+		Response:         opts.Response,
 	})
 
 	prevPreRunE := cmd.PreRunE
@@ -142,6 +146,12 @@ func setCommandMetadataOrPanic(cmd *cobra.Command, meta schema.CommandMetadata) 
 func executionSubmitAuthRequirements() []schema.AuthRequirement {
 	return []schema.AuthRequirement{
 		{
+			Kind:    "wallet",
+			EnvVars: []string{ows.EnvOWSToken},
+			Description: "Primary auth for wallet-backed execution (execution_backend=ows): set DEFI_OWS_TOKEN in the environment. " +
+				"Submit uses the persisted wallet_id and does not accept owner private keys.",
+		},
+		{
 			Kind: "signer",
 			EnvVars: []string{
 				execsigner.EnvPrivateKey,
@@ -150,7 +160,39 @@ func executionSubmitAuthRequirements() []schema.AuthRequirement {
 				execsigner.EnvKeystorePassword,
 				execsigner.EnvKeystorePasswordFile,
 			},
-			Description: "Provide a local signer via --private-key or env/file/keystore inputs.",
+			Optional:    true,
+			Description: "Local signer auth for actions planned with --from-address: provide a local signer via --private-key or env/file/keystore inputs.",
+		},
+	}
+}
+
+func standardExecutionIdentityInputConstraints() []schema.InputConstraint {
+	return []schema.InputConstraint{{
+		Kind:        "exactly_one_of",
+		Fields:      []string{"wallet", "from_address"},
+		Description: "Provide exactly one execution identity input: `wallet` (OWS, recommended) or `from_address` (local signer).",
+	}}
+}
+
+func swapPlanIdentityInputConstraints() []schema.InputConstraint {
+	return []schema.InputConstraint{
+		{
+			Kind:        "required",
+			Fields:      []string{"from_address"},
+			When:        map[string][]string{"provider": {"tempo"}},
+			Description: "Tempo planning requires `from_address` and does not support `wallet` yet.",
+		},
+		{
+			Kind:        "forbidden",
+			Fields:      []string{"wallet"},
+			When:        map[string][]string{"provider": {"tempo"}},
+			Description: "Tempo planning rejects `wallet`; use `from_address`.",
+		},
+		{
+			Kind:        "exactly_one_of",
+			Fields:      []string{"wallet", "from_address"},
+			When:        map[string][]string{"provider": {"taikoswap"}},
+			Description: "TaikoSwap planning requires exactly one execution identity input: `wallet` (OWS, recommended) or `from_address` (local signer).",
 		},
 	}
 }

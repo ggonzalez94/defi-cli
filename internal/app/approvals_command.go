@@ -1,7 +1,6 @@
 package app
 
 import (
-	"strings"
 	"time"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -22,7 +21,8 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		Spender       string `json:"spender" flag:"spender" required:"true" format:"evm-address"`
 		AmountBase    string `json:"amount" flag:"amount" format:"base-units"`
 		AmountDecimal string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
-		FromAddress   string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef     string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress   string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Simulate      bool   `json:"simulate" flag:"simulate"`
 		RPCURL        string `json:"rpc_url" flag:"rpc-url" format:"url"`
 	}
@@ -75,13 +75,20 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		Use:   "plan",
 		Short: "Create and persist an approval action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
+			if err != nil {
+				return err
+			}
+			resolvedPlan := plan
+			resolvedPlan.FromAddress = identity.FromAddress
 			start := time.Now()
-			action, err := buildAction(plan)
+			action, err := buildAction(resolvedPlan)
 			status := []model.ProviderStatus{{Name: "native", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
 			if err != nil {
 				s.captureCommandDiagnostics(nil, status, false)
 				return err
 			}
+			applyExecutionIdentityToAction(&action, identity)
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -89,7 +96,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, status, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), status, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), status, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
@@ -97,14 +104,17 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 	planCmd.Flags().StringVar(&plan.Spender, "spender", "", "Spender address")
 	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
 	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
 	_ = planCmd.MarkFlagRequired("spender")
-	_ = planCmd.MarkFlagRequired("from-address")
-	configureStructuredInput[approvalArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[approvalArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit approvalSubmitArgs
 	submitCmd := &cobra.Command{
@@ -128,16 +138,17 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
+			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
+				Signer:      submit.Signer,
+				KeySource:   submit.KeySource,
+				PrivateKey:  submit.PrivateKey,
+				FromAddress: submit.FromAddress,
+			})
 			if err != nil {
 				return err
 			}
-			senderAddr := effectiveSenderAddress(txSigner)
-			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
+			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
+				return err
 			}
 			execOpts, err := parseExecuteOptions(
 				submit.Simulate,
@@ -153,7 +164,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)

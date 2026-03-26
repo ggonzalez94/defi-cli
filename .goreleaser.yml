@@ -43,10 +43,4 @@ release:
   prerelease: auto
 
 changelog:
-  use: git
-  sort: asc
-  filters:
-    exclude:
-      - "^docs:"
-      - "^test:"
-      - "^chore:"
+  use: github-native

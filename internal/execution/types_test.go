@@ -114,3 +114,47 @@ func TestActionStepCallsNilOmitted(t *testing.T) {
 		t.Fatalf("expected calls to be omitted from JSON when nil, got: %s", string(data))
 	}
 }
+
+func TestActionRoundTripIncludesWalletMetadata(t *testing.T) {
+	action := NewAction("action-wallet-roundtrip", "swap", "eip155:1", Constraints{})
+	action.FromAddress = "0x00000000000000000000000000000000000000aa"
+	action.WalletID = "wallet-123"
+	action.WalletName = "Agent Wallet"
+	action.ExecutionBackend = ExecutionBackendOWS
+
+	data, err := json.Marshal(action)
+	if err != nil {
+		t.Fatalf("marshal action: %v", err)
+	}
+
+	jsonBody := string(data)
+	if !strings.Contains(jsonBody, `"wallet_id":"wallet-123"`) {
+		t.Fatalf("expected wallet_id in JSON, got: %s", jsonBody)
+	}
+	if !strings.Contains(jsonBody, `"wallet_name":"Agent Wallet"`) {
+		t.Fatalf("expected wallet_name in JSON, got: %s", jsonBody)
+	}
+	if !strings.Contains(jsonBody, `"from_address":"0x00000000000000000000000000000000000000aa"`) {
+		t.Fatalf("expected from_address in JSON, got: %s", jsonBody)
+	}
+	if !strings.Contains(jsonBody, `"execution_backend":"ows"`) {
+		t.Fatalf("expected execution_backend in JSON, got: %s", jsonBody)
+	}
+
+	var decoded Action
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		t.Fatalf("unmarshal action: %v", err)
+	}
+	if decoded.WalletID != action.WalletID {
+		t.Fatalf("wallet_id mismatch: %s vs %s", decoded.WalletID, action.WalletID)
+	}
+	if decoded.WalletName != action.WalletName {
+		t.Fatalf("wallet_name mismatch: %s vs %s", decoded.WalletName, action.WalletName)
+	}
+	if decoded.ExecutionBackend != action.ExecutionBackend {
+		t.Fatalf("execution_backend mismatch: %s vs %s", decoded.ExecutionBackend, action.ExecutionBackend)
+	}
+	if decoded.FromAddress != action.FromAddress {
+		t.Fatalf("from_address mismatch: %s vs %s", decoded.FromAddress, action.FromAddress)
+	}
+}

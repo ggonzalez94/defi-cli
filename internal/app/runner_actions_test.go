@@ -2,13 +2,19 @@ package app
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
+	"github.com/ggonzalez94/defi-cli/internal/config"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
+	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/ows"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/spf13/cobra"
 )
@@ -229,6 +235,122 @@ func TestRunnerTransferPlanSchemaIncludesStructuredInputMetadata(t *testing.T) {
 	}
 }
 
+func TestTransferPlanSchemaIncludesWallet(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "transfer plan", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+
+	wallet := findRequestField(t, doc, "wallet")
+	if required, _ := wallet["required"].(bool); required {
+		t.Fatalf("expected wallet to be optional, got %#v", wallet)
+	}
+	walletSchema, _ := wallet["schema"].(map[string]any)
+	if format, _ := walletSchema["format"].(string); format != "identifier" {
+		t.Fatalf("expected wallet format identifier, got %#v", walletSchema["format"])
+	}
+
+	fromAddress := findRequestField(t, doc, "from_address")
+	if required, _ := fromAddress["required"].(bool); required {
+		t.Fatalf("expected from_address to be optional for compatibility, got %#v", fromAddress)
+	}
+}
+
+func TestTransferPlanSchemaIncludesIdentityInputConstraint(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "transfer plan", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+
+	constraints, ok := doc["input_constraints"].([]any)
+	if !ok || len(constraints) == 0 {
+		t.Fatalf("expected input constraints in schema, got %#v", doc["input_constraints"])
+	}
+	first, ok := constraints[0].(map[string]any)
+	if !ok {
+		t.Fatalf("expected object constraint, got %#v", constraints[0])
+	}
+	if got, _ := first["kind"].(string); got != "exactly_one_of" {
+		t.Fatalf("expected exactly_one_of constraint, got %#v", first)
+	}
+	fields, ok := first["fields"].([]any)
+	if !ok || len(fields) != 2 || fields[0] != "wallet" || fields[1] != "from_address" {
+		t.Fatalf("expected wallet/from_address fields, got %#v", first["fields"])
+	}
+}
+
+func TestSwapPlanSchemaIncludesProviderSpecificIdentityConstraints(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "swap plan", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+
+	constraints, ok := doc["input_constraints"].([]any)
+	if !ok || len(constraints) < 2 {
+		t.Fatalf("expected provider-specific input constraints, got %#v", doc["input_constraints"])
+	}
+
+	var foundTempoRequired bool
+	var foundTempoForbidden bool
+	var foundTaiko bool
+	for _, item := range constraints {
+		constraint, ok := item.(map[string]any)
+		if !ok {
+			continue
+		}
+		when, _ := constraint["when"].(map[string]any)
+		providers, _ := when["provider"].([]any)
+		if len(providers) != 1 {
+			continue
+		}
+		switch providers[0] {
+		case "tempo":
+			kind, _ := constraint["kind"].(string)
+			switch kind {
+			case "required":
+				foundTempoRequired = true
+			case "forbidden":
+				foundTempoForbidden = true
+			}
+		case "taikoswap":
+			foundTaiko = true
+			if got, _ := constraint["kind"].(string); got != "exactly_one_of" {
+				t.Fatalf("expected taikoswap exactly_one_of constraint, got %#v", constraint)
+			}
+		}
+	}
+	if !foundTempoRequired || !foundTempoForbidden {
+		t.Fatalf("expected tempo required+forbidden identity constraints, got %#v", constraints)
+	}
+	if !foundTaiko {
+		t.Fatalf("expected taikoswap-specific identity constraint, got %#v", constraints)
+	}
+}
+
 func TestRunnerTransferSubmitSchemaIncludesStructuredInputMetadata(t *testing.T) {
 	var stdout bytes.Buffer
 	var stderr bytes.Buffer
@@ -287,6 +409,46 @@ func TestRunnerTransferSubmitSchemaIncludesStructuredInputMetadata(t *testing.T)
 	}
 }
 
+func TestTransferSubmitAuthMetadataPrefersOWSAndKeepsLegacyCompatibility(t *testing.T) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{"schema", "transfer submit", "--results-only"})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var doc map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &doc); err != nil {
+		t.Fatalf("failed to parse schema output: %v output=%s", err, stdout.String())
+	}
+	auth, ok := doc["auth"].([]any)
+	if !ok || len(auth) < 2 {
+		t.Fatalf("expected two auth entries, got %#v", doc["auth"])
+	}
+
+	first, ok := auth[0].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected first auth entry shape: %#v", auth[0])
+	}
+	firstEnv, _ := first["env_vars"].([]any)
+	if len(firstEnv) != 1 || firstEnv[0] != "DEFI_OWS_TOKEN" {
+		t.Fatalf("expected OWS token auth first, got %#v", first["env_vars"])
+	}
+
+	second, ok := auth[1].(map[string]any)
+	if !ok {
+		t.Fatalf("unexpected second auth entry shape: %#v", auth[1])
+	}
+	if optional, _ := second["optional"].(bool); !optional {
+		t.Fatalf("expected legacy signer auth to be optional compatibility metadata, got %#v", second)
+	}
+	description, _ := second["description"].(string)
+	if !strings.Contains(strings.ToLower(description), "local signer") {
+		t.Fatalf("expected local signer description, got %#v", second["description"])
+	}
+}
+
 func TestRunnerTransferPlanAcceptsStructuredInputJSON(t *testing.T) {
 	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
 	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
@@ -311,6 +473,61 @@ func TestRunnerTransferPlanAcceptsStructuredInputJSON(t *testing.T) {
 	}
 	if action["intent_type"] != "transfer" {
 		t.Fatalf("expected transfer intent, got %#v", action["intent_type"])
+	}
+}
+
+func TestBridgePlanAcceptsStructuredWalletInput(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeOWSWalletFixture(t, home, ows.Wallet{
+		ID:        "wallet-123",
+		Name:      "Agent Wallet",
+		CreatedAt: "2026-03-25T00:00:00Z",
+		Accounts: []ows.WalletAccount{
+			{
+				AccountID:      "acc-1",
+				Address:        "0x000000000000000000000000000000000000dead",
+				ChainID:        "eip155:1",
+				DerivationPath: "m/44'/60'/0'/0/0",
+			},
+		},
+	})
+
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	state, stdout, stderr := newExecutionTestState(actionStorePath, actionLockPath)
+	state.bridgeProviders = map[string]providers.BridgeProvider{
+		"stub": stubBridgeExecutionProvider{},
+	}
+
+	root := &cobra.Command{Use: "defi", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(state.newBridgeCommand())
+	root.SetArgs([]string{
+		"bridge", "plan",
+		"--provider", "stub",
+		"--input-json", `{"from":"1","to":"10","asset":"USDC","to_asset":"USDC","amount":"1000000","wallet":"wallet-123"}`,
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected bridge plan to accept structured wallet input, got err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse bridge plan output: %v output=%s", err, stdout.String())
+	}
+	if success, _ := env["success"].(bool); !success {
+		t.Fatalf("expected successful bridge plan output, got %#v", env)
+	}
+	data, _ := env["data"].(map[string]any)
+	if data["wallet_id"] != "wallet-123" {
+		t.Fatalf("expected wallet_id wallet-123, got %#v", data["wallet_id"])
+	}
+	if data["from_address"] != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected canonical sender address, got %#v", data["from_address"])
+	}
+	if data["execution_backend"] != string(execution.ExecutionBackendOWS) {
+		t.Fatalf("expected execution_backend ows, got %#v", data["execution_backend"])
 	}
 }
 
@@ -374,6 +591,120 @@ func TestRunnerTransferSubmitAcceptsStructuredInputJSON(t *testing.T) {
 	}
 	if result["status"] != string(execution.ActionStatusCompleted) {
 		t.Fatalf("unexpected status: %#v", result["status"])
+	}
+}
+
+func TestLegacyFromAddressPlanMarksLegacyBackend(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"transfer", "plan",
+		"--chain", "taiko",
+		"--asset", "USDC",
+		"--amount", "1000000",
+		"--from-address", "0x00000000000000000000000000000000000000aa",
+		"--recipient", "0x00000000000000000000000000000000000000bb",
+		"--results-only",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var action map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &action); err != nil {
+		t.Fatalf("failed to parse transfer plan output: %v output=%s", err, stdout.String())
+	}
+	if action["execution_backend"] != string(execution.ExecutionBackendLegacyLocal) {
+		t.Fatalf("expected legacy execution backend, got %#v", action["execution_backend"])
+	}
+	if action["wallet_id"] != nil {
+		t.Fatalf("expected no wallet_id for legacy path, got %#v", action["wallet_id"])
+	}
+}
+
+func TestWalletPlanPersistsWalletIDAndFromAddress(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeOWSWalletFixture(t, home, ows.Wallet{
+		ID:        "wallet-123",
+		Name:      "Agent Wallet",
+		CreatedAt: "2026-03-25T00:00:00Z",
+		Accounts: []ows.WalletAccount{
+			{
+				AccountID:      "acc-1",
+				Address:        "0x000000000000000000000000000000000000dead",
+				ChainID:        "eip155:167000",
+				DerivationPath: "m/44'/60'/0'/0/0",
+			},
+		},
+	})
+
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"transfer", "plan",
+		"--chain", "taiko",
+		"--asset", "USDC",
+		"--amount", "1000000",
+		"--wallet", "wallet-123",
+		"--recipient", "0x00000000000000000000000000000000000000bb",
+		"--results-only",
+	})
+	if code != 0 {
+		t.Fatalf("expected exit 0, got %d stderr=%s", code, stderr.String())
+	}
+
+	var action map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &action); err != nil {
+		t.Fatalf("failed to parse transfer plan output: %v output=%s", err, stdout.String())
+	}
+	if action["wallet_id"] != "wallet-123" {
+		t.Fatalf("expected wallet_id wallet-123, got %#v", action["wallet_id"])
+	}
+	if action["wallet_name"] != "Agent Wallet" {
+		t.Fatalf("expected wallet_name Agent Wallet, got %#v", action["wallet_name"])
+	}
+	if action["from_address"] != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected canonical sender address, got %#v", action["from_address"])
+	}
+	if action["execution_backend"] != string(execution.ExecutionBackendOWS) {
+		t.Fatalf("expected execution_backend ows, got %#v", action["execution_backend"])
+	}
+
+	store, err := execution.OpenStore(actionStorePath, actionLockPath)
+	if err != nil {
+		t.Fatalf("open action store: %v", err)
+	}
+	defer store.Close()
+
+	actionID, _ := action["action_id"].(string)
+	saved, err := store.Get(actionID)
+	if err != nil {
+		t.Fatalf("load saved action: %v", err)
+	}
+	if saved.WalletID != "wallet-123" {
+		t.Fatalf("expected persisted wallet id wallet-123, got %q", saved.WalletID)
+	}
+	if saved.WalletName != "Agent Wallet" {
+		t.Fatalf("expected persisted wallet name Agent Wallet, got %q", saved.WalletName)
+	}
+	if saved.FromAddress != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected persisted canonical sender, got %q", saved.FromAddress)
+	}
+	if saved.ExecutionBackend != execution.ExecutionBackendOWS {
+		t.Fatalf("expected persisted execution backend %q, got %q", execution.ExecutionBackendOWS, saved.ExecutionBackend)
 	}
 }
 
@@ -518,6 +849,85 @@ func TestRunnerSwapPlanRequiresFromAddress(t *testing.T) {
 	})
 	if code != 2 {
 		t.Fatalf("expected usage exit code 2, got %d stderr=%s", code, stderr.String())
+	}
+}
+
+func TestRunnerSwapPlanTempoSetsTempoExecutionBackend(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	state, stdout, stderr := newExecutionTestState(actionStorePath, actionLockPath)
+	state.swapProviders = map[string]providers.SwapProvider{
+		"tempo": stubSwapExecutionProvider{},
+	}
+
+	root := &cobra.Command{Use: "defi", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "plan",
+		"--provider", "tempo",
+		"--chain", "taiko",
+		"--from-asset", "USDC",
+		"--to-asset", "WETH",
+		"--amount", "1000000",
+		"--from-address", "0x00000000000000000000000000000000000000aa",
+	})
+
+	if err := root.Execute(); err != nil {
+		t.Fatalf("expected tempo swap plan to succeed, got err=%v stderr=%s", err, stderr.String())
+	}
+
+	var env map[string]any
+	if err := json.Unmarshal(stdout.Bytes(), &env); err != nil {
+		t.Fatalf("failed to parse swap plan output: %v output=%s", err, stdout.String())
+	}
+	action, _ := env["data"].(map[string]any)
+	if action["execution_backend"] != string(execution.ExecutionBackendTempo) {
+		t.Fatalf("expected execution_backend tempo, got %#v", action["execution_backend"])
+	}
+}
+
+func TestRunnerSwapPlanTempoRejectsWallet(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeOWSWalletFixture(t, home, ows.Wallet{
+		ID:        "wallet-123",
+		Name:      "Agent Wallet",
+		CreatedAt: "2026-03-25T00:00:00Z",
+		Accounts: []ows.WalletAccount{
+			{
+				AccountID:      "acc-1",
+				Address:        "0x000000000000000000000000000000000000dead",
+				ChainID:        "eip155:167000",
+				DerivationPath: "m/44'/60'/0'/0/0",
+			},
+		},
+	})
+
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	state, stdout, stderr := newExecutionTestState(actionStorePath, actionLockPath)
+	state.swapProviders = map[string]providers.SwapProvider{
+		"tempo": stubSwapExecutionProvider{},
+	}
+
+	root := &cobra.Command{Use: "defi", SilenceErrors: true, SilenceUsage: true}
+	root.AddCommand(state.newSwapCommand())
+	root.SetArgs([]string{
+		"swap", "plan",
+		"--provider", "tempo",
+		"--chain", "taiko",
+		"--from-asset", "USDC",
+		"--to-asset", "WETH",
+		"--amount", "1000000",
+		"--wallet", "wallet-123",
+	})
+
+	err := root.Execute()
+	if err == nil {
+		t.Fatalf("expected tempo swap plan with --wallet to fail stdout=%s", stdout.String())
+	}
+	if !strings.Contains(err.Error(), "--wallet planning is not supported on Tempo chains yet") {
+		t.Fatalf("expected tempo wallet rejection, got err=%v stderr=%s", err, stderr.String())
 	}
 }
 
@@ -699,4 +1109,80 @@ func TestParseActionEstimateOptionsRejectsUnknownBlockTag(t *testing.T) {
 	if _, err := parseActionEstimateOptions("", 1.2, "", "", "safe"); err == nil {
 		t.Fatal("expected unknown block tag to fail")
 	}
+}
+
+func findRequestField(t *testing.T, doc map[string]any, name string) map[string]any {
+	t.Helper()
+	request, ok := doc["request"].(map[string]any)
+	if !ok {
+		t.Fatalf("expected request schema, got %#v", doc["request"])
+	}
+	fields, ok := request["fields"].([]any)
+	if !ok {
+		t.Fatalf("expected request fields, got %#v", request["fields"])
+	}
+	for _, item := range fields {
+		field, ok := item.(map[string]any)
+		if ok && field["name"] == name {
+			return field
+		}
+	}
+	t.Fatalf("expected request field %q, got %#v", name, fields)
+	return nil
+}
+
+func newExecutionTestState(actionStorePath, actionLockPath string) (*runtimeState, *bytes.Buffer, *bytes.Buffer) {
+	stdout := &bytes.Buffer{}
+	stderr := &bytes.Buffer{}
+	return &runtimeState{
+		runner: &Runner{
+			stdout: stdout,
+			stderr: stderr,
+			now:    time.Now,
+		},
+		settings: config.Settings{
+			OutputMode:      "json",
+			Timeout:         time.Second,
+			ActionStorePath: actionStorePath,
+			ActionLockPath:  actionLockPath,
+		},
+	}, stdout, stderr
+}
+
+type stubBridgeExecutionProvider struct{}
+
+func (stubBridgeExecutionProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{Name: "stub"}
+}
+
+func (stubBridgeExecutionProvider) QuoteBridge(context.Context, providers.BridgeQuoteRequest) (model.BridgeQuote, error) {
+	return model.BridgeQuote{}, nil
+}
+
+func (stubBridgeExecutionProvider) BuildBridgeAction(_ context.Context, req providers.BridgeQuoteRequest, opts providers.BridgeExecutionOptions) (execution.Action, error) {
+	action := execution.NewAction(execution.NewActionID(), "bridge", req.FromChain.CAIP2, execution.Constraints{Simulate: opts.Simulate})
+	action.Provider = "stub"
+	action.FromAddress = opts.Sender
+	action.ToAddress = opts.Recipient
+	action.InputAmount = req.AmountBaseUnits
+	return action, nil
+}
+
+type stubSwapExecutionProvider struct{}
+
+func (stubSwapExecutionProvider) Info() model.ProviderInfo {
+	return model.ProviderInfo{Name: "stub-swap"}
+}
+
+func (stubSwapExecutionProvider) QuoteSwap(context.Context, providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	return model.SwapQuote{}, nil
+}
+
+func (stubSwapExecutionProvider) BuildSwapAction(_ context.Context, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, error) {
+	action := execution.NewAction(execution.NewActionID(), "swap", req.Chain.CAIP2, execution.Constraints{Simulate: opts.Simulate})
+	action.Provider = "tempo"
+	action.FromAddress = opts.Sender
+	action.ToAddress = opts.Recipient
+	action.InputAmount = req.AmountBaseUnits
+	return action, nil
 }

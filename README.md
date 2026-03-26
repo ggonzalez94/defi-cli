@@ -17,7 +17,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
 - **Wallet** — query native and ERC-20 token balances on any supported EVM chain (no API key required).
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, track stablecoin market caps, resolve asset identifiers.
-- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, auth, and request/response metadata.
+- **Automation-friendly** — JSON-first output, field selection (`--select`), structured JSON/file input (`--input-json`, `--input-file`), and a machine-readable schema export with required flags, enums, input constraints, auth, and request/response metadata.
 
 ## Documentation Site (Mintlify)
 
@@ -83,6 +83,43 @@ Verify install:
 defi version --long
 ```
 
+## Signing Backends
+
+Execution commands (`plan`, `submit`, `status`) support two signing backends:
+
+### OWS (recommended)
+
+[Open Wallet Standard (OWS)](https://docs.openwallet.sh/) keeps keys encrypted at rest with built-in policy controls.
+
+**Setup:**
+
+```bash
+npm install -g @open-wallet-standard/core
+ows wallet create --name agent-treasury
+export DEFI_OWS_TOKEN=$(ows token create --wallet agent-treasury --ttl 24h)
+```
+
+**Plan and submit:**
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury
+defi lend supply submit --action-id <action_id>
+```
+
+### Local signer
+
+Sign directly with a local private key — no external tooling required.
+
+**Plan and submit:**
+
+```bash
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA
+export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
+defi lend supply submit --action-id <action_id>
+```
+
+> Read-only commands (`markets`, `positions`, `quote`, etc.) do not require either backend.
+
 ## Quick Start
 
 ### Read: query markets and quotes
@@ -114,15 +151,25 @@ defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset U
 ### Act: plan and execute transactions
 
 ```bash
-# Plan a swap (dry-run, no signer needed)
+# Plan standard EVM actions with an OWS wallet reference
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --wallet agent-treasury --results-only
+
+# Tempo remains the explicit exception and still plans with --from-address
 defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
 
-# Execute a planned action (requires signer)
+# Execute a wallet-backed action
+export DEFI_OWS_TOKEN=...
+defi lend supply submit --action-id <action_id> --results-only
+
+# Local signer: plan and submit with a local private key
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 export DEFI_PRIVATE_KEY_FILE=~/.config/defi/key.hex
-defi swap submit --action-id <action_id> --results-only
+defi lend supply submit --action-id <action_id> --results-only
 
 # Structured input for agents
-defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","from_address":"0xYourEOA"}' --results-only
+defi lend supply plan --input-json '{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","wallet":"agent-treasury"}' --results-only
 
 # Inspect actions
 defi actions list --results-only
@@ -188,30 +235,41 @@ For persistent shell setup, add exports to your shell profile (for example `~/.z
 
 If a keyed provider is used without a key, CLI exits with code `10`.
 
-## Execution Signer Inputs (Submit Commands)
+## Execution Auth (Submit Commands)
 
-Execution `submit` commands support a local key signer and (on Tempo) an agent wallet signer.
+Two signing backends are supported. The backend is determined at plan time and persisted with the action.
 
-Signer selection:
+**OWS (recommended):**
 
-- `--signer tempo` — use the Tempo CLI agent wallet (`tempo wallet -j whoami`); requires the Tempo CLI installed and configured with delegated access keys.
-- Local key signer (default) — uses the key input precedence below.
+- Plan with `--wallet` to create an `ows`-backed action.
+- Submit reads the persisted `wallet_id` and requires `DEFI_OWS_TOKEN`.
+- Does not accept local signer flags during submit.
 
-Key input precedence:
+```bash
+export DEFI_OWS_TOKEN=...
+defi bridge submit --action-id <action_id> --results-only
+```
 
-- `--private-key` (hex string, one-off override; less safe)
-- env/file/keystore inputs below (when `--private-key` is not provided)
+**Local signer:**
 
-Key env/file inputs (in precedence order when `--key-source auto` and `--private-key` is unset):
+- Plan with `--from-address` to create a `legacy_local`-backed action.
+- Submit uses local key inputs (`--private-key`, env vars, keystore).
 
-- `DEFI_PRIVATE_KEY` (hex string, supported but less safe)
-- `DEFI_PRIVATE_KEY_FILE` (preferred explicit key-file path)
-- default key file: `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex` when `XDG_CONFIG_HOME` is set)
-- `DEFI_KEYSTORE_PATH` + (`DEFI_KEYSTORE_PASSWORD` or `DEFI_KEYSTORE_PASSWORD_FILE`)
+Key input precedence (when `--key-source auto` and `--private-key` is unset):
 
-You can force source selection with `--key-source env|file|keystore`.
+1. `DEFI_PRIVATE_KEY` (hex string)
+2. `DEFI_PRIVATE_KEY_FILE` (key file path)
+3. `~/.config/defi/key.hex` (or `$XDG_CONFIG_HOME/defi/key.hex`)
+4. `DEFI_KEYSTORE_PATH` + password env
 
-`submit` commands support optional `--from-address` as an explicit signer-address guard.
+Force source with `--key-source env|file|keystore`.
+
+**Tempo exception:**
+
+- Tempo swap planning uses `--from-address` (OWS does not cover Tempo-native execution yet).
+- Tempo submit uses `--signer tempo`.
+
+`submit` commands support optional `--from-address` as an explicit sender-address guard.
 
 ## Config (Optional)
 

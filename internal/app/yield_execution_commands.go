@@ -2,7 +2,6 @@ package app
 
 import (
 	"context"
-	"strings"
 	"time"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -33,7 +32,8 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		VaultAddress        string `json:"vault_address" flag:"vault-address" format:"evm-address"`
 		AmountBase          string `json:"amount" flag:"amount" format:"base-units"`
 		AmountDecimal       string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
-		FromAddress         string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef           string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress         string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Recipient           string `json:"recipient" flag:"recipient" format:"evm-address"`
 		OnBehalfOf          string `json:"on_behalf_of" flag:"on-behalf-of" format:"evm-address"`
 		Simulate            bool   `json:"simulate" flag:"simulate"`
@@ -92,10 +92,16 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		Use:   "plan",
 		Short: "Create and persist a yield action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
+			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
+			if err != nil {
+				return err
+			}
+			resolvedPlan := plan
+			resolvedPlan.FromAddress = identity.FromAddress
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
-			action, err := buildAction(ctx, plan)
+			action, err := buildAction(ctx, resolvedPlan)
 			providerName := normalizeLendingProvider(plan.Provider)
 			if providerName == "" {
 				providerName = "yield"
@@ -105,6 +111,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
+			applyExecutionIdentityToAction(&action, identity)
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -112,7 +119,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Yield provider (aave|morpho|moonwell)")
@@ -121,18 +128,21 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 	planCmd.Flags().StringVar(&plan.VaultAddress, "vault-address", "", "Morpho vault address (required for --provider morpho)")
 	planCmd.Flags().StringVar(&plan.AmountBase, "amount", "", "Amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Amount in decimal units")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
-	planCmd.Flags().StringVar(&plan.OnBehalfOf, "on-behalf-of", "", "Position owner address (defaults to --from-address)")
+	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to the resolved sender address)")
+	planCmd.Flags().StringVar(&plan.OnBehalfOf, "on-behalf-of", "", "Position owner address (defaults to the resolved sender address)")
 	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	planCmd.Flags().StringVar(&plan.PoolAddress, "pool-address", "", "Aave pool address override")
 	planCmd.Flags().StringVar(&plan.PoolAddressProvider, "pool-address-provider", "", "Aave pool address provider override")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("asset")
-	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[yieldArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[yieldArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: standardExecutionIdentityInputConstraints(),
+	})
 
 	var submit yieldSubmitArgs
 	submitCmd := &cobra.Command{
@@ -156,16 +166,17 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 			if action.Status == execution.ActionStatusCompleted {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
-			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
+			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
+				Signer:      submit.Signer,
+				KeySource:   submit.KeySource,
+				PrivateKey:  submit.PrivateKey,
+				FromAddress: submit.FromAddress,
+			})
 			if err != nil {
 				return err
 			}
-			senderAddr := effectiveSenderAddress(txSigner)
-			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
+			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
+				return err
 			}
 			execOpts, err := parseExecuteOptions(
 				submit.Simulate,
@@ -181,7 +192,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 			if err != nil {
 				return err
 			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)

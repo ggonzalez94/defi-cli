@@ -5,13 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ggonzalez94/defi-cli/internal/config"
+	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/ows"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/version"
 	"github.com/spf13/cobra"
@@ -1862,4 +1866,180 @@ func setUnopenableCacheEnv(t *testing.T) {
 	t.Helper()
 	t.Setenv("DEFI_CACHE_PATH", "/dev/null/cache.db")
 	t.Setenv("DEFI_CACHE_LOCK_PATH", "/dev/null/cache.lock")
+}
+
+func TestOWSSubmitRejectsLegacySignerFlags(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	store, err := execution.OpenStore(actionStorePath, actionLockPath)
+	if err != nil {
+		t.Fatalf("open action store: %v", err)
+	}
+	defer store.Close()
+
+	action := execution.NewAction("act_0123456789abcdef0123456789abcdef", "transfer", "eip155:167000", execution.Constraints{Simulate: true})
+	action.FromAddress = "0x00000000000000000000000000000000000000AA"
+	action.WalletID = "wallet-123"
+	action.ExecutionBackend = execution.ExecutionBackendOWS
+	if err := store.Save(action); err != nil {
+		t.Fatalf("save action: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"transfer", "submit",
+		"--action-id", action.ActionID,
+		"--private-key", "0x1234",
+	})
+	if code != 2 {
+		t.Fatalf("expected usage exit 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "legacy signer") {
+		t.Fatalf("expected legacy signer rejection, got stderr=%s", stderr.String())
+	}
+}
+
+func TestLegacySubmitStillLoadsLocalSigner(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	privateKeyHex := "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80"
+	privateKey, err := crypto.HexToECDSA(privateKeyHex)
+	if err != nil {
+		t.Fatalf("parse private key: %v", err)
+	}
+	t.Setenv("DEFI_PRIVATE_KEY", privateKeyHex)
+
+	store, err := execution.OpenStore(actionStorePath, actionLockPath)
+	if err != nil {
+		t.Fatalf("open action store: %v", err)
+	}
+	defer store.Close()
+
+	action := execution.NewAction("act_fedcba9876543210fedcba9876543210", "transfer", "eip155:167000", execution.Constraints{Simulate: true})
+	action.FromAddress = crypto.PubkeyToAddress(privateKey.PublicKey).Hex()
+	action.ExecutionBackend = execution.ExecutionBackendLegacyLocal
+	if err := store.Save(action); err != nil {
+		t.Fatalf("save action: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"transfer", "submit",
+		"--action-id", action.ActionID,
+	})
+	if code != 2 {
+		t.Fatalf("expected usage exit 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "action has no executable steps") {
+		t.Fatalf("expected submit to get past signer loading, got stderr=%s", stderr.String())
+	}
+}
+
+func TestLegacySubmitRejectsTempoSignerOverride(t *testing.T) {
+	actionStorePath := filepath.Join(t.TempDir(), "actions.db")
+	actionLockPath := filepath.Join(t.TempDir(), "actions.lock")
+	t.Setenv("DEFI_ACTIONS_PATH", actionStorePath)
+	t.Setenv("DEFI_ACTIONS_LOCK_PATH", actionLockPath)
+
+	store, err := execution.OpenStore(actionStorePath, actionLockPath)
+	if err != nil {
+		t.Fatalf("open action store: %v", err)
+	}
+	defer store.Close()
+
+	action := execution.NewAction("act_00112233445566778899aabbccddeeff", "transfer", "eip155:167000", execution.Constraints{Simulate: true})
+	action.FromAddress = "0x00000000000000000000000000000000000000AA"
+	action.ExecutionBackend = execution.ExecutionBackendLegacyLocal
+	if err := store.Save(action); err != nil {
+		t.Fatalf("save action: %v", err)
+	}
+
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	r := NewRunnerWithWriters(&stdout, &stderr)
+	code := r.Run([]string{
+		"transfer", "submit",
+		"--action-id", action.ActionID,
+		"--signer", "tempo",
+	})
+	if code != 2 {
+		t.Fatalf("expected usage exit 2, got %d stderr=%s", code, stderr.String())
+	}
+	if !strings.Contains(strings.ToLower(stderr.String()), "legacy") || !strings.Contains(strings.ToLower(stderr.String()), "local") {
+		t.Fatalf("expected legacy local-only rejection, got stderr=%s", stderr.String())
+	}
+}
+
+func TestResolveActionExecutionBackendOWSReResolvesWalletSenderAtSubmit(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeOWSWalletFixture(t, home, ows.Wallet{
+		ID:        "wallet-123",
+		Name:      "Agent Wallet",
+		CreatedAt: "2026-03-25T00:00:00Z",
+		Accounts: []ows.WalletAccount{
+			{
+				AccountID:      "acc-1",
+				Address:        "0x000000000000000000000000000000000000dead",
+				ChainID:        "eip155:1",
+				DerivationPath: "m/44'/60'/0'/0/0",
+			},
+		},
+	})
+
+	resolved, err := resolveActionExecutionBackend(&cobra.Command{Use: "submit"}, execution.Action{
+		ChainID:          "eip155:1",
+		WalletID:         "wallet-123",
+		ExecutionBackend: execution.ExecutionBackendOWS,
+	}, submitExecutionInputs{})
+	if err != nil {
+		t.Fatalf("resolveActionExecutionBackend failed: %v", err)
+	}
+	if resolved.sender != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected canonical resolved sender, got %q", resolved.sender)
+	}
+	if got := resolved.evmBackend.EffectiveSender().Hex(); got != "0x000000000000000000000000000000000000dEaD" {
+		t.Fatalf("expected backend sender to match resolved wallet sender, got %q", got)
+	}
+}
+
+func TestResolveActionExecutionBackendOWSRejectsSenderMismatch(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	writeOWSWalletFixture(t, home, ows.Wallet{
+		ID:        "wallet-123",
+		Name:      "Agent Wallet",
+		CreatedAt: "2026-03-25T00:00:00Z",
+		Accounts: []ows.WalletAccount{
+			{
+				AccountID:      "acc-1",
+				Address:        "0x000000000000000000000000000000000000dead",
+				ChainID:        "eip155:1",
+				DerivationPath: "m/44'/60'/0'/0/0",
+			},
+		},
+	})
+
+	_, err := resolveActionExecutionBackend(&cobra.Command{Use: "submit"}, execution.Action{
+		ChainID:          "eip155:1",
+		FromAddress:      "0x00000000000000000000000000000000000000AA",
+		WalletID:         "wallet-123",
+		ExecutionBackend: execution.ExecutionBackendOWS,
+	}, submitExecutionInputs{})
+	if err == nil {
+		t.Fatal("expected sender mismatch to fail")
+	}
+	if !strings.Contains(strings.ToLower(err.Error()), "wallet sender") {
+		t.Fatalf("expected wallet sender mismatch error, got %v", err)
+	}
 }

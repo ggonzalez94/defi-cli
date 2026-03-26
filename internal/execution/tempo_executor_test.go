@@ -28,7 +28,7 @@ func newTestTempoSigner(t *testing.T) *testTempoSigner {
 	}
 }
 
-func (s *testTempoSigner) Address() common.Address { return s.addr }
+func (s *testTempoSigner) Address() common.Address       { return s.addr }
 func (s *testTempoSigner) PrivateKey() *ecdsa.PrivateKey { return s.pk }
 func (s *testTempoSigner) SignTx(chainID *big.Int, tx *types.Transaction) (*types.Transaction, error) {
 	signer := types.LatestSignerForChainID(chainID)
@@ -75,20 +75,4 @@ type noPrivateKeySigner struct{}
 func (s *noPrivateKeySigner) Address() common.Address { return common.Address{} }
 func (s *noPrivateKeySigner) SignTx(_ *big.Int, tx *types.Transaction) (*types.Transaction, error) {
 	return tx, nil
-}
-
-func TestResolveStepExecutorTempoChain(t *testing.T) {
-	ts := newTestTempoSigner(t)
-	exec := ResolveStepExecutor(4217, ts)
-	if _, ok := exec.(*TempoStepExecutor); !ok {
-		t.Fatalf("expected TempoStepExecutor for chain 4217, got %T", exec)
-	}
-}
-
-func TestResolveStepExecutorEVMChain(t *testing.T) {
-	ts := newTestTempoSigner(t)
-	exec := ResolveStepExecutor(1, ts)
-	if _, ok := exec.(*EVMStepExecutor); !ok {
-		t.Fatalf("expected EVMStepExecutor for chain 1, got %T", exec)
-	}
 }

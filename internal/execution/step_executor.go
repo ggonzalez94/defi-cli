@@ -7,7 +7,6 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum/common"
-	"github.com/ggonzalez94/defi-cli/internal/execution/signer"
 )
 
 // StepExecutor abstracts per-step transaction execution so different chain
@@ -71,13 +70,4 @@ func ParseEVMChainID(caip2 string) (int64, error) {
 		return 0, fmt.Errorf("invalid CAIP-2 chain id %q: %w", caip2, err)
 	}
 	return v, nil
-}
-
-// ResolveStepExecutor returns the appropriate StepExecutor for the given chain.
-// Tempo chains get a TempoStepExecutor; all others get the EVM executor.
-func ResolveStepExecutor(chainID int64, txSigner signer.Signer) StepExecutor {
-	if IsTempoChain(chainID) {
-		return NewTempoStepExecutor(txSigner)
-	}
-	return NewEVMStepExecutor(txSigner)
 }

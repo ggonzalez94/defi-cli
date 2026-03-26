@@ -37,14 +37,15 @@ Supported providers: `aave`, `morpho`, `moonwell`.
 ## Execution (supply, withdraw, borrow, repay)
 
 ```bash
-defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+export DEFI_OWS_TOKEN=...
 defi lend supply submit --action-id <action_id> --results-only
 ```
 
 Morpho lend execution requires `--market-id`:
 
 ```bash
-defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider morpho --chain 1 --asset USDC --market-id 0x... --amount 1000000 --wallet agent-treasury --results-only
 ```
 
 Aave auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum, and Avalanche. Use `--pool-address` on other chains.
@@ -52,10 +53,12 @@ Aave auto-resolves pool addresses on Ethereum, Optimism, Polygon, Base, Arbitrum
 Moonwell execution targets mToken contracts (Compound v2 style) on Base and Optimism:
 
 ```bash
-defi lend supply plan --provider moonwell --chain 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi lend supply plan --provider moonwell --chain 8453 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
 ```
 
 Use `--pool-address` to specify the mToken directly, or omit it to auto-resolve by underlying asset. Moonwell does not support `--on-behalf-of`.
+
+Plan with `--wallet` (OWS) or `--from-address` (local signer). See [Execution & Signing](/concepts/execution-auth) for submit auth details.
 
 ## Suggested filters and reliability defaults
 

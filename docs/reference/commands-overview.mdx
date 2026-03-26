@@ -52,9 +52,13 @@ Examples:
 ```bash
 defi lend markets --provider aave --chain 1 --asset USDC --results-only
 defi yield positions --chain 1 --address 0xYourEOA --providers aave,morpho --results-only
-defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --from-address 0xYourEOA --results-only
+defi yield deposit plan --provider morpho --chain 1 --asset USDC --vault-address 0xVault --amount 1000000 --wallet agent-treasury --results-only
 defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --timeout 12s --retries 2 --results-only
 defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset SOL --amount 1000000 --results-only
-defi transfer plan --chain taiko --asset USDC --amount 1000000 --from-address 0xYourEOA --recipient 0xRecipient --results-only
+defi transfer plan --chain taiko --asset USDC --amount 1000000 --wallet agent-treasury --recipient 0xRecipient --results-only
 defi actions estimate --action-id <action_id> --results-only
 ```
+
+Execution note:
+
+Standard EVM `plan` commands accept `--wallet` (OWS, recommended) or `--from-address` (local signer). Tempo swap planning always uses `--from-address`. See [Execution & Signing](/concepts/execution-auth).

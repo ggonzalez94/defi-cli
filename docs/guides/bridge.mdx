@@ -29,9 +29,12 @@ defi bridge quote --provider across --from 1 --to 8453 --asset USDC --amount-dec
 Bridge execution is available through `bridge plan|submit|status` for `--provider across|lifi`.
 
 ```bash
-defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
+defi bridge plan --provider across --from 1 --to 8453 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
+export DEFI_OWS_TOKEN=...
 defi bridge submit --action-id <action_id> --results-only
 ```
+
+Plan with `--wallet` (OWS) or `--from-address` (local signer). See [Execution & Signing](/concepts/execution-auth) for submit auth details.
 
 ## Bridge analytics
 
@@ -53,6 +56,7 @@ defi bridge details --bridge layerzero --results-only
 - Across can omit native USD fee fields on some routes; in those cases `estimated_fee_usd` may use a stable-asset approximation.
 - Across `/swap/approval` responses can include max-allowance `approve` calldata. `defi-cli` blocks approval amounts above planned input by default; use `--allow-max-approval` on `bridge submit` only when you explicitly accept that larger allowance.
 - Bridge `submit` validates canonical execution targets on covered Across/LiFi source chains before signing. Use `--unsafe-provider-tx` only when you intentionally want to bypass that provider-payload guardrail.
+- `action_policy_error` can also indicate an OWS policy denial when the wallet backend rejects execution.
 - Bridge `submit` marks bridge steps complete only after destination settlement is confirmed by provider status APIs (Across `/deposit/status`, LiFi `/status`).
 - `--step-timeout` applies to each bridge wait stage (receipt and settlement polling). Slow routes may need higher values (for example `--step-timeout 15m`).
 - Global `--timeout` controls provider/planning requests. Execution wait budget is derived from `--step-timeout` and remaining action stages.

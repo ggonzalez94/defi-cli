@@ -18,17 +18,25 @@ const (
 )
 
 type CommandMetadata struct {
-	Mutation   bool              `json:"mutation,omitempty"`
-	InputModes []string          `json:"input_modes,omitempty"`
-	Auth       []AuthRequirement `json:"auth,omitempty"`
-	Request    *TypeSchema       `json:"request,omitempty"`
-	Response   *TypeSchema       `json:"response,omitempty"`
+	Mutation         bool              `json:"mutation,omitempty"`
+	InputModes       []string          `json:"input_modes,omitempty"`
+	InputConstraints []InputConstraint `json:"input_constraints,omitempty"`
+	Auth             []AuthRequirement `json:"auth,omitempty"`
+	Request          *TypeSchema       `json:"request,omitempty"`
+	Response         *TypeSchema       `json:"response,omitempty"`
 }
 
 type AuthRequirement struct {
 	Kind        string              `json:"kind"`
 	EnvVars     []string            `json:"env_vars,omitempty"`
 	Optional    bool                `json:"optional,omitempty"`
+	When        map[string][]string `json:"when,omitempty"`
+	Description string              `json:"description,omitempty"`
+}
+
+type InputConstraint struct {
+	Kind        string              `json:"kind"`
+	Fields      []string            `json:"fields,omitempty"`
 	When        map[string][]string `json:"when,omitempty"`
 	Description string              `json:"description,omitempty"`
 }

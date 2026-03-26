@@ -65,10 +65,19 @@ defi swap quote --provider bungee --chain hyperevm --from-asset USDC --to-asset 
 Swap execution is currently available for Tempo and TaikoSwap:
 
 ```bash
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --wallet agent-treasury --results-only
 defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --from-address 0xYourEOA --results-only
-defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
 defi swap submit --action-id <action_id> --results-only
+```
+
+Plan with `--wallet` (OWS) or `--from-address` (local signer). Tempo is a separate path and always uses `--from-address`. See [Execution & Signing](/concepts/execution-auth) for full details.
+
+### Standard EVM submit (OWS-first)
+
+```bash
+export DEFI_OWS_TOKEN=...
+defi swap submit --action-id <id> --results-only
 ```
 
 ### Tempo execution
@@ -79,11 +88,8 @@ Tempo swaps use native type 0x76 transactions that batch approve+swap into a sin
 # Plan a Tempo swap
 defi swap plan --provider tempo --chain tempo --from-asset USDC.e --to-asset pathUSD --amount 1000000 --from-address 0xYourWallet --results-only
 
-# Submit with agent wallet
+# Submit through the Tempo signer/backend path
 defi swap submit --action-id <id> --signer tempo --results-only
-
-# Or submit with local key
-defi swap submit --action-id <id> --results-only
 ```
 
 ## Notes
@@ -97,6 +103,7 @@ defi swap submit --action-id <id> --results-only
 - `--slippage-pct` is optional and currently applies to Uniswap quotes only.
 - Tempo DEX currently supports USD-denominated TIP-20s only and auto-routes supported pairs through quote-token relationships.
 - Tempo DEX swap execution settles to the caller, so `--recipient` must be omitted or match `--from-address`.
+- Wallet-backed standard EVM submit requires `DEFI_OWS_TOKEN`.
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
 - Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.

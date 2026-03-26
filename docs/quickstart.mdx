@@ -57,19 +57,30 @@ defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset S
 ## 7. Plan an execution (dry-run)
 
 ```bash
+defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --wallet agent-treasury --results-only
+defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --wallet agent-treasury --results-only
 defi swap plan --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --amount 1000000 --from-address 0xYourEOA --results-only
-defi swap plan --provider taikoswap --chain taiko --from-asset USDC --to-asset WETH --amount 1000000 --from-address 0xYourEOA --results-only
-defi lend supply plan --provider aave --chain 1 --asset USDC --amount 1000000 --from-address 0xYourEOA --results-only
 ```
 
-## 8. Use schema for machine integration
+Both `--wallet` (OWS, recommended) and `--from-address` (local signer) are supported. Tempo plans always use `--from-address`. See [Execution & Signing](/concepts/execution-auth) for setup details.
+
+## 8. Submit a wallet-backed action
+
+```bash
+export DEFI_OWS_TOKEN=...
+defi lend supply submit --action-id <action_id> --results-only
+```
+
+Wallet-backed submit uses the action's persisted `wallet_id` and `DEFI_OWS_TOKEN`. Local-signer submit uses `--private-key` or key env vars. See [Execution & Signing](/concepts/execution-auth).
+
+## 9. Use schema for machine integration
 
 ```bash
 defi schema --results-only
 defi schema "yield opportunities" --results-only
 ```
 
-## 9. Add reliability defaults
+## 10. Add reliability defaults
 
 ```bash
 defi yield opportunities --chain 1 --asset USDC --timeout 12s --retries 2 --max-stale 5m --results-only

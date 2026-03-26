@@ -90,7 +90,7 @@ func TestExecuteActionRejectsInvalidStepTargetBeforeRPCDial(t *testing.T) {
 		Data:    "0x",
 		Value:   "0",
 	})
-	err := ExecuteAction(context.Background(), nil, &action, staticSigner{}, DefaultExecuteOptions())
+	err := ExecuteAction(context.Background(), nil, &action, staticSigner{}, NewLocalSubmitBackend(staticSigner{}), DefaultExecuteOptions())
 	if err == nil {
 		t.Fatal("expected invalid target error")
 	}
@@ -126,7 +126,7 @@ func TestExecuteActionReturnsErrorWhenPersistFails(t *testing.T) {
 		Value:   "0",
 	})
 
-	err = ExecuteAction(context.Background(), store, &action, staticSigner{}, DefaultExecuteOptions())
+	err = ExecuteAction(context.Background(), store, &action, staticSigner{}, NewLocalSubmitBackend(staticSigner{}), DefaultExecuteOptions())
 	if err == nil {
 		t.Fatal("expected persist error")
 	}
@@ -136,6 +136,119 @@ func TestExecuteActionReturnsErrorWhenPersistFails(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "persist action state") {
 		t.Fatalf("unexpected persist error message: %v", err)
+	}
+}
+
+func TestExecuteActionRejectsMismatchedPersistedSender(t *testing.T) {
+	action := NewAction("act_test", "swap", "eip155:1", Constraints{Simulate: true})
+	action.FromAddress = "0x00000000000000000000000000000000000000bb"
+	action.ExecutionBackend = ExecutionBackendLegacyLocal
+	action.Steps = append(action.Steps, ActionStep{
+		StepID:  "step-1",
+		Type:    StepTypeSwap,
+		Status:  StepStatusConfirmed,
+		ChainID: "eip155:1",
+		RPCURL:  "http://127.0.0.1:65535",
+		Target:  "0x00000000000000000000000000000000000000cc",
+		Data:    "0x",
+		Value:   "0",
+	})
+
+	err := ExecuteAction(context.Background(), nil, &action, staticSigner{}, NewLocalSubmitBackend(staticSigner{}), DefaultExecuteOptions())
+	if err == nil {
+		t.Fatal("expected sender mismatch error")
+	}
+	typed, ok := clierr.As(err)
+	if !ok || typed.Code != clierr.CodeSigner {
+		t.Fatalf("expected signer error, got %v", err)
+	}
+	if got := action.FromAddress; got != "0x00000000000000000000000000000000000000bb" {
+		t.Fatalf("expected persisted sender to remain unchanged, got %q", got)
+	}
+}
+
+func TestExecuteActionFillsBlankPersistedSenderFromExecutor(t *testing.T) {
+	action := NewAction("act_test", "swap", "eip155:1", Constraints{Simulate: true})
+	action.ExecutionBackend = ExecutionBackendLegacyLocal
+	expectedSender := (staticSigner{}).Address().Hex()
+	action.Steps = append(action.Steps, ActionStep{
+		StepID:  "step-1",
+		Type:    StepTypeSwap,
+		Status:  StepStatusConfirmed,
+		ChainID: "eip155:1",
+		RPCURL:  "http://127.0.0.1:65535",
+		Target:  "0x00000000000000000000000000000000000000cc",
+		Data:    "0x",
+		Value:   "0",
+	})
+
+	if err := ExecuteAction(context.Background(), nil, &action, staticSigner{}, NewLocalSubmitBackend(staticSigner{}), DefaultExecuteOptions()); err != nil {
+		t.Fatalf("ExecuteAction failed: %v", err)
+	}
+	if got := action.FromAddress; got != expectedSender {
+		t.Fatalf("expected persisted sender %q, got %q", expectedSender, got)
+	}
+	if action.Status != ActionStatusCompleted {
+		t.Fatalf("expected action to complete, got %s", action.Status)
+	}
+}
+
+func TestExecuteActionRejectsEmptyEffectiveSender(t *testing.T) {
+	action := NewAction("act_test", "swap", "eip155:1", Constraints{Simulate: true})
+	action.ExecutionBackend = ExecutionBackendOWS
+	action.WalletID = "wallet-123"
+	action.Steps = append(action.Steps, ActionStep{
+		StepID:  "step-1",
+		Type:    StepTypeSwap,
+		Status:  StepStatusConfirmed,
+		ChainID: "eip155:1",
+		RPCURL:  "http://127.0.0.1:65535",
+		Target:  "0x00000000000000000000000000000000000000cc",
+		Data:    "0x",
+		Value:   "0",
+	})
+
+	err := ExecuteAction(context.Background(), nil, &action, nil, NewOWSSubmitBackend("wallet-123", common.Address{}), DefaultExecuteOptions())
+	if err == nil {
+		t.Fatal("expected empty sender error")
+	}
+	typed, ok := clierr.As(err)
+	if !ok || typed.Code != clierr.CodeSigner {
+		t.Fatalf("expected signer error, got %v", err)
+	}
+	if action.FromAddress != "" {
+		t.Fatalf("expected persisted sender to remain blank, got %q", action.FromAddress)
+	}
+}
+
+func TestOWSPolicyDenialMapsToActionPolicy(t *testing.T) {
+	prevSendUnsignedTx := sendUnsignedTxFunc
+	sendUnsignedTxFunc = func(context.Context, string, string, []byte, string) (string, error) {
+		return "", clierr.New(clierr.CodeActionPolicy, "policy denied")
+	}
+	t.Cleanup(func() {
+		sendUnsignedTxFunc = prevSendUnsignedTx
+	})
+
+	backend := NewOWSSubmitBackend("wallet-123", common.HexToAddress("0x00000000000000000000000000000000000000aa"))
+	target := common.HexToAddress("0x00000000000000000000000000000000000000bb")
+	tx := types.NewTx(&types.DynamicFeeTx{
+		ChainID:   big.NewInt(1),
+		Nonce:     7,
+		GasTipCap: big.NewInt(1),
+		GasFeeCap: big.NewInt(2),
+		Gas:       21_000,
+		To:        &target,
+		Value:     big.NewInt(0),
+	})
+
+	_, err := backend.SubmitDynamicFeeTx(context.Background(), "https://rpc.example", big.NewInt(1), tx)
+	if err == nil {
+		t.Fatal("expected policy denial error")
+	}
+	typed, ok := clierr.As(err)
+	if !ok || typed.Code != clierr.CodeActionPolicy {
+		t.Fatalf("expected action policy error, got %v", err)
 	}
 }
 

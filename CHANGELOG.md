@@ -4,7 +4,7 @@ All notable user-facing changes to `defi-cli` are documented in this file.
 
 Format:
 - Keep entries under `Unreleased` until a tag is cut.
-- Group notes by section in this order: `Added`, `Changed`, `Fixed`, `Docs`, `Security`.
+- Group notes by section in this order: `Added`, `Changed`, `Deprecated`, `Fixed`, `Docs`, `Security`.
 - Keep bullets short and focused on user impact.
 
 ## [Unreleased]
@@ -33,6 +33,8 @@ Format:
 - `StepExecutor` interface for chain-specific execution; EVM path extracted unchanged, Tempo path added.
 
 ### Changed
+- Standard EVM execution now supports two signing backends: `--wallet` (OWS, recommended) and `--from-address` (local signer). OWS is the recommended default for new integrations.
+- Command schema now exposes machine-readable `input_constraints` metadata so agents can detect rules such as `exactly_one_of(wallet, from_address)` without inferring them from help text.
 - `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
 - `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
 - `actions estimate` now returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields, instead of rejecting them.
@@ -42,6 +44,7 @@ Format:
 - Optimism USDC bootstrap address now points to native USDC (`0x0b2c...ff85`) instead of bridged USDC.e; added separate `USDC.e` entry for the bridged variant.
 
 ### Docs
+- Consolidated execution auth documentation into a dedicated concept page covering both signing backends (OWS and local signer), with guides linking to it instead of inlining auth details.
 - Documented Tempo chain aliases, provider support, native DEX caveats, and execution examples across README, AGENTS, and Mintlify docs.
 - Updated Tempo swap examples to use supported USD TIP-20 pairs and documented that the DEX auto-routes supported pairs through quote-token relationships.
 

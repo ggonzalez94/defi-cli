@@ -8,6 +8,8 @@ type StepStatus string
 
 type StepType string
 
+type ExecutionBackend string
+
 const (
 	ActionStatusPlanned   ActionStatus = "planned"
 	ActionStatusRunning   ActionStatus = "running"
@@ -30,6 +32,12 @@ const (
 	StepTypeBridge   StepType = "bridge_send"
 	StepTypeLend     StepType = "lend_call"
 	StepTypeClaim    StepType = "claim"
+)
+
+const (
+	ExecutionBackendOWS         ExecutionBackend = "ows"
+	ExecutionBackendLegacyLocal ExecutionBackend = "legacy_local"
+	ExecutionBackendTempo       ExecutionBackend = "tempo"
 )
 
 type Constraints struct {
@@ -62,20 +70,23 @@ type ActionStep struct {
 }
 
 type Action struct {
-	ActionID     string                 `json:"action_id"`
-	IntentType   string                 `json:"intent_type"`
-	Provider     string                 `json:"provider,omitempty"`
-	Status       ActionStatus           `json:"status"`
-	ChainID      string                 `json:"chain_id"`
-	FromAddress  string                 `json:"from_address,omitempty"`
-	ToAddress    string                 `json:"to_address,omitempty"`
-	InputAmount  string                 `json:"input_amount,omitempty"`
-	CreatedAt    string                 `json:"created_at"`
-	UpdatedAt    string                 `json:"updated_at"`
-	Constraints  Constraints            `json:"constraints"`
-	Steps        []ActionStep           `json:"steps"`
-	Metadata     map[string]any         `json:"metadata,omitempty"`
-	ProviderData map[string]interface{} `json:"provider_data,omitempty"`
+	ActionID          string                 `json:"action_id"`
+	IntentType        string                 `json:"intent_type"`
+	Provider          string                 `json:"provider,omitempty"`
+	Status            ActionStatus           `json:"status"`
+	ChainID           string                 `json:"chain_id"`
+	FromAddress       string                 `json:"from_address,omitempty"`
+	WalletID          string                 `json:"wallet_id,omitempty"`
+	WalletName        string                 `json:"wallet_name,omitempty"`
+	ExecutionBackend  ExecutionBackend       `json:"execution_backend,omitempty"`
+	ToAddress         string                 `json:"to_address,omitempty"`
+	InputAmount       string                 `json:"input_amount,omitempty"`
+	CreatedAt         string                 `json:"created_at"`
+	UpdatedAt         string                 `json:"updated_at"`
+	Constraints       Constraints            `json:"constraints"`
+	Steps             []ActionStep           `json:"steps"`
+	Metadata          map[string]any         `json:"metadata,omitempty"`
+	ProviderData      map[string]interface{} `json:"provider_data,omitempty"`
 }
 
 func NewAction(actionID, intentType, chainID string, constraints Constraints) Action {

@@ -24,7 +24,6 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
-	"github.com/ggonzalez94/defi-cli/internal/registry"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/out"
@@ -44,6 +43,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/taikoswap"
 	"github.com/ggonzalez94/defi-cli/internal/providers/tempo"
 	"github.com/ggonzalez94/defi-cli/internal/providers/uniswap"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/ggonzalez94/defi-cli/internal/version"
 	"github.com/spf13/cobra"
@@ -161,14 +161,14 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 				taikoSwapProvider := taikoswap.New()
 				s.marketProvider = llama
 				s.lendingProviders = map[string]providers.LendingProvider{
-					"aave":   aaveProvider,
-					"morpho": morphoProvider,
+					"aave":     aaveProvider,
+					"morpho":   morphoProvider,
 					"kamino":   kaminoProvider,
 					"moonwell": moonwellProvider,
 				}
 				s.yieldProviders = map[string]providers.YieldProvider{
-					"aave":   aaveProvider,
-					"morpho": morphoProvider,
+					"aave":     aaveProvider,
+					"morpho":   morphoProvider,
 					"kamino":   kaminoProvider,
 					"moonwell": moonwellProvider,
 				}
@@ -1317,7 +1317,8 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		AmountDecimal    string `json:"amount_decimal" flag:"amount-decimal" format:"decimal-amount"`
 		AmountOutBase    string `json:"amount_out" flag:"amount-out" format:"base-units"`
 		AmountOutDecimal string `json:"amount_out_decimal" flag:"amount-out-decimal" format:"decimal-amount"`
-		FromAddress      string `json:"from_address" flag:"from-address" required:"true" format:"evm-address"`
+		WalletRef        string `json:"wallet" flag:"wallet" format:"identifier"`
+		FromAddress      string `json:"from_address" flag:"from-address" format:"evm-address"`
 		Recipient        string `json:"recipient" flag:"recipient" format:"evm-address"`
 		SlippageBps      int64  `json:"slippage_bps" flag:"slippage-bps"`
 		Simulate         bool   `json:"simulate" flag:"simulate"`
@@ -1369,12 +1370,37 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			var identity executionIdentity
+			warnings := []string(nil)
+			sender := ""
+			if providerName == "tempo" {
+				if strings.TrimSpace(plan.WalletRef) != "" && strings.TrimSpace(plan.FromAddress) != "" {
+					return clierr.New(clierr.CodeUsage, "use only one identity input: --wallet or --from-address")
+				}
+				if strings.TrimSpace(plan.WalletRef) != "" {
+					return clierr.New(clierr.CodeUnsupported, "--wallet planning is not supported on Tempo chains yet; use --from-address")
+				}
+				if strings.TrimSpace(plan.FromAddress) == "" {
+					return clierr.New(clierr.CodeUsage, "--from-address is required for --provider tempo")
+				}
+				if !common.IsHexAddress(plan.FromAddress) {
+					return clierr.New(clierr.CodeUsage, "--from-address must be a valid EVM hex address")
+				}
+				sender = common.HexToAddress(plan.FromAddress).Hex()
+			} else {
+				identity, err = resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
+				if err != nil {
+					return err
+				}
+				sender = identity.FromAddress
+				warnings = identity.Warnings
+			}
 
 			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
 			defer cancel()
 			start := time.Now()
 			action, providerInfoName, err := s.actionBuilderRegistry().BuildSwapAction(ctx, providerName, "plan", reqStruct, providers.SwapExecutionOptions{
-				Sender:      plan.FromAddress,
+				Sender:      sender,
 				Recipient:   plan.Recipient,
 				SlippageBps: plan.SlippageBps,
 				Simulate:    plan.Simulate,
@@ -1388,6 +1414,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				s.captureCommandDiagnostics(nil, statuses, false)
 				return err
 			}
+			if providerName == "tempo" {
+				action.FromAddress = sender
+				action.ExecutionBackend = execution.ExecutionBackendTempo
+			} else {
+				applyExecutionIdentityToAction(&action, identity)
+			}
 			if err := s.ensureActionStore(); err != nil {
 				return err
 			}
@@ -1395,7 +1427,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
 			}
 			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), statuses, false)
+			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, warnings, cacheMetaBypass(), statuses, false)
 		},
 	}
 	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Swap execution provider (taikoswap|tempo)")
@@ -1407,17 +1439,20 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	planCmd.Flags().StringVar(&plan.AmountDecimal, "amount-decimal", "", "Exact-input amount in decimal units")
 	planCmd.Flags().StringVar(&plan.AmountOutBase, "amount-out", "", "Exact-output amount in base units")
 	planCmd.Flags().StringVar(&plan.AmountOutDecimal, "amount-out-decimal", "", "Exact-output amount in decimal units")
+	planCmd.Flags().StringVar(&plan.WalletRef, "wallet", "", "Wallet identifier or name")
 	planCmd.Flags().StringVar(&plan.FromAddress, "from-address", "", "Sender EOA address")
-	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to --from-address)")
+	planCmd.Flags().StringVar(&plan.Recipient, "recipient", "", "Recipient address (defaults to the resolved sender address)")
 	planCmd.Flags().Int64Var(&plan.SlippageBps, "slippage-bps", 50, "Max slippage in basis points")
 	planCmd.Flags().BoolVar(&plan.Simulate, "simulate", true, "Include simulation checks during execution")
 	planCmd.Flags().StringVar(&plan.RPCURL, "rpc-url", "", "RPC URL override for the selected chain")
 	_ = planCmd.MarkFlagRequired("chain")
 	_ = planCmd.MarkFlagRequired("from-asset")
 	_ = planCmd.MarkFlagRequired("to-asset")
-	_ = planCmd.MarkFlagRequired("from-address")
 	_ = planCmd.MarkFlagRequired("provider")
-	configureStructuredInput[swapPlanArgs](planCmd, structuredInputOptions{Mutation: true})
+	configureStructuredInput[swapPlanArgs](planCmd, structuredInputOptions{
+		Mutation:         true,
+		InputConstraints: swapPlanIdentityInputConstraints(),
+	})
 
 	var submit swapSubmitArgs
 	submitCmd := &cobra.Command{
@@ -1442,16 +1477,17 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
 			}
 
-			txSigner, err := newExecutionSigner(submit.Signer, submit.KeySource, submit.PrivateKey)
+			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
+				Signer:      submit.Signer,
+				KeySource:   submit.KeySource,
+				PrivateKey:  submit.PrivateKey,
+				FromAddress: submit.FromAddress,
+			})
 			if err != nil {
 				return err
 			}
-			senderAddr := effectiveSenderAddress(txSigner)
-			if strings.TrimSpace(submit.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(submit.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match --from-address")
-			}
-			if strings.TrimSpace(action.FromAddress) != "" && !strings.EqualFold(strings.TrimSpace(action.FromAddress), senderAddr) {
-				return clierr.New(clierr.CodeSigner, "signer address does not match planned action sender")
+			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
+				return err
 			}
 			execOpts, err := parseExecuteOptions(
 				submit.Simulate,
@@ -1467,7 +1503,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := s.executeActionWithTimeout(&action, txSigner, execOpts); err != nil {
+			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
 				return err
 			}
 			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
@@ -2858,6 +2894,15 @@ func resolveActionID(actionID string) (string, error) {
 	return actionID, nil
 }
 
+func applyExecutionIdentityToAction(action *execution.Action, identity executionIdentity) {
+	if action == nil {
+		return
+	}
+	action.WalletID = identity.WalletID
+	action.WalletName = identity.WalletName
+	action.FromAddress = identity.FromAddress
+	action.ExecutionBackend = identity.ExecutionBackend
+}
 
 func newExecutionSigner(signerBackend, keySource, privateKey string) (execsigner.Signer, error) {
 	signerBackend = strings.ToLower(strings.TrimSpace(signerBackend))
