@@ -4,7 +4,7 @@ All notable user-facing changes to `defi-cli` are documented in this file.
 
 Format:
 - Keep entries under `Unreleased` until a tag is cut.
-- Group notes by section in this order: `Added`, `Changed`, `Fixed`, `Docs`, `Security`.
+- Group notes by section in this order: `Added`, `Changed`, `Deprecated`, `Fixed`, `Docs`, `Security`.
 - Keep bullets short and focused on user impact.
 
 ## [Unreleased]
@@ -33,12 +33,17 @@ Format:
 - `StepExecutor` interface for chain-specific execution; EVM path extracted unchanged, Tempo path added.
 
 ### Changed
-- OWS-first execution is now the primary path for new standard EVM actions, with `--wallet` as the preferred planning identity and local signing retained only as deprecated compatibility.
+- OWS-first execution is now the primary path for new standard EVM actions, with `--wallet` as the preferred planning identity.
 - Command schema now exposes machine-readable `input_constraints` metadata so agents can detect rules such as `exactly_one_of(wallet, from_address)` without inferring them from help text.
 - `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
 - `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
 - `actions estimate` now returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields, instead of rejecting them.
 - Tempo swap planning/quotes now validate TIP-20 currency metadata up front and return `unsupported` for non-USD assets or DEX reverts such as missing pairs, instead of reporting them as transient provider outages.
+
+### Deprecated
+- `--from-address` for standard EVM planning commands; use `--wallet` instead. Actions planned with `--from-address` produce `legacy_local` backend actions.
+- Local signing flags for submit (`--private-key`, `--signer local`, `--key-source`); wallet-backed submit uses `DEFI_OWS_TOKEN` instead.
+- Local key environment variables for submit (`DEFI_PRIVATE_KEY`, `DEFI_PRIVATE_KEY_FILE`, keystore env vars); retained only for actions planned through the legacy `--from-address` path.
 
 ### Fixed
 - Optimism USDC bootstrap address now points to native USDC (`0x0b2c...ff85`) instead of bridged USDC.e; added separate `USDC.e` entry for the bridged variant.

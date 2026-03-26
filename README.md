@@ -83,6 +83,40 @@ Verify install:
 defi version --long
 ```
 
+## Wallet Setup (OWS)
+
+[Open Wallet Standard (OWS)](https://docs.openwallet.sh/) is the signing backend for `defi-cli` execution commands — your private keys stay encrypted at rest and the CLI shells out to `ows sign send-tx` when broadcasting transactions.
+
+**Why OWS?**
+
+- Keys are encrypted at rest, never exposed as plaintext environment variables.
+- Built-in policy engine for spend limits, asset allowlists, and chain restrictions.
+- Multi-chain support with a single wallet identity.
+- Agent-friendly token access via `DEFI_OWS_TOKEN`.
+
+**Install:**
+
+```bash
+npm install -g @open-wallet-standard/core
+```
+
+See the [OWS docs](https://docs.openwallet.sh/) for advanced setup, policies, and key management.
+
+**Create a wallet:**
+
+```bash
+ows wallet create --name agent-treasury
+```
+
+**Configure for defi-cli:**
+
+```bash
+export DEFI_OWS_TOKEN=$(ows token create --wallet agent-treasury --ttl 24h)
+defi swap plan --wallet agent-treasury --chain base --from USDC --to WETH --amount 1000000 --provider taikoswap
+```
+
+> **Note:** OWS is only needed for execution commands (`plan`, `submit`, `status`). Read-only commands (`markets`, `positions`, `quote`, etc.) work without it.
+
 ## Quick Start
 
 ### Read: query markets and quotes
