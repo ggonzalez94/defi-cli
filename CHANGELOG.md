@@ -33,23 +33,18 @@ Format:
 - `StepExecutor` interface for chain-specific execution; EVM path extracted unchanged, Tempo path added.
 
 ### Changed
-- OWS-first execution is now the primary path for new standard EVM actions, with `--wallet` as the preferred planning identity.
+- Standard EVM execution now supports two signing backends: `--wallet` (OWS, recommended) and `--from-address` (local signer). OWS is the recommended default for new integrations.
 - Command schema now exposes machine-readable `input_constraints` metadata so agents can detect rules such as `exactly_one_of(wallet, from_address)` without inferring them from help text.
 - `swap quote --type exact-output` now supports `--provider tempo` in addition to `uniswap`.
 - `swap plan` now supports Tempo execution planning, and `tempo-dex` / `tempodex` aliases normalize to the canonical `tempo` provider.
 - `actions estimate` now returns fee-token-denominated estimates for Tempo actions with `fee_unit` and `fee_token` fields, instead of rejecting them.
 - Tempo swap planning/quotes now validate TIP-20 currency metadata up front and return `unsupported` for non-USD assets or DEX reverts such as missing pairs, instead of reporting them as transient provider outages.
 
-### Deprecated
-- `--from-address` for standard EVM planning commands; use `--wallet` instead. Actions planned with `--from-address` produce `legacy_local` backend actions.
-- Local signing flags for submit (`--private-key`, `--signer local`, `--key-source`); wallet-backed submit uses `DEFI_OWS_TOKEN` instead.
-- Local key environment variables for submit (`DEFI_PRIVATE_KEY`, `DEFI_PRIVATE_KEY_FILE`, keystore env vars); retained only for actions planned through the legacy `--from-address` path.
-
 ### Fixed
 - Optimism USDC bootstrap address now points to native USDC (`0x0b2c...ff85`) instead of bridged USDC.e; added separate `USDC.e` entry for the bridged variant.
 
 ### Docs
-- Updated wallet-first planning and submit onboarding across README, AGENTS, and Mintlify docs, including `DEFI_OWS_TOKEN`, deprecated local signing guidance, and the Tempo exception.
+- Consolidated execution auth documentation into a dedicated concept page covering both signing backends (OWS and local signer), with guides linking to it instead of inlining auth details.
 - Documented Tempo chain aliases, provider support, native DEX caveats, and execution examples across README, AGENTS, and Mintlify docs.
 - Updated Tempo swap examples to use supported USD TIP-20 pairs and documented that the DEX auto-routes supported pairs through quote-token relationships.
 
