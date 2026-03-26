@@ -83,6 +83,16 @@ Verify install:
 defi version --long
 ```
 
+## Agent Skill (Claude Code / Cursor / Codex)
+
+If your AI agent uses [Claude Code](https://claude.com/claude-code), [Cursor](https://cursor.com), or another agent that supports [open skills](https://agentskills.io), install the bundled skill to teach the agent how to use defi-cli correctly — including exact field names, execution patterns, and common gotchas:
+
+```bash
+npx skills add ggonzalez94/defi-cli
+```
+
+Or install manually: copy `skills/defi-cli/` from this repo to `~/.claude/skills/defi-cli/`.
+
 ## Signing Backends
 
 Execution commands (`plan`, `submit`, `status`) support two signing backends:
