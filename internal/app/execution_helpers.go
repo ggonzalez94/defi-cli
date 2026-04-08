@@ -139,6 +139,94 @@ func validateExecutionSender(action execution.Action, expectedSender, actualSend
 	return nil
 }
 
+// executionSubmitArgs holds the common set of fields used by all execution
+// submit commands. Each command keeps its own typed struct (with json/flag tags
+// for schema annotation) and passes these fields to runSubmitAction.
+type executionSubmitArgs struct {
+	ActionID           string
+	Simulate           bool
+	Signer             string
+	KeySource          string
+	PrivateKey         string
+	FromAddress        string
+	PollInterval       string
+	StepTimeout        string
+	GasMultiplier      float64
+	MaxFeeGwei         string
+	MaxPriorityFeeGwei string
+	AllowMaxApproval   bool
+	UnsafeProviderTx   bool
+	FeeToken           string
+}
+
+func (s *runtimeState) runSubmitAction(cmd *cobra.Command, args executionSubmitArgs, expectedIntent, intentMismatchMsg string) error {
+	actionID, err := resolveActionID(args.ActionID)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureActionStore(); err != nil {
+		return err
+	}
+	action, err := s.actionStore.Get(actionID)
+	if err != nil {
+		return clierr.Wrap(clierr.CodeUsage, "load action", err)
+	}
+	if action.IntentType != expectedIntent {
+		return clierr.New(clierr.CodeUsage, intentMismatchMsg)
+	}
+	if action.Status == execution.ActionStatusCompleted {
+		return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
+	}
+	resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
+		Signer:      args.Signer,
+		KeySource:   args.KeySource,
+		PrivateKey:  args.PrivateKey,
+		FromAddress: args.FromAddress,
+	})
+	if err != nil {
+		return err
+	}
+	if err := validateExecutionSender(action, args.FromAddress, resolvedExec.sender); err != nil {
+		return err
+	}
+	execOpts, err := parseExecuteOptions(
+		args.Simulate,
+		args.PollInterval,
+		args.StepTimeout,
+		args.GasMultiplier,
+		args.MaxFeeGwei,
+		args.MaxPriorityFeeGwei,
+		args.AllowMaxApproval,
+		args.UnsafeProviderTx,
+		args.FeeToken,
+	)
+	if err != nil {
+		return err
+	}
+	if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
+		return err
+	}
+	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+}
+
+func (s *runtimeState) runStatusAction(cmd *cobra.Command, actionIDStr, expectedIntent, intentMismatchMsg string) error {
+	actionID, err := resolveActionID(actionIDStr)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureActionStore(); err != nil {
+		return err
+	}
+	action, err := s.actionStore.Get(actionID)
+	if err != nil {
+		return clierr.Wrap(clierr.CodeUsage, "load action", err)
+	}
+	if action.IntentType != expectedIntent {
+		return clierr.New(clierr.CodeUsage, intentMismatchMsg)
+	}
+	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+}
+
 // Execution timeout is derived from remaining action wait stages so short provider
 // request timeouts do not cancel transaction confirmation/settlement polling early.
 func estimateExecutionTimeout(action *execution.Action, opts execution.ExecuteOptions) time.Duration {

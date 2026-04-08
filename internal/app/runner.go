@@ -1420,55 +1420,14 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute a previously planned swap action",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			actionID, err := resolveActionID(submit.ActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "swap" {
-				return clierr.New(clierr.CodeUsage, "action is not a swap intent")
-			}
-			if action.Status == execution.ActionStatusCompleted {
-				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
-			}
-
-			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
-				Signer:      submit.Signer,
-				KeySource:   submit.KeySource,
-				PrivateKey:  submit.PrivateKey,
-				FromAddress: submit.FromAddress,
-			})
-			if err != nil {
-				return err
-			}
-			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
-				return err
-			}
-			execOpts, err := parseExecuteOptions(
-				submit.Simulate,
-				submit.PollInterval,
-				submit.StepTimeout,
-				submit.GasMultiplier,
-				submit.MaxFeeGwei,
-				submit.MaxPriorityFeeGwei,
-				submit.AllowMaxApproval,
-				submit.UnsafeProviderTx,
-				submit.FeeToken,
-			)
-			if err != nil {
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
-				return err
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return s.runSubmitAction(cmd, executionSubmitArgs{
+				ActionID: submit.ActionID, Simulate: submit.Simulate,
+				Signer: submit.Signer, KeySource: submit.KeySource, PrivateKey: submit.PrivateKey,
+				FromAddress: submit.FromAddress, PollInterval: submit.PollInterval, StepTimeout: submit.StepTimeout,
+				GasMultiplier: submit.GasMultiplier, MaxFeeGwei: submit.MaxFeeGwei, MaxPriorityFeeGwei: submit.MaxPriorityFeeGwei,
+				AllowMaxApproval: submit.AllowMaxApproval, UnsafeProviderTx: submit.UnsafeProviderTx, FeeToken: submit.FeeToken,
+			}, "swap", "action is not a swap intent")
 		},
 	}
 	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by swap plan")
@@ -1491,22 +1450,8 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 	statusCmd := &cobra.Command{
 		Use:   "status",
 		Short: "Get swap action status",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			actionID, err := resolveActionID(statusActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "swap" {
-				return clierr.New(clierr.CodeUsage, "action is not a swap intent")
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return s.runStatusAction(cmd, statusActionID, "swap", "action is not a swap intent")
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by swap plan")

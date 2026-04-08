@@ -115,53 +115,13 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 		Use:   "submit",
 		Short: "Execute an existing ERC-20 transfer action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(submit.ActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "transfer" {
-				return clierr.New(clierr.CodeUsage, "action is not a transfer intent")
-			}
-			if action.Status == execution.ActionStatusCompleted {
-				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
-			}
-			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
-				Signer:      submit.Signer,
-				KeySource:   submit.KeySource,
-				PrivateKey:  submit.PrivateKey,
-				FromAddress: submit.FromAddress,
-			})
-			if err != nil {
-				return err
-			}
-			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
-				return err
-			}
-			execOpts, err := parseExecuteOptions(
-				submit.Simulate,
-				submit.PollInterval,
-				submit.StepTimeout,
-				submit.GasMultiplier,
-				submit.MaxFeeGwei,
-				submit.MaxPriorityFeeGwei,
-				false,
-				false,
-				submit.FeeToken,
-			)
-			if err != nil {
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
-				return err
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+			return s.runSubmitAction(cmd, executionSubmitArgs{
+				ActionID: submit.ActionID, Simulate: submit.Simulate,
+				Signer: submit.Signer, KeySource: submit.KeySource, PrivateKey: submit.PrivateKey,
+				FromAddress: submit.FromAddress, PollInterval: submit.PollInterval, StepTimeout: submit.StepTimeout,
+				GasMultiplier: submit.GasMultiplier, MaxFeeGwei: submit.MaxFeeGwei, MaxPriorityFeeGwei: submit.MaxPriorityFeeGwei,
+				FeeToken: submit.FeeToken,
+			}, "transfer", "action is not a transfer intent")
 		},
 	}
 	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by transfer plan")
@@ -183,21 +143,7 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 		Use:   "status",
 		Short: "Get transfer action status",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "transfer" {
-				return clierr.New(clierr.CodeUsage, "action is not a transfer intent")
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+			return s.runStatusAction(cmd, statusActionID, "transfer", "action is not a transfer intent")
 		},
 	}
 	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by transfer plan")
