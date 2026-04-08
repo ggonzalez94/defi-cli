@@ -697,96 +697,15 @@ func (s *runtimeState) newAssetsCommand() *cobra.Command {
 
 func (s *runtimeState) newLendCommand() *cobra.Command {
 	root := &cobra.Command{Use: "lend", Short: "Lending data"}
-	var providerArg string
-	var chainArg string
-	var assetArg string
-	var marketsLimit int
-	var marketsRPCURL string
 
-	marketsCmd := &cobra.Command{
-		Use:   "markets",
-		Short: "List lending markets",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := providers.NormalizeLendingProvider(providerArg)
-			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required")
-			}
-			chain, asset, err := parseChainAsset(chainArg, assetArg)
-			if err != nil {
-				return err
-			}
-			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit, "rpc_url": strings.TrimSpace(marketsRPCURL)}
-			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				provider, err := s.selectLendingProvider(providerName)
-				if err != nil {
-					return nil, nil, nil, false, err
-				}
-				applyRPCOverride(provider, marketsRPCURL)
-
-				start := time.Now()
-				data, err := provider.LendMarkets(ctx, providerName, chain, asset)
-				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				if err != nil {
-					return nil, statuses, nil, false, err
-				}
-				data = providers.ApplyLimit(data, marketsLimit)
-				return data, statuses, nil, false, nil
-			})
-		},
-	}
-	marketsCmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
-	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
-	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
-	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
-	marketsCmd.Flags().StringVar(&marketsRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
-	_ = marketsCmd.MarkFlagRequired("provider")
-	_ = marketsCmd.MarkFlagRequired("chain")
-	_ = marketsCmd.MarkFlagRequired("asset")
-
-	var ratesProvider, ratesChain, ratesAsset string
-	var ratesLimit int
-	var ratesRPCURL string
-	ratesCmd := &cobra.Command{
-		Use:   "rates",
-		Short: "List lending rates",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := providers.NormalizeLendingProvider(ratesProvider)
-			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required")
-			}
-			chain, asset, err := parseChainAsset(ratesChain, ratesAsset)
-			if err != nil {
-				return err
-			}
-			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit, "rpc_url": strings.TrimSpace(ratesRPCURL)}
-			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				provider, err := s.selectLendingProvider(providerName)
-				if err != nil {
-					return nil, nil, nil, false, err
-				}
-				applyRPCOverride(provider, ratesRPCURL)
-
-				start := time.Now()
-				data, err := provider.LendRates(ctx, providerName, chain, asset)
-				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				if err != nil {
-					return nil, statuses, nil, false, err
-				}
-				data = providers.ApplyLimit(data, ratesLimit)
-				return data, statuses, nil, false, nil
-			})
-		},
-	}
-	ratesCmd.Flags().StringVar(&ratesProvider, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
-	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
-	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
-	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
-	ratesCmd.Flags().StringVar(&ratesRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
-	_ = ratesCmd.MarkFlagRequired("provider")
-	_ = ratesCmd.MarkFlagRequired("chain")
-	_ = ratesCmd.MarkFlagRequired("asset")
+	marketsCmd := newLendingDataCommand(s, "markets", "List lending markets", 60*time.Second,
+		func(ctx context.Context, p providers.LendingProvider, name string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
+			return p.LendMarkets(ctx, name, chain, asset)
+		})
+	ratesCmd := newLendingDataCommand(s, "rates", "List lending rates", 30*time.Second,
+		func(ctx context.Context, p providers.LendingProvider, name string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
+			return p.LendRates(ctx, name, chain, asset)
+		})
 
 	var positionsProvider, positionsChain, positionsAddress, positionsAsset, positionsType, positionsRPCURL string
 	var positionsLimit int
@@ -1875,6 +1794,51 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 }
 
 type fetchFn func(ctx context.Context) (data any, providerStatus []model.ProviderStatus, warnings []string, partial bool, err error)
+
+// newLendingDataCommand creates a standard lending data subcommand (e.g. "markets", "rates")
+// with provider/chain/asset/limit/rpc-url flags and the common cached fetch-from-provider pattern.
+func newLendingDataCommand[T any](s *runtimeState, use, short string, ttl time.Duration, callFn func(ctx context.Context, provider providers.LendingProvider, name string, chain id.Chain, asset id.Asset) ([]T, error)) *cobra.Command {
+	var providerArg, chainArg, assetArg, rpcURL string
+	var limit int
+	cmd := &cobra.Command{
+		Use: use, Short: short,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			providerName := providers.NormalizeLendingProvider(providerArg)
+			if providerName == "" {
+				return clierr.New(clierr.CodeUsage, "--provider is required")
+			}
+			chain, asset, err := parseChainAsset(chainArg, assetArg)
+			if err != nil {
+				return err
+			}
+			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": limit, "rpc_url": strings.TrimSpace(rpcURL)}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, ttl, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				provider, err := s.selectLendingProvider(providerName)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				applyRPCOverride(provider, rpcURL)
+				start := time.Now()
+				data, err := callFn(ctx, provider, providerName, chain, asset)
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				if err != nil {
+					return nil, statuses, nil, false, err
+				}
+				return providers.ApplyLimit(data, limit), statuses, nil, false, nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
+	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
+	cmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
+	cmd.Flags().IntVar(&limit, "limit", 20, fmt.Sprintf("Maximum lending %s to return", use))
+	cmd.Flags().StringVar(&rpcURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
+	_ = cmd.MarkFlagRequired("provider")
+	_ = cmd.MarkFlagRequired("chain")
+	_ = cmd.MarkFlagRequired("asset")
+	return cmd
+}
 
 // singleProviderQuery wraps a single provider call with timing and status tracking.
 func singleProviderQuery(providerName string, fn func(ctx context.Context) (any, error)) fetchFn {
