@@ -3,7 +3,6 @@ package planner
 import (
 	"context"
 	"fmt"
-	"math/big"
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
@@ -30,30 +29,21 @@ type MoonwellLendRequest struct {
 
 func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (execution.Action, error) {
 	verb := strings.ToLower(strings.TrimSpace(string(req.Verb)))
-	sender := strings.TrimSpace(req.Sender)
-	if !common.IsHexAddress(sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "lend action requires sender address")
-	}
-	recipient := strings.TrimSpace(req.Recipient)
-	if recipient == "" {
-		recipient = sender
-	}
-	if !common.IsHexAddress(recipient) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "invalid recipient address")
-	}
-	if !strings.EqualFold(recipient, sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "moonwell does not support alternate recipients; Compound v2 calls operate on msg.sender only")
-	}
-	if !common.IsHexAddress(req.Asset.Address) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "moonwell lend asset must resolve to an ERC20 address")
-	}
-	amount, ok := new(big.Int).SetString(strings.TrimSpace(req.AmountBaseUnits), 10)
-	if !ok || amount.Sign() <= 0 {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "lend amount must be a positive integer in base units")
-	}
-	rpcURL, err := registry.ResolveRPCURL(req.RPCURL, req.Chain.EVMChainID)
+	senderAddr, recipientAddr, _, amount, rpcURL, tokenAddr, err := normalizeLendInputs(AaveLendRequest{
+		Verb:            req.Verb,
+		Chain:           req.Chain,
+		Asset:           req.Asset,
+		AmountBaseUnits: req.AmountBaseUnits,
+		Sender:          req.Sender,
+		Recipient:       req.Recipient,
+		Simulate:        req.Simulate,
+		RPCURL:          req.RPCURL,
+	})
 	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "resolve rpc url", err)
+		return execution.Action{}, err
+	}
+	if senderAddr != recipientAddr {
+		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "moonwell does not support alternate recipients; Compound v2 calls operate on msg.sender only")
 	}
 
 	client, err := ethclient.DialContext(ctx, rpcURL)
@@ -61,10 +51,6 @@ func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (exec
 		return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
 	}
 	defer client.Close()
-
-	senderAddr := common.HexToAddress(sender)
-	recipientAddr := common.HexToAddress(recipient)
-	tokenAddr := common.HexToAddress(req.Asset.Address)
 
 	// Resolve mToken address.
 	mTokenAddr, err := resolveMoonwellMToken(ctx, client, req.Chain, req.MTokenAddress, tokenAddr)
