@@ -3,9 +3,7 @@ package planner
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"math/big"
-	"net/http"
 	"strings"
 	"time"
 
@@ -51,36 +49,33 @@ type MorphoLendRequest struct {
 	MarketID        string
 }
 
-type morphoMarketByIDResponse struct {
-	Data struct {
-		Markets struct {
-			Items []struct {
-				UniqueKey string `json:"uniqueKey"`
-				IRM       string `json:"irmAddress"`
-				LLTV      string `json:"lltv"`
-				Morpho    struct {
-					Address string `json:"address"`
-				} `json:"morphoBlue"`
-				Oracle struct {
-					Address string `json:"address"`
-				} `json:"oracle"`
-				LoanAsset struct {
-					Address  string `json:"address"`
-					Symbol   string `json:"symbol"`
-					Decimals int    `json:"decimals"`
-					Chain    struct {
-						ID int64 `json:"id"`
-					} `json:"chain"`
-				} `json:"loanAsset"`
-				CollateralAsset *struct {
-					Address  string `json:"address"`
-					Symbol   string `json:"symbol"`
-					Decimals int    `json:"decimals"`
-				} `json:"collateralAsset"`
-			} `json:"items"`
-		} `json:"markets"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type morphoMarketByIDData struct {
+	Markets struct {
+		Items []struct {
+			UniqueKey string `json:"uniqueKey"`
+			IRM       string `json:"irmAddress"`
+			LLTV      string `json:"lltv"`
+			Morpho    struct {
+				Address string `json:"address"`
+			} `json:"morphoBlue"`
+			Oracle struct {
+				Address string `json:"address"`
+			} `json:"oracle"`
+			LoanAsset struct {
+				Address  string `json:"address"`
+				Symbol   string `json:"symbol"`
+				Decimals int    `json:"decimals"`
+				Chain    struct {
+					ID int64 `json:"id"`
+				} `json:"chain"`
+			} `json:"loanAsset"`
+			CollateralAsset *struct {
+				Address  string `json:"address"`
+				Symbol   string `json:"symbol"`
+				Decimals int    `json:"decimals"`
+			} `json:"collateralAsset"`
+		} `json:"items"`
+	} `json:"markets"`
 }
 
 type morphoMarketParamsABI struct {
@@ -280,29 +275,18 @@ func fetchMorphoMarketByID(ctx context.Context, chainID int64, marketID string) 
 		} `json:"collateralAsset"`
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"query": morphoMarketByIDQuery,
-		"variables": map[string]any{
-			"chain": chainID,
-			"key":   marketID,
-		},
-	})
-	if err != nil {
-		return market, clierr.Wrap(clierr.CodeInternal, "marshal morpho market lookup query", err)
-	}
-
 	client := httpx.New(10*time.Second, 0)
-	var resp morphoMarketByIDResponse
-	if _, err := httpx.DoBodyJSON(ctx, client, http.MethodPost, morphoGraphQLEndpoint, body, nil, &resp); err != nil {
+	var data morphoMarketByIDData
+	if err := providers.PostGraphQL(ctx, client, morphoGraphQLEndpoint, morphoMarketByIDQuery, map[string]any{
+		"chain": chainID,
+		"key":   marketID,
+	}, &data, "morpho"); err != nil {
 		return market, err
 	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
-		return market, err
-	}
-	if len(resp.Data.Markets.Items) == 0 {
+	if len(data.Markets.Items) == 0 {
 		return market, clierr.New(clierr.CodeUsage, "morpho market-id not found for selected chain")
 	}
-	return resp.Data.Markets.Items[0], nil
+	return data.Markets.Items[0], nil
 }
 
 var morphoBlueABI = mustPlannerABI(registry.MorphoBlueABI)

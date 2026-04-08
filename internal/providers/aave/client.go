@@ -2,9 +2,7 @@ package aave
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-	"net/http"
 	"sort"
 	"strings"
 	"time"
@@ -95,40 +93,28 @@ const supplyAPYHistoryQuery = `query SupplyAPYHistory($request: SupplyAPYHistory
   }
 }`
 
-type marketsResponse struct {
-	Data struct {
-		Markets []aaveMarket `json:"markets"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type marketsData struct {
+	Markets []aaveMarket `json:"markets"`
 }
 
-type marketAddressesResponse struct {
-	Data struct {
-		Markets []struct {
-			Address string `json:"address"`
-		} `json:"markets"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type marketAddressesData struct {
+	Markets []struct {
+		Address string `json:"address"`
+	} `json:"markets"`
 }
 
-type positionsResponse struct {
-	Data struct {
-		UserSupplies []aaveUserSupply `json:"userSupplies"`
-		UserBorrows  []aaveUserBorrow `json:"userBorrows"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type positionsData struct {
+	UserSupplies []aaveUserSupply `json:"userSupplies"`
+	UserBorrows  []aaveUserBorrow `json:"userBorrows"`
 }
 
-type supplyAPYHistoryResponse struct {
-	Data struct {
-		SupplyAPYHistory []struct {
-			Date    string `json:"date"`
-			AvgRate struct {
-				Value string `json:"value"`
-			} `json:"avgRate"`
-		} `json:"supplyAPYHistory"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type supplyAPYHistoryData struct {
+	SupplyAPYHistory []struct {
+		Date    string `json:"date"`
+		AvgRate struct {
+			Value string `json:"value"`
+		} `json:"avgRate"`
+	} `json:"supplyAPYHistory"`
 }
 
 type aaveMarket struct {
@@ -338,35 +324,24 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		})
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"query": positionsQuery,
-		"variables": map[string]any{
-			"suppliesRequest": map[string]any{
-				"markets":         markets,
-				"user":            account,
-				"collateralsOnly": false,
-				"orderBy": map[string]any{
-					"balance": "DESC",
-				},
-			},
-			"borrowsRequest": map[string]any{
-				"markets": markets,
-				"user":    account,
-				"orderBy": map[string]any{
-					"debt": "DESC",
-				},
+	var data positionsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, positionsQuery, map[string]any{
+		"suppliesRequest": map[string]any{
+			"markets":         markets,
+			"user":            account,
+			"collateralsOnly": false,
+			"orderBy": map[string]any{
+				"balance": "DESC",
 			},
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave positions query", err)
-	}
-
-	var resp positionsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
-		return nil, err
-	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
+		"borrowsRequest": map[string]any{
+			"markets": markets,
+			"user":    account,
+			"orderBy": map[string]any{
+				"debt": "DESC",
+			},
+		},
+	}, &data, "aave"); err != nil {
 		return nil, err
 	}
 
@@ -374,8 +349,8 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if filterType == "" {
 		filterType = providers.LendPositionTypeAll
 	}
-	out := make([]model.LendPosition, 0, len(resp.Data.UserSupplies)+len(resp.Data.UserBorrows))
-	for _, supply := range resp.Data.UserSupplies {
+	out := make([]model.LendPosition, 0, len(data.UserSupplies)+len(data.UserBorrows))
+	for _, supply := range data.UserSupplies {
 		positionType := providers.LendPositionTypeSupply
 		if supply.IsCollateral {
 			positionType = providers.LendPositionTypeCollateral
@@ -409,7 +384,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		})
 	}
 
-	for _, borrow := range resp.Data.UserBorrows {
+	for _, borrow := range data.UserBorrows {
 		if !providers.MatchesPositionType(filterType, providers.LendPositionTypeBorrow) {
 			continue
 		}
@@ -553,31 +528,20 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 		return nil, err
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"query": supplyAPYHistoryQuery,
-		"variables": map[string]any{
-			"request": map[string]any{
-				"market":          marketAddress,
-				"underlyingToken": underlyingAddress,
-				"window":          window,
-				"chainId":         chain.EVMChainID,
-			},
+	var data supplyAPYHistoryData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, supplyAPYHistoryQuery, map[string]any{
+		"request": map[string]any{
+			"market":          marketAddress,
+			"underlyingToken": underlyingAddress,
+			"window":          window,
+			"chainId":         chain.EVMChainID,
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave history query", err)
-	}
-
-	var resp supplyAPYHistoryResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
-		return nil, err
-	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
+	}, &data, "aave"); err != nil {
 		return nil, err
 	}
 
-	points := make([]model.YieldHistoryPoint, 0, len(resp.Data.SupplyAPYHistory))
-	for _, sample := range resp.Data.SupplyAPYHistory {
+	points := make([]model.YieldHistoryPoint, 0, len(data.SupplyAPYHistory))
+	for _, sample := range data.SupplyAPYHistory {
 		ts, ok := providers.ParseAPITime(sample.Date)
 		if !ok {
 			continue
@@ -624,59 +588,37 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket
 	if !chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": marketsQuery,
-		"variables": map[string]any{
-			"request": map[string]any{
-				"chainIds": []int64{chain.EVMChainID},
-			},
+	var data marketsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, marketsQuery, map[string]any{
+		"request": map[string]any{
+			"chainIds": []int64{chain.EVMChainID},
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave query", err)
-	}
-
-	var resp marketsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+	}, &data, "aave"); err != nil {
 		return nil, err
 	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
-		return nil, err
-	}
-	if len(resp.Data.Markets) == 0 {
+	if len(data.Markets) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave has no market for requested chain")
 	}
-	return resp.Data.Markets, nil
+	return data.Markets, nil
 }
 
 func (c *Client) fetchMarketAddresses(ctx context.Context, chain id.Chain) ([]string, error) {
 	if !chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": marketAddressesQuery,
-		"variables": map[string]any{
-			"request": map[string]any{
-				"chainIds": []int64{chain.EVMChainID},
-			},
+	var data marketAddressesData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, marketAddressesQuery, map[string]any{
+		"request": map[string]any{
+			"chainIds": []int64{chain.EVMChainID},
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal aave market-address query", err)
-	}
-
-	var resp marketAddressesResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+	}, &data, "aave"); err != nil {
 		return nil, err
 	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
-		return nil, err
-	}
-	if len(resp.Data.Markets) == 0 {
+	if len(data.Markets) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave has no market for requested chain")
 	}
-	out := make([]string, 0, len(resp.Data.Markets))
-	for _, market := range resp.Data.Markets {
+	out := make([]string, 0, len(data.Markets))
+	for _, market := range data.Markets {
 		address := providers.NormalizeEVMAddress(market.Address)
 		if address != "" {
 			out = append(out, address)

@@ -1,10 +1,13 @@
 package providers
 
 import (
+	"context"
 	"crypto/sha1"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"math"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -13,6 +16,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
+	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
@@ -311,6 +315,34 @@ type GraphQLError struct {
 func CheckGraphQLErrors(errs []GraphQLError, provider string) error {
 	if len(errs) > 0 {
 		return clierr.New(clierr.CodeUnavailable, fmt.Sprintf("%s graphql error: %s", provider, errs[0].Message))
+	}
+	return nil
+}
+
+// PostGraphQL executes a GraphQL query against the given endpoint, unmarshals the "data"
+// portion of the response into result, and returns an error if the response contains GraphQL errors.
+// Use this for standard GraphQL calls; for calls that need custom error handling (e.g. morpho
+// no-results fallback), use the manual marshal/DoBodyJSON/CheckGraphQLErrors approach.
+func PostGraphQL(ctx context.Context, client *httpx.Client, endpoint string, query string, variables map[string]any, result any, provider string) error {
+	body, err := json.Marshal(map[string]any{
+		"query":     query,
+		"variables": variables,
+	})
+	if err != nil {
+		return clierr.Wrap(clierr.CodeInternal, "marshal "+provider+" graphql query", err)
+	}
+	var raw struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []GraphQLError  `json:"errors"`
+	}
+	if _, err := httpx.DoBodyJSON(ctx, client, http.MethodPost, endpoint, body, nil, &raw); err != nil {
+		return err
+	}
+	if err := CheckGraphQLErrors(raw.Errors, provider); err != nil {
+		return err
+	}
+	if result != nil {
+		return json.Unmarshal(raw.Data, result)
 	}
 	return nil
 }

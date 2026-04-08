@@ -188,49 +188,34 @@ const (
 	yieldVaultMaxPages = 20
 )
 
-type marketsResponse struct {
-	Data struct {
-		Markets struct {
-			Items []morphoMarket `json:"items"`
-		} `json:"markets"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type marketsData struct {
+	Markets struct {
+		Items []morphoMarket `json:"items"`
+	} `json:"markets"`
 }
 
-type positionsResponse struct {
-	Data struct {
-		MarketPositions struct {
-			Items []morphoMarketPosition `json:"items"`
-		} `json:"marketPositions"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type positionsData struct {
+	MarketPositions struct {
+		Items []morphoMarketPosition `json:"items"`
+	} `json:"marketPositions"`
 }
 
-type vaultPositionsResponse struct {
-	Data struct {
-		VaultPositions struct {
-			Items []morphoVaultPosition `json:"items"`
-		} `json:"vaultPositions"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type vaultPositionsData struct {
+	VaultPositions struct {
+		Items []morphoVaultPosition `json:"items"`
+	} `json:"vaultPositions"`
 }
 
-type vaultsResponse struct {
-	Data struct {
-		Vaults struct {
-			Items []morphoVault `json:"items"`
-		} `json:"vaults"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type vaultsData struct {
+	Vaults struct {
+		Items []morphoVault `json:"items"`
+	} `json:"vaults"`
 }
 
-type vaultV2sResponse struct {
-	Data struct {
-		VaultV2s struct {
-			Items []morphoVaultV2 `json:"items"`
-		} `json:"vaultV2s"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type vaultV2sData struct {
+	VaultV2s struct {
+		Items []morphoVaultV2 `json:"items"`
+	} `json:"vaultV2s"`
 }
 
 type vaultHistoryResponse struct {
@@ -246,17 +231,14 @@ type vaultHistoryResponse struct {
 	Errors []providers.GraphQLError `json:"errors"`
 }
 
-type vaultV2HistoryResponse struct {
-	Data struct {
-		VaultV2ByAddress *struct {
-			Address         string `json:"address"`
-			HistoricalState *struct {
-				AvgNetAPY []morphoFloatDataPoint `json:"avgNetApy"`
-				TVLUSD    []morphoFloatDataPoint `json:"totalAssetsUsd"`
-			} `json:"historicalState"`
-		} `json:"vaultV2ByAddress"`
-	} `json:"data"`
-	Errors []providers.GraphQLError `json:"errors"`
+type vaultV2HistoryData struct {
+	VaultV2ByAddress *struct {
+		Address         string `json:"address"`
+		HistoricalState *struct {
+			AvgNetAPY []morphoFloatDataPoint `json:"avgNetApy"`
+			TVLUSD    []morphoFloatDataPoint `json:"totalAssetsUsd"`
+		} `json:"historicalState"`
+	} `json:"vaultV2ByAddress"`
 }
 
 type morphoFloatDataPoint struct {
@@ -522,33 +504,22 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	} else if first < 50 {
 		first = 50
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": positionsQuery,
-		"variables": map[string]any{
-			"first":          first,
-			"orderBy":        "SupplyShares",
-			"orderDirection": "Desc",
-			"where": map[string]any{
-				"userAddress_in": []string{account},
-				"chainId_in":     []int64{req.Chain.EVMChainID},
-				"marketListed":   true,
-			},
+	var data positionsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, positionsQuery, map[string]any{
+		"first":          first,
+		"orderBy":        "SupplyShares",
+		"orderDirection": "Desc",
+		"where": map[string]any{
+			"userAddress_in": []string{account},
+			"chainId_in":     []int64{req.Chain.EVMChainID},
+			"marketListed":   true,
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho positions query", err)
-	}
-
-	var resp positionsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
-		return nil, err
-	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+	}, &data, "morpho"); err != nil {
 		return nil, err
 	}
 
-	out := make([]model.LendPosition, 0, len(resp.Data.MarketPositions.Items)*2)
-	for _, item := range resp.Data.MarketPositions.Items {
+	out := make([]model.LendPosition, 0, len(data.MarketPositions.Items)*2)
+	for _, item := range data.MarketPositions.Items {
 		if item.State == nil {
 			continue
 		}
@@ -651,34 +622,23 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 	} else if first < 50 {
 		first = 50
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": vaultPositionsQuery,
-		"variables": map[string]any{
-			"first":          first,
-			"orderBy":        "Shares",
-			"orderDirection": "Desc",
-			"where": map[string]any{
-				"userAddress_in": []string{account},
-				"chainId_in":     []int64{req.Chain.EVMChainID},
-				"vaultListed":    true,
-				"shares_gte":     "1",
-			},
+	var data vaultPositionsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultPositionsQuery, map[string]any{
+		"first":          first,
+		"orderBy":        "Shares",
+		"orderDirection": "Desc",
+		"where": map[string]any{
+			"userAddress_in": []string{account},
+			"chainId_in":     []int64{req.Chain.EVMChainID},
+			"vaultListed":    true,
+			"shares_gte":     "1",
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault positions query", err)
-	}
-
-	var resp vaultPositionsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
-		return nil, err
-	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+	}, &data, "morpho"); err != nil {
 		return nil, err
 	}
 
-	out := make([]model.YieldPosition, 0, len(resp.Data.VaultPositions.Items))
-	for _, item := range resp.Data.VaultPositions.Items {
+	out := make([]model.YieldPosition, 0, len(data.VaultPositions.Items))
+	for _, item := range data.VaultPositions.Items {
 		if item.State == nil || item.Vault.Asset == nil {
 			continue
 		}
@@ -951,30 +911,19 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, asset id.Asse
 	if addr := strings.TrimSpace(asset.Address); addr != "" {
 		where["loanAssetAddress_in"] = []string{strings.ToLower(addr)}
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": marketsQuery,
-		"variables": map[string]any{
-			"first":          100,
-			"orderBy":        "SupplyAssetsUsd",
-			"orderDirection": "Desc",
-			"where":          where,
-		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho query", err)
-	}
-
-	var resp marketsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+	var data marketsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, marketsQuery, map[string]any{
+		"first":          100,
+		"orderBy":        "SupplyAssetsUsd",
+		"orderDirection": "Desc",
+		"where":          where,
+	}, &data, "morpho"); err != nil {
 		return nil, err
 	}
-	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
-		return nil, err
-	}
-	if len(resp.Data.Markets.Items) == 0 {
+	if len(data.Markets.Items) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho has no market for requested chain/asset")
 	}
-	return resp.Data.Markets.Items, nil
+	return data.Markets.Items, nil
 }
 
 func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset) ([]morphoVault, error) {
@@ -990,27 +939,16 @@ func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset
 
 	out := make([]morphoVault, 0, yieldVaultPageSize)
 	for page := 0; page < yieldVaultMaxPages; page++ {
-		body, err := json.Marshal(map[string]any{
-			"query": vaultsYieldQuery,
-			"variables": map[string]any{
-				"first": yieldVaultPageSize,
-				"skip":  page * yieldVaultPageSize,
-				"where": where,
-			},
-		})
-		if err != nil {
-			return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault query", err)
-		}
-
-		var resp vaultsResponse
-		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		var data vaultsData
+		if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultsYieldQuery, map[string]any{
+			"first": yieldVaultPageSize,
+			"skip":  page * yieldVaultPageSize,
+			"where": where,
+		}, &data, "morpho"); err != nil {
 			return nil, err
 		}
-		if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
-			return nil, err
-		}
-		out = append(out, resp.Data.Vaults.Items...)
-		if len(resp.Data.Vaults.Items) < yieldVaultPageSize {
+		out = append(out, data.Vaults.Items...)
+		if len(data.Vaults.Items) < yieldVaultPageSize {
 			break
 		}
 	}
@@ -1026,27 +964,16 @@ func (c *Client) fetchVaultV2s(ctx context.Context, chain id.Chain) ([]morphoVau
 
 	out := make([]morphoVaultV2, 0, yieldVaultPageSize)
 	for page := 0; page < yieldVaultMaxPages; page++ {
-		body, err := json.Marshal(map[string]any{
-			"query": vaultV2sYieldQuery,
-			"variables": map[string]any{
-				"first": yieldVaultPageSize,
-				"skip":  page * yieldVaultPageSize,
-				"where": where,
-			},
-		})
-		if err != nil {
-			return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault-v2 query", err)
-		}
-
-		var resp vaultV2sResponse
-		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		var data vaultV2sData
+		if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultV2sYieldQuery, map[string]any{
+			"first": yieldVaultPageSize,
+			"skip":  page * yieldVaultPageSize,
+			"where": where,
+		}, &data, "morpho"); err != nil {
 			return nil, err
 		}
-		if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
-			return nil, err
-		}
-		out = append(out, resp.Data.VaultV2s.Items...)
-		if len(resp.Data.VaultV2s.Items) < yieldVaultPageSize {
+		out = append(out, data.VaultV2s.Items...)
+		if len(data.VaultV2s.Items) < yieldVaultPageSize {
 			break
 		}
 	}
@@ -1087,31 +1014,20 @@ func (c *Client) fetchVaultHistory(
 		return resp.Data.VaultByAddress.HistoricalState.NetAPY, resp.Data.VaultByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
 	}
 
-	body, err = json.Marshal(map[string]any{
-		"query": vaultV2HistoryQuery,
-		"variables": map[string]any{
-			"address":  address,
-			"chainId":  chainID,
-			"start":    start,
-			"end":      end,
-			"interval": interval,
-		},
-	})
-	if err != nil {
-		return nil, nil, "", clierr.Wrap(clierr.CodeInternal, "marshal morpho vault-v2 history query", err)
-	}
-
-	var respV2 vaultV2HistoryResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &respV2); err != nil {
+	var dataV2 vaultV2HistoryData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultV2HistoryQuery, map[string]any{
+		"address":  address,
+		"chainId":  chainID,
+		"start":    start,
+		"end":      end,
+		"interval": interval,
+	}, &dataV2, "morpho"); err != nil {
 		return nil, nil, "", err
 	}
-	if err := providers.CheckGraphQLErrors(respV2.Errors, "morpho"); err != nil {
-		return nil, nil, "", err
-	}
-	if respV2.Data.VaultV2ByAddress == nil || respV2.Data.VaultV2ByAddress.HistoricalState == nil {
+	if dataV2.VaultV2ByAddress == nil || dataV2.VaultV2ByAddress.HistoricalState == nil {
 		return nil, nil, "", clierr.New(clierr.CodeUnavailable, "morpho returned no vault history for requested opportunity")
 	}
-	return respV2.Data.VaultV2ByAddress.HistoricalState.AvgNetAPY, respV2.Data.VaultV2ByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
+	return dataV2.VaultV2ByAddress.HistoricalState.AvgNetAPY, dataV2.VaultV2ByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
 }
 
 
