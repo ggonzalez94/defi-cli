@@ -5,7 +5,6 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
-	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/spf13/cobra"
 )
@@ -97,44 +96,18 @@ func (s *runtimeState) newTransferCommand() *cobra.Command {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit transferSubmitArgs
+	var submit executionSubmitArgs
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing ERC-20 transfer action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, executionSubmitArgs{
-				ActionID: submit.ActionID, Simulate: submit.Simulate,
-				Signer: submit.Signer, KeySource: submit.KeySource, PrivateKey: submit.PrivateKey,
-				FromAddress: submit.FromAddress, PollInterval: submit.PollInterval, StepTimeout: submit.StepTimeout,
-				GasMultiplier: submit.GasMultiplier, MaxFeeGwei: submit.MaxFeeGwei, MaxPriorityFeeGwei: submit.MaxPriorityFeeGwei,
-				FeeToken: submit.FeeToken,
-			}, "transfer", "action is not a transfer intent")
+			return s.runSubmitAction(cmd, submit, "transfer", "action is not a transfer intent")
 		},
 	}
-	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by transfer plan")
-	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
-	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
+	registerSubmitFlags(submitCmd, &submit, "transfer")
 	annotateStructuredSubmitCommand(submitCmd, transferSubmitArgs{})
 
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get transfer action status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runStatusAction(cmd, statusActionID, "transfer", "action is not a transfer intent")
-		},
-	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by transfer plan")
-	annotateExecutionStatusCommand(statusCmd)
+	statusCmd := s.newStatusCommand("transfer", "transfer", "action is not a transfer intent")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(submitCmd)

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
@@ -158,6 +159,38 @@ type executionSubmitArgs struct {
 	AllowMaxApproval   bool
 	UnsafeProviderTx   bool
 	FeeToken           string
+}
+
+// registerSubmitFlags registers the flags shared by all execution submit commands.
+func registerSubmitFlags(cmd *cobra.Command, args *executionSubmitArgs, commandName string) {
+	cmd.Flags().StringVar(&args.ActionID, "action-id", "", fmt.Sprintf("Action identifier returned by %s plan", commandName))
+	cmd.Flags().BoolVar(&args.Simulate, "simulate", true, "Run preflight simulation before submission")
+	cmd.Flags().StringVar(&args.Signer, "signer", "local", "Signer backend (local|tempo)")
+	cmd.Flags().StringVar(&args.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	cmd.Flags().StringVar(&args.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	cmd.Flags().StringVar(&args.FromAddress, "from-address", "", "Expected sender EOA address")
+	cmd.Flags().StringVar(&args.PollInterval, "poll-interval", "2s", "Receipt polling interval")
+	cmd.Flags().StringVar(&args.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
+	cmd.Flags().Float64Var(&args.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
+	cmd.Flags().StringVar(&args.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
+	cmd.Flags().StringVar(&args.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	cmd.Flags().BoolVar(&args.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	cmd.Flags().BoolVar(&args.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	cmd.Flags().StringVar(&args.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
+}
+
+func (s *runtimeState) newStatusCommand(commandName, expectedIntent, intentMismatchMsg string) *cobra.Command {
+	var actionID string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: fmt.Sprintf("Get %s action status", commandName),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return s.runStatusAction(cmd, actionID, expectedIntent, intentMismatchMsg)
+		},
+	}
+	cmd.Flags().StringVar(&actionID, "action-id", "", fmt.Sprintf("Action identifier returned by %s plan", commandName))
+	annotateExecutionStatusCommand(cmd)
+	return cmd
 }
 
 func (s *runtimeState) runSubmitAction(cmd *cobra.Command, args executionSubmitArgs, expectedIntent, intentMismatchMsg string) error {

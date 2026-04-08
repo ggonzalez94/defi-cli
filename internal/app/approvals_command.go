@@ -5,7 +5,6 @@ import (
 
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
-	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/spf13/cobra"
 )
@@ -103,46 +102,18 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit approvalSubmitArgs
+	var submit executionSubmitArgs
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing approval action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, executionSubmitArgs{
-				ActionID: submit.ActionID, Simulate: submit.Simulate,
-				Signer: submit.Signer, KeySource: submit.KeySource, PrivateKey: submit.PrivateKey,
-				FromAddress: submit.FromAddress, PollInterval: submit.PollInterval, StepTimeout: submit.StepTimeout,
-				GasMultiplier: submit.GasMultiplier, MaxFeeGwei: submit.MaxFeeGwei, MaxPriorityFeeGwei: submit.MaxPriorityFeeGwei,
-				AllowMaxApproval: submit.AllowMaxApproval, UnsafeProviderTx: submit.UnsafeProviderTx, FeeToken: submit.FeeToken,
-			}, "approve", "action is not an approval intent")
+			return s.runSubmitAction(cmd, submit, "approve", "action is not an approval intent")
 		},
 	}
-	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by approvals plan")
-	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
-	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
+	registerSubmitFlags(submitCmd, &submit, "approvals")
 	annotateStructuredSubmitCommand(submitCmd, approvalSubmitArgs{})
 
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get approval action status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runStatusAction(cmd, statusActionID, "approve", "action is not an approval intent")
-		},
-	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by approvals plan")
-	annotateExecutionStatusCommand(statusCmd)
+	statusCmd := s.newStatusCommand("approval", "approve", "action is not an approval intent")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(submitCmd)

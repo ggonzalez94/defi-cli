@@ -6,7 +6,6 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
-	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/spf13/cobra"
@@ -135,46 +134,18 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit lendSubmitArgs
+	var submit executionSubmitArgs
 	submitCmd := &cobra.Command{
 		Use:   "submit",
 		Short: "Execute an existing lend action",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, executionSubmitArgs{
-				ActionID: submit.ActionID, Simulate: submit.Simulate,
-				Signer: submit.Signer, KeySource: submit.KeySource, PrivateKey: submit.PrivateKey,
-				FromAddress: submit.FromAddress, PollInterval: submit.PollInterval, StepTimeout: submit.StepTimeout,
-				GasMultiplier: submit.GasMultiplier, MaxFeeGwei: submit.MaxFeeGwei, MaxPriorityFeeGwei: submit.MaxPriorityFeeGwei,
-				AllowMaxApproval: submit.AllowMaxApproval, UnsafeProviderTx: submit.UnsafeProviderTx, FeeToken: submit.FeeToken,
-			}, expectedIntent, "action intent does not match lend verb")
+			return s.runSubmitAction(cmd, submit, expectedIntent, "action intent does not match lend verb")
 		},
 	}
-	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by lend plan")
-	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
-	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
+	registerSubmitFlags(submitCmd, &submit, "lend")
 	annotateStructuredSubmitCommand(submitCmd, lendSubmitArgs{})
 
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get lend action status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runStatusAction(cmd, statusActionID, expectedIntent, "action intent does not match lend verb")
-		},
-	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by lend plan")
-	annotateExecutionStatusCommand(statusCmd)
+	statusCmd := s.newStatusCommand("lend", expectedIntent, "action intent does not match lend verb")
 
 	root.AddCommand(planCmd)
 	root.AddCommand(submitCmd)
