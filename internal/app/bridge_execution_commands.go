@@ -6,8 +6,6 @@ import (
 	"time"
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
-	"github.com/ggonzalez94/defi-cli/internal/execution"
-	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
@@ -39,11 +37,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		if err != nil {
 			return providers.BridgeQuoteRequest{}, clierr.Wrap(clierr.CodeUsage, "resolve destination asset", err)
 		}
-		decimals := fromAsset.Decimals
-		if decimals <= 0 {
-			decimals = 18
-		}
-		base, decimal, err := id.NormalizeAmount(amountBase, amountDecimal, decimals)
+		base, decimal, err := normalizeAssetAmount(amountBase, amountDecimal, fromAsset.Decimals)
 		if err != nil {
 			return providers.BridgeQuoteRequest{}, err
 		}
@@ -73,22 +67,6 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		SlippageBps      int64  `json:"slippage_bps" flag:"slippage-bps"`
 		Simulate         bool   `json:"simulate" flag:"simulate"`
 		RPCURL           string `json:"rpc_url" flag:"rpc-url" format:"url"`
-	}
-	type bridgeSubmitArgs struct {
-		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
-		Simulate           bool    `json:"simulate" flag:"simulate"`
-		Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
-		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
-		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
-		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
-		PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
-		StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
-		GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
-		MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
-		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
-		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
-		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
-		FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
 	}
 	var plan bridgePlanArgs
 	planCmd := &cobra.Command{
@@ -160,102 +138,6 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit bridgeSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing bridge action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(submit.ActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "bridge" {
-				return clierr.New(clierr.CodeUsage, "action is not a bridge intent")
-			}
-			if action.Status == execution.ActionStatusCompleted {
-				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
-			}
-			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
-				Signer:      submit.Signer,
-				KeySource:   submit.KeySource,
-				PrivateKey:  submit.PrivateKey,
-				FromAddress: submit.FromAddress,
-			})
-			if err != nil {
-				return err
-			}
-			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
-				return err
-			}
-			execOpts, err := parseExecuteOptions(
-				submit.Simulate,
-				submit.PollInterval,
-				submit.StepTimeout,
-				submit.GasMultiplier,
-				submit.MaxFeeGwei,
-				submit.MaxPriorityFeeGwei,
-				submit.AllowMaxApproval,
-				submit.UnsafeProviderTx,
-				submit.FeeToken,
-			)
-			if err != nil {
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
-				return err
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
-		},
-	}
-	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by bridge plan")
-	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
-	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Timeout per bridge wait stage (receipt or settlement polling)")
-	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount (needed for some provider routes, e.g. Across max approvals)")
-	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
-	annotateStructuredSubmitCommand(submitCmd, bridgeSubmitArgs{})
-
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get bridge action status",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			actionID, err := resolveActionID(statusActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "bridge" {
-				return clierr.New(clierr.CodeUsage, "action is not a bridge intent")
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
-		},
-	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by bridge plan")
-	annotateExecutionStatusCommand(statusCmd)
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "bridge", "bridge", "action is not a bridge intent")
 }

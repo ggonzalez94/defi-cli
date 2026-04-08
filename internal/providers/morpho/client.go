@@ -2,8 +2,6 @@ package morpho
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -190,59 +188,34 @@ const (
 	yieldVaultMaxPages = 20
 )
 
-type marketsResponse struct {
-	Data struct {
-		Markets struct {
-			Items []morphoMarket `json:"items"`
-		} `json:"markets"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type marketsData struct {
+	Markets struct {
+		Items []morphoMarket `json:"items"`
+	} `json:"markets"`
 }
 
-type positionsResponse struct {
-	Data struct {
-		MarketPositions struct {
-			Items []morphoMarketPosition `json:"items"`
-		} `json:"marketPositions"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type positionsData struct {
+	MarketPositions struct {
+		Items []morphoMarketPosition `json:"items"`
+	} `json:"marketPositions"`
 }
 
-type vaultPositionsResponse struct {
-	Data struct {
-		VaultPositions struct {
-			Items []morphoVaultPosition `json:"items"`
-		} `json:"vaultPositions"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type vaultPositionsData struct {
+	VaultPositions struct {
+		Items []morphoVaultPosition `json:"items"`
+	} `json:"vaultPositions"`
 }
 
-type vaultsResponse struct {
-	Data struct {
-		Vaults struct {
-			Items []morphoVault `json:"items"`
-		} `json:"vaults"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type vaultsData struct {
+	Vaults struct {
+		Items []morphoVault `json:"items"`
+	} `json:"vaults"`
 }
 
-type vaultV2sResponse struct {
-	Data struct {
-		VaultV2s struct {
-			Items []morphoVaultV2 `json:"items"`
-		} `json:"vaultV2s"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type vaultV2sData struct {
+	VaultV2s struct {
+		Items []morphoVaultV2 `json:"items"`
+	} `json:"vaultV2s"`
 }
 
 type vaultHistoryResponse struct {
@@ -255,24 +228,17 @@ type vaultHistoryResponse struct {
 			} `json:"historicalState"`
 		} `json:"vaultByAddress"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
-type vaultV2HistoryResponse struct {
-	Data struct {
-		VaultV2ByAddress *struct {
-			Address         string `json:"address"`
-			HistoricalState *struct {
-				AvgNetAPY []morphoFloatDataPoint `json:"avgNetApy"`
-				TVLUSD    []morphoFloatDataPoint `json:"totalAssetsUsd"`
-			} `json:"historicalState"`
-		} `json:"vaultV2ByAddress"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type vaultV2HistoryData struct {
+	VaultV2ByAddress *struct {
+		Address         string `json:"address"`
+		HistoricalState *struct {
+			AvgNetAPY []morphoFloatDataPoint `json:"avgNetApy"`
+			TVLUSD    []morphoFloatDataPoint `json:"totalAssetsUsd"`
+		} `json:"historicalState"`
+	} `json:"vaultV2ByAddress"`
 }
 
 type morphoFloatDataPoint struct {
@@ -447,8 +413,8 @@ type collateralShare struct {
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(provider, "morpho") {
-		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only provider=morpho")
+	if err := providers.ValidateProvider(provider, "morpho"); err != nil {
+		return nil, err
 	}
 	markets, err := c.fetchMarkets(ctx, chain, asset)
 	if err != nil {
@@ -467,7 +433,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 			Protocol:             "morpho",
 			Provider:             "morpho",
 			ChainID:              chain.CAIP2,
-			AssetID:              canonicalAssetID(asset, m.LoanAsset.Address),
+			AssetID:              providers.CanonicalAssetID(asset, m.LoanAsset.Address),
 			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
 			ProviderNativeIDKind: model.NativeIDKindMarketID,
 			SupplyAPY:            supplyAPY,
@@ -479,12 +445,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TVLUSD != out[j].TVLUSD {
-			return out[i].TVLUSD > out[j].TVLUSD
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendMarkets(out)
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "no morpho lending market for requested chain/asset")
 	}
@@ -492,8 +453,8 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 }
 
 func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(provider, "morpho") {
-		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only provider=morpho")
+	if err := providers.ValidateProvider(provider, "morpho"); err != nil {
+		return nil, err
 	}
 	markets, err := c.fetchMarkets(ctx, chain, asset)
 	if err != nil {
@@ -506,7 +467,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 			Protocol:             "morpho",
 			Provider:             "morpho",
 			ChainID:              chain.CAIP2,
-			AssetID:              canonicalAssetID(asset, m.LoanAsset.Address),
+			AssetID:              providers.CanonicalAssetID(asset, m.LoanAsset.Address),
 			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
 			ProviderNativeIDKind: model.NativeIDKindMarketID,
 			SupplyAPY:            m.State.SupplyAPY * 100,
@@ -517,12 +478,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SupplyAPY != out[j].SupplyAPY {
-			return out[i].SupplyAPY > out[j].SupplyAPY
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendRates(out)
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "no morpho lending rates for requested chain/asset")
 	}
@@ -533,7 +489,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "morpho positions requires a valid EVM account address")
 	}
@@ -548,41 +504,30 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	} else if first < 50 {
 		first = 50
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": positionsQuery,
-		"variables": map[string]any{
-			"first":          first,
-			"orderBy":        "SupplyShares",
-			"orderDirection": "Desc",
-			"where": map[string]any{
-				"userAddress_in": []string{account},
-				"chainId_in":     []int64{req.Chain.EVMChainID},
-				"marketListed":   true,
-			},
+	var data positionsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, positionsQuery, map[string]any{
+		"first":          first,
+		"orderBy":        "SupplyShares",
+		"orderDirection": "Desc",
+		"where": map[string]any{
+			"userAddress_in": []string{account},
+			"chainId_in":     []int64{req.Chain.EVMChainID},
+			"marketListed":   true,
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho positions query", err)
-	}
-
-	var resp positionsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+	}, &data, "morpho"); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-	}
 
-	out := make([]model.LendPosition, 0, len(resp.Data.MarketPositions.Items)*2)
-	for _, item := range resp.Data.MarketPositions.Items {
+	out := make([]model.LendPosition, 0, len(data.MarketPositions.Items)*2)
+	for _, item := range data.MarketPositions.Items {
 		if item.State == nil {
 			continue
 		}
 
-		loanAssetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Market.LoanAsset.Address)
+		loanAssetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, item.Market.LoanAsset.Address)
 		if loanAssetID != "" {
-			if matchesPositionType(filterType, providers.LendPositionTypeSupply) &&
-				matchesPositionAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
+			if providers.MatchesPositionType(filterType, providers.LendPositionTypeSupply) &&
+				providers.MatchesAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
 				base := item.State.SupplyAssets.normalized()
 				if base != "0" {
 					supplyAPY := 0.0
@@ -598,7 +543,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 						AssetID:              loanAssetID,
 						ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
 						ProviderNativeIDKind: model.NativeIDKindMarketID,
-						Amount:               amountInfoFromBase(base, item.Market.LoanAsset.Decimals),
+						Amount:               providers.AmountInfoFromBase(base, item.Market.LoanAsset.Decimals),
 						AmountUSD:            item.State.SupplyAssetsUSD,
 						APY:                  supplyAPY,
 						SourceURL:            "https://app.morpho.org",
@@ -607,8 +552,8 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 				}
 			}
 
-			if matchesPositionType(filterType, providers.LendPositionTypeBorrow) &&
-				matchesPositionAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
+			if providers.MatchesPositionType(filterType, providers.LendPositionTypeBorrow) &&
+				providers.MatchesAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
 				base := item.State.BorrowAssets.normalized()
 				if base != "0" {
 					borrowAPY := 0.0
@@ -624,7 +569,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 						AssetID:              loanAssetID,
 						ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
 						ProviderNativeIDKind: model.NativeIDKindMarketID,
-						Amount:               amountInfoFromBase(base, item.Market.LoanAsset.Decimals),
+						Amount:               providers.AmountInfoFromBase(base, item.Market.LoanAsset.Decimals),
 						AmountUSD:            item.State.BorrowAssetsUSD,
 						APY:                  borrowAPY,
 						SourceURL:            "https://app.morpho.org",
@@ -635,10 +580,10 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 
 		if item.Market.CollateralAsset != nil &&
-			matchesPositionType(filterType, providers.LendPositionTypeCollateral) &&
-			matchesPositionAsset(item.Market.CollateralAsset.Address, item.Market.CollateralAsset.Symbol, req.Asset) {
+			providers.MatchesPositionType(filterType, providers.LendPositionTypeCollateral) &&
+			providers.MatchesAsset(item.Market.CollateralAsset.Address, item.Market.CollateralAsset.Symbol, req.Asset) {
 			base := item.State.Collateral.normalized()
-			collateralAssetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Market.CollateralAsset.Address)
+			collateralAssetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, item.Market.CollateralAsset.Address)
 			if base != "0" && collateralAssetID != "" {
 				out = append(out, model.LendPosition{
 					Protocol:             "morpho",
@@ -649,7 +594,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 					AssetID:              collateralAssetID,
 					ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
 					ProviderNativeIDKind: model.NativeIDKindMarketID,
-					Amount:               amountInfoFromBase(base, item.Market.CollateralAsset.Decimals),
+					Amount:               providers.AmountInfoFromBase(base, item.Market.CollateralAsset.Decimals),
 					AmountUSD:            item.State.CollateralUSD,
 					APY:                  0,
 					SourceURL:            "https://app.morpho.org",
@@ -659,18 +604,14 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 	}
 
-	sortLendPositions(out)
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	return providers.FinalizeLendPositions(out, req.Limit), nil
 }
 
 func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPositionsRequest) ([]model.YieldPosition, error) {
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "morpho positions requires a valid EVM account address")
 	}
@@ -681,38 +622,27 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 	} else if first < 50 {
 		first = 50
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": vaultPositionsQuery,
-		"variables": map[string]any{
-			"first":          first,
-			"orderBy":        "Shares",
-			"orderDirection": "Desc",
-			"where": map[string]any{
-				"userAddress_in": []string{account},
-				"chainId_in":     []int64{req.Chain.EVMChainID},
-				"vaultListed":    true,
-				"shares_gte":     "1",
-			},
+	var data vaultPositionsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultPositionsQuery, map[string]any{
+		"first":          first,
+		"orderBy":        "Shares",
+		"orderDirection": "Desc",
+		"where": map[string]any{
+			"userAddress_in": []string{account},
+			"chainId_in":     []int64{req.Chain.EVMChainID},
+			"vaultListed":    true,
+			"shares_gte":     "1",
 		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault positions query", err)
-	}
-
-	var resp vaultPositionsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+	}, &data, "morpho"); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-	}
 
-	out := make([]model.YieldPosition, 0, len(resp.Data.VaultPositions.Items))
-	for _, item := range resp.Data.VaultPositions.Items {
+	out := make([]model.YieldPosition, 0, len(data.VaultPositions.Items))
+	for _, item := range data.VaultPositions.Items {
 		if item.State == nil || item.Vault.Asset == nil {
 			continue
 		}
-		if !matchesPositionAsset(item.Vault.Asset.Address, item.Vault.Asset.Symbol, req.Asset) {
+		if !providers.MatchesAsset(item.Vault.Asset.Address, item.Vault.Asset.Symbol, req.Asset) {
 			continue
 		}
 
@@ -724,11 +654,11 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		if assetsBase == "0" {
 			continue
 		}
-		vaultAddress := normalizeEVMAddress(item.Vault.Address)
+		vaultAddress := providers.NormalizeEVMAddress(item.Vault.Address)
 		if vaultAddress == "" {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Vault.Asset.Address)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, item.Vault.Asset.Address)
 		if assetID == "" {
 			continue
 		}
@@ -742,12 +672,12 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 			ChainID:              req.Chain.CAIP2,
 			AccountAddress:       account,
 			PositionType:         "deposit",
-			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
+			OpportunityID:        providers.HashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
 			AssetID:              assetID,
 			ProviderNativeID:     vaultAddress,
 			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
-			Amount:               amountInfoFromBase(assetsBase, item.Vault.Asset.Decimals),
-			Shares:               ptrAmountInfo(amountInfoFromBase(sharesBase, 18)),
+			Amount:               providers.AmountInfoFromBase(assetsBase, item.Vault.Asset.Decimals),
+			Shares:               providers.PtrAmountInfo(providers.AmountInfoFromBase(sharesBase, 18)),
 			AmountUSD:            item.State.AssetsUSD,
 			APYTotal:             apyTotal,
 			SourceURL:            sourceURLForVault(vaultAddress),
@@ -755,11 +685,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		})
 	}
 
-	sortYieldPositions(out)
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	return providers.FinalizeYieldPositions(out, req.Limit), nil
 }
 
 func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequest) ([]model.YieldOpportunity, error) {
@@ -780,13 +706,13 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		}
 		backingAssets := backingAssetsFromShares(vault.BackingShares, req.Chain.CAIP2, vault.AssetAddress, vault.AssetSymbol, req.Asset.AssetID)
 		liq := vault.LiquidityUSD
-		assetID := canonicalAssetID(req.Asset, vault.AssetAddress)
-		vaultAddress := normalizeEVMAddress(vault.Address)
+		assetID := providers.CanonicalAssetID(req.Asset, vault.AssetAddress)
+		vaultAddress := providers.NormalizeEVMAddress(vault.Address)
 		if vaultAddress == "" {
 			continue
 		}
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
+			OpportunityID:        providers.HashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
 			Provider:             "morpho",
 			Protocol:             "morpho",
 			ChainID:              req.Chain.CAIP2,
@@ -807,14 +733,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		})
 	}
 
-	if len(out) == 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, "no morpho yield opportunities for requested chain/asset")
-	}
-	yieldutil.Sort(out, req.SortBy)
-	if req.Limit <= 0 || req.Limit > len(out) {
-		req.Limit = len(out)
-	}
-	return out[:req.Limit], nil
+	return providers.FinalizeYieldOpportunities(out, "morpho", req.SortBy, req.Limit)
 }
 
 func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
@@ -832,7 +751,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 	if !chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
 	}
-	vaultAddress := normalizeEVMAddress(req.Opportunity.ProviderNativeID)
+	vaultAddress := providers.NormalizeEVMAddress(req.Opportunity.ProviderNativeID)
 	if vaultAddress == "" {
 		return nil, clierr.New(clierr.CodeUsage, "morpho opportunity requires a vault address provider_native_id")
 	}
@@ -932,7 +851,7 @@ func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, 
 			assetAddress = vault.Asset.Address
 			assetSymbol = vault.Asset.Symbol
 		}
-		if !matchesVaultAsset(assetAddress, assetSymbol, asset) {
+		if !providers.MatchesAsset(assetAddress, assetSymbol, asset) {
 			continue
 		}
 		netAPY := 0.0
@@ -962,7 +881,7 @@ func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, 
 			assetAddress = vault.Asset.Address
 			assetSymbol = vault.Asset.Symbol
 		}
-		if !matchesVaultAsset(assetAddress, assetSymbol, asset) {
+		if !providers.MatchesAsset(assetAddress, assetSymbol, asset) {
 			continue
 		}
 		out = append(out, vaultYieldCandidate{
@@ -992,30 +911,19 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, asset id.Asse
 	if addr := strings.TrimSpace(asset.Address); addr != "" {
 		where["loanAssetAddress_in"] = []string{strings.ToLower(addr)}
 	}
-	body, err := json.Marshal(map[string]any{
-		"query": marketsQuery,
-		"variables": map[string]any{
-			"first":          100,
-			"orderBy":        "SupplyAssetsUsd",
-			"orderDirection": "Desc",
-			"where":          where,
-		},
-	})
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho query", err)
-	}
-
-	var resp marketsResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+	var data marketsData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, marketsQuery, map[string]any{
+		"first":          100,
+		"orderBy":        "SupplyAssetsUsd",
+		"orderDirection": "Desc",
+		"where":          where,
+	}, &data, "morpho"); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-	}
-	if len(resp.Data.Markets.Items) == 0 {
+	if len(data.Markets.Items) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho has no market for requested chain/asset")
 	}
-	return resp.Data.Markets.Items, nil
+	return data.Markets.Items, nil
 }
 
 func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset) ([]morphoVault, error) {
@@ -1023,7 +931,7 @@ func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset
 		"chainId_in": []int64{chain.EVMChainID},
 		"listed":     true,
 	}
-	if addr := normalizeEVMAddress(asset.Address); addr != "" {
+	if addr := providers.NormalizeEVMAddress(asset.Address); addr != "" {
 		where["assetAddress_in"] = []string{addr}
 	} else if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
 		where["assetSymbol_in"] = []string{symbol}
@@ -1031,27 +939,16 @@ func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset
 
 	out := make([]morphoVault, 0, yieldVaultPageSize)
 	for page := 0; page < yieldVaultMaxPages; page++ {
-		body, err := json.Marshal(map[string]any{
-			"query": vaultsYieldQuery,
-			"variables": map[string]any{
-				"first": yieldVaultPageSize,
-				"skip":  page * yieldVaultPageSize,
-				"where": where,
-			},
-		})
-		if err != nil {
-			return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault query", err)
-		}
-
-		var resp vaultsResponse
-		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		var data vaultsData
+		if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultsYieldQuery, map[string]any{
+			"first": yieldVaultPageSize,
+			"skip":  page * yieldVaultPageSize,
+			"where": where,
+		}, &data, "morpho"); err != nil {
 			return nil, err
 		}
-		if len(resp.Errors) > 0 {
-			return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-		}
-		out = append(out, resp.Data.Vaults.Items...)
-		if len(resp.Data.Vaults.Items) < yieldVaultPageSize {
+		out = append(out, data.Vaults.Items...)
+		if len(data.Vaults.Items) < yieldVaultPageSize {
 			break
 		}
 	}
@@ -1067,27 +964,16 @@ func (c *Client) fetchVaultV2s(ctx context.Context, chain id.Chain) ([]morphoVau
 
 	out := make([]morphoVaultV2, 0, yieldVaultPageSize)
 	for page := 0; page < yieldVaultMaxPages; page++ {
-		body, err := json.Marshal(map[string]any{
-			"query": vaultV2sYieldQuery,
-			"variables": map[string]any{
-				"first": yieldVaultPageSize,
-				"skip":  page * yieldVaultPageSize,
-				"where": where,
-			},
-		})
-		if err != nil {
-			return nil, clierr.Wrap(clierr.CodeInternal, "marshal morpho vault-v2 query", err)
-		}
-
-		var resp vaultV2sResponse
-		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
+		var data vaultV2sData
+		if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultV2sYieldQuery, map[string]any{
+			"first": yieldVaultPageSize,
+			"skip":  page * yieldVaultPageSize,
+			"where": where,
+		}, &data, "morpho"); err != nil {
 			return nil, err
 		}
-		if len(resp.Errors) > 0 {
-			return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-		}
-		out = append(out, resp.Data.VaultV2s.Items...)
-		if len(resp.Data.VaultV2s.Items) < yieldVaultPageSize {
+		out = append(out, data.VaultV2s.Items...)
+		if len(data.VaultV2s.Items) < yieldVaultPageSize {
 			break
 		}
 	}
@@ -1121,46 +1007,29 @@ func (c *Client) fetchVaultHistory(
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, nil, "", err
 	}
-	if len(resp.Errors) > 0 {
-		if !isMorphoNoResultsError(resp.Errors[0].Message) {
-			return nil, nil, "", clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-		}
+	if len(resp.Errors) > 0 && !providers.IsMorphoNoResultsError(resp.Errors[0].Message) {
+		return nil, nil, "", providers.CheckGraphQLErrors(resp.Errors, "morpho")
 	}
 	if resp.Data.VaultByAddress != nil && resp.Data.VaultByAddress.HistoricalState != nil {
 		return resp.Data.VaultByAddress.HistoricalState.NetAPY, resp.Data.VaultByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
 	}
 
-	body, err = json.Marshal(map[string]any{
-		"query": vaultV2HistoryQuery,
-		"variables": map[string]any{
-			"address":  address,
-			"chainId":  chainID,
-			"start":    start,
-			"end":      end,
-			"interval": interval,
-		},
-	})
-	if err != nil {
-		return nil, nil, "", clierr.Wrap(clierr.CodeInternal, "marshal morpho vault-v2 history query", err)
-	}
-
-	var respV2 vaultV2HistoryResponse
-	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &respV2); err != nil {
+	var dataV2 vaultV2HistoryData
+	if err := providers.PostGraphQL(ctx, c.http, c.endpoint, vaultV2HistoryQuery, map[string]any{
+		"address":  address,
+		"chainId":  chainID,
+		"start":    start,
+		"end":      end,
+		"interval": interval,
+	}, &dataV2, "morpho"); err != nil {
 		return nil, nil, "", err
 	}
-	if len(respV2.Errors) > 0 {
-		return nil, nil, "", clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", respV2.Errors[0].Message))
-	}
-	if respV2.Data.VaultV2ByAddress == nil || respV2.Data.VaultV2ByAddress.HistoricalState == nil {
+	if dataV2.VaultV2ByAddress == nil || dataV2.VaultV2ByAddress.HistoricalState == nil {
 		return nil, nil, "", clierr.New(clierr.CodeUnavailable, "morpho returned no vault history for requested opportunity")
 	}
-	return respV2.Data.VaultV2ByAddress.HistoricalState.AvgNetAPY, respV2.Data.VaultV2ByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
+	return dataV2.VaultV2ByAddress.HistoricalState.AvgNetAPY, dataV2.VaultV2ByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
 }
 
-func isMorphoNoResultsError(message string) bool {
-	msg := strings.ToLower(strings.TrimSpace(message))
-	return strings.Contains(msg, "no results matching given parameters")
-}
 
 func morphoTimeseriesInterval(interval providers.YieldHistoryInterval) (string, error) {
 	switch interval {
@@ -1189,20 +1058,8 @@ func convertMorphoPoints(points []morphoFloatDataPoint, percent bool) []model.Yi
 			Value:     val,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.Compare(out[i].Timestamp, out[j].Timestamp) < 0
-	})
+	providers.SortHistoryPoints(out)
 	return out
-}
-
-func matchesVaultAsset(vaultAssetAddress, vaultAssetSymbol string, asset id.Asset) bool {
-	if addr := normalizeEVMAddress(asset.Address); addr != "" {
-		return strings.EqualFold(normalizeEVMAddress(vaultAssetAddress), addr)
-	}
-	if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
-		return strings.EqualFold(strings.TrimSpace(vaultAssetSymbol), symbol)
-	}
-	return true
 }
 
 func allocationFromVault(vault morphoVault) []marketAllocation {
@@ -1321,10 +1178,10 @@ func backingAssetsFromShares(
 		if share.USD <= 0 {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(chainID, share.Address)
+		assetID := providers.CanonicalAssetIDForChain(chainID, share.Address)
 		symbol := strings.TrimSpace(share.Symbol)
 		if assetID == "" {
-			assetID = canonicalAssetIDForChain(chainID, fallbackAddress)
+			assetID = providers.CanonicalAssetIDForChain(chainID, fallbackAddress)
 		}
 		if assetID == "" {
 			assetID = strings.TrimSpace(fallbackAssetID)
@@ -1344,7 +1201,7 @@ func backingAssetsFromShares(
 		total += share.USD
 	}
 	if len(byAsset) == 0 {
-		assetID := canonicalAssetIDForChain(chainID, fallbackAddress)
+		assetID := providers.CanonicalAssetIDForChain(chainID, fallbackAddress)
 		if assetID == "" {
 			assetID = strings.TrimSpace(fallbackAssetID)
 		}
@@ -1380,33 +1237,11 @@ func backingAssetsFromShares(
 }
 
 func sourceURLForVault(address string) string {
-	addr := normalizeEVMAddress(address)
+	addr := providers.NormalizeEVMAddress(address)
 	if addr == "" {
 		return "https://app.morpho.org"
 	}
 	return fmt.Sprintf("https://app.morpho.org/vault/%s", addr)
-}
-
-func canonicalAssetID(asset id.Asset, address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if addr == "" {
-		return asset.AssetID
-	}
-	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
-}
-
-func canonicalAssetIDForChain(chainID, address string) string {
-	addr := normalizeEVMAddress(address)
-	if chainID == "" || addr == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
-}
-
-func hashOpportunity(provider, chainID, marketID, assetID string) string {
-	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
-	h := sha1.Sum([]byte(seed))
-	return hex.EncodeToString(h[:])
 }
 
 type bigintString string
@@ -1441,73 +1276,3 @@ func (b bigintString) normalized() string {
 	return n.String()
 }
 
-func normalizeEVMAddress(address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
-		return ""
-	}
-	return addr
-}
-
-func matchesPositionType(filter, position providers.LendPositionType) bool {
-	if filter == "" || filter == providers.LendPositionTypeAll {
-		return true
-	}
-	return filter == position
-}
-
-func matchesPositionAsset(address, symbol string, asset id.Asset) bool {
-	if strings.TrimSpace(asset.Address) != "" {
-		return strings.EqualFold(strings.TrimSpace(address), strings.TrimSpace(asset.Address))
-	}
-	if strings.TrimSpace(asset.Symbol) != "" {
-		return strings.EqualFold(strings.TrimSpace(symbol), strings.TrimSpace(asset.Symbol))
-	}
-	return true
-}
-
-func amountInfoFromBase(base string, decimals int) model.AmountInfo {
-	if decimals < 0 {
-		decimals = 0
-	}
-	return model.AmountInfo{
-		AmountBaseUnits: base,
-		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
-		Decimals:        decimals,
-	}
-}
-
-func ptrAmountInfo(v model.AmountInfo) *model.AmountInfo {
-	copy := v
-	return &copy
-}
-
-func sortLendPositions(items []model.LendPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].PositionType != items[j].PositionType {
-			return items[i].PositionType < items[j].PositionType
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}

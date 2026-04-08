@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
@@ -34,8 +33,7 @@ type privateKeyProvider interface {
 type TempoStepExecutor struct {
 	txSigner    signer.Signer
 	tempoSigner *temposigner.Signer
-	rpcClients  map[string]*ethclient.Client
-	mu          sync.Mutex
+	rpcPool
 }
 
 // NewTempoStepExecutor creates a TempoStepExecutor. If the provided signer
@@ -55,7 +53,7 @@ func NewTempoStepExecutor(txSigner signer.Signer) *TempoStepExecutor {
 	return &TempoStepExecutor{
 		txSigner:    txSigner,
 		tempoSigner: ts,
-		rpcClients:  make(map[string]*ethclient.Client),
+		rpcPool:     newRPCPool(),
 	}
 }
 
@@ -67,33 +65,6 @@ func (e *TempoStepExecutor) EffectiveSender() common.Address {
 		return ts.WalletAddress()
 	}
 	return e.txSigner.Address()
-}
-
-// Close closes all cached RPC client connections.
-func (e *TempoStepExecutor) Close() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, client := range e.rpcClients {
-		if client != nil {
-			client.Close()
-		}
-	}
-	e.rpcClients = make(map[string]*ethclient.Client)
-}
-
-// getClient returns a cached or newly created ethclient for the given RPC URL.
-func (e *TempoStepExecutor) getClient(ctx context.Context, rpcURL string) (*ethclient.Client, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if client := e.rpcClients[rpcURL]; client != nil {
-		return client, nil
-	}
-	client, err := ethclient.DialContext(ctx, rpcURL)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "connect tempo rpc", err)
-	}
-	e.rpcClients[rpcURL] = client
-	return client, nil
 }
 
 // ExecuteStep builds, signs, and broadcasts a Tempo type 0x76 transaction for
@@ -110,16 +81,7 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 		return err
 	}
 
-	// Build a persist callback.
-	persist := func() error {
-		action.Touch()
-		if store != nil {
-			if err := store.Save(*action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
-			}
-		}
-		return nil
-	}
+	persist := makePersist(action, store)
 
 	// If the step already has a tx hash (retry scenario), skip building a new
 	// transaction and jump straight to receipt polling.
@@ -215,20 +177,7 @@ func (e *TempoStepExecutor) ExecuteStep(ctx context.Context, store *Store, actio
 		return clierr.New(clierr.CodeActionSim, "estimate gas returned zero")
 	}
 
-	// Fee params.
-	tipCap, err := resolveTipCap(ctx, ethClient, opts.MaxPriorityFeeGwei)
-	if err != nil {
-		return err
-	}
-	header, err := ethClient.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return clierr.Wrap(clierr.CodeUnavailable, "fetch latest header", err)
-	}
-	baseFee := header.BaseFee
-	if baseFee == nil {
-		baseFee = big.NewInt(1_000_000_000)
-	}
-	feeCap, err := resolveFeeCap(baseFee, tipCap, opts.MaxFeeGwei)
+	tipCap, feeCap, err := resolveEIP1559Fees(ctx, ethClient, opts)
 	if err != nil {
 		return err
 	}

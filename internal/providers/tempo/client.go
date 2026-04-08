@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -20,9 +19,9 @@ import (
 )
 
 var (
-	tempoDEXABI   = mustABI(registry.TempoStablecoinDEXABI)
-	tempoERC20    = mustABI(registry.ERC20MinimalABI)
-	tempoTIP20ABI = mustABI(registry.TempoTIP20MetadataABI)
+	tempoDEXABI   = registry.MustParseABI(registry.TempoStablecoinDEXABI)
+	tempoERC20    = registry.MustParseABI(registry.ERC20MinimalABI)
+	tempoTIP20ABI = registry.MustParseABI(registry.TempoTIP20MetadataABI)
 )
 
 type Client struct {
@@ -57,14 +56,9 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	}
 	defer client.Close()
 
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	switch tradeType {
-	case providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput:
-	default:
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "tempo swap type must be exact-input or exact-output")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "tempo", providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	amount, err := parseUint128(req.AmountBaseUnits)
@@ -107,16 +101,8 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
 		TradeType:   string(tradeType),
-		InputAmount: model.AmountInfo{
-			AmountBaseUnits: inputAmount.String(),
-			AmountDecimal:   id.FormatDecimalCompat(inputAmount.String(), inputDecimals),
-			Decimals:        inputDecimals,
-		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: estimatedOut.String(),
-			AmountDecimal:   id.FormatDecimalCompat(estimatedOut.String(), outputDecimals),
-			Decimals:        outputDecimals,
-		},
+		InputAmount:  providers.AmountInfoFromBase(inputAmount.String(), inputDecimals),
+		EstimatedOut: providers.AmountInfoFromBase(estimatedOut.String(), outputDecimals),
 		EstimatedGasUSD: 0,
 		PriceImpactPct:  0,
 		Route:           "tempo-dex",
@@ -126,19 +112,13 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 }
 
 func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, error) {
-	sender := strings.TrimSpace(opts.Sender)
-	if sender == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution requires sender address")
+	sender, err := providers.ValidateEVMSender(opts.Sender, "swap execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
-	if !common.IsHexAddress(sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution sender must be a valid EVM address")
-	}
-	recipient := strings.TrimSpace(opts.Recipient)
-	if recipient == "" {
-		recipient = sender
-	}
-	if !common.IsHexAddress(recipient) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution recipient must be a valid EVM address")
+	recipient, err := providers.ValidateEVMRecipient(opts.Recipient, sender, "swap execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
 	if !strings.EqualFold(recipient, sender) {
 		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "tempo swap execution currently settles to the sender only; omit --recipient or set it equal to --from-address")
@@ -154,26 +134,18 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	}
 	defer client.Close()
 
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	switch tradeType {
-	case providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput:
-	default:
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "tempo swap type must be exact-input or exact-output")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "tempo", providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput)
+	if err != nil {
+		return execution.Action{}, err
 	}
 
 	amount, err := parseUint128(req.AmountBaseUnits)
 	if err != nil {
 		return execution.Action{}, err
 	}
-	slippage := opts.SlippageBps
-	if slippage <= 0 {
-		slippage = 50
-	}
-	if slippage >= 10_000 {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	slippage, err := providers.NormalizeSlippageBps(opts.SlippageBps)
+	if err != nil {
+		return execution.Action{}, err
 	}
 
 	tokenIn := common.HexToAddress(req.FromAsset.Address)
@@ -243,7 +215,7 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	// approve call precedes the swap call in the same Tempo transaction.
 	var calls []execution.StepCall
 
-	allowance, err := readAllowance(ctx, client, tokenIn, senderAddr, dexAddr)
+	allowance, err := execution.ReadTokenAllowance(ctx, client, tokenIn, senderAddr, dexAddr)
 	if err != nil {
 		return execution.Action{}, err
 	}
@@ -321,25 +293,6 @@ func callUint128Method(ctx context.Context, client *ethclient.Client, target com
 	return amount, nil
 }
 
-func readAllowance(ctx context.Context, client *ethclient.Client, token, owner, spender common.Address) (*big.Int, error) {
-	callData, err := tempoERC20.Pack("allowance", owner, spender)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "pack tempo allowance calldata", err)
-	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{From: owner, To: &token, Data: callData}, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "read allowance", err)
-	}
-	values, err := tempoERC20.Unpack("allowance", out)
-	if err != nil || len(values) == 0 {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "decode allowance", err)
-	}
-	allowance, ok := values[0].(*big.Int)
-	if !ok || allowance == nil {
-		return nil, clierr.New(clierr.CodeUnavailable, "invalid allowance response")
-	}
-	return allowance, nil
-}
 
 func validateUSDPair(ctx context.Context, client *ethclient.Client, fromAsset, toAsset id.Asset, tokenIn, tokenOut common.Address) error {
 	fromCurrency, err := readTIP20Currency(ctx, client, tokenIn, fromAsset)
@@ -436,10 +389,3 @@ func applySlippageCeil(amount *big.Int, bps int64) *big.Int {
 	return numerator.Div(numerator, big.NewInt(10_000))
 }
 
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(fmt.Sprintf("parse tempo ABI: %v", err))
-	}
-	return parsed
-}

@@ -2,7 +2,6 @@ package bungee
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -190,11 +189,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: outAmount,
-			AmountDecimal:   id.FormatDecimalCompat(outAmount, outDecimals),
-			Decimals:        outDecimals,
-		},
+		EstimatedOut:    providers.AmountInfoFromBase(outAmount, outDecimals),
 		EstimatedFeeUSD: feeUSD,
 		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  serviceTime,
@@ -205,12 +200,9 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	if tradeType != providers.SwapTradeTypeExactInput {
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "bungee supports only --type exact-input")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "bungee", providers.SwapTradeTypeExactInput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	resp, err := c.quote(ctx, req.Chain, req.Chain, req.FromAsset.Address, req.ToAsset.Address, req.AmountBaseUnits)
@@ -233,11 +225,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: outAmount,
-			AmountDecimal:   id.FormatDecimalCompat(outAmount, outDecimals),
-			Decimals:        outDecimals,
-		},
+		EstimatedOut:    providers.AmountInfoFromBase(outAmount, outDecimals),
 		EstimatedGasUSD: feeUSD,
 		PriceImpactPct:  0,
 		Route:           route,
@@ -261,18 +249,12 @@ func (c *Client) quote(ctx context.Context, fromChain, toChain id.Chain, fromTok
 	if useDedicated {
 		base = c.dedicatedBaseURL
 	}
-	url := base + "/bungee/quote?" + vals.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return quoteResponse{}, clierr.Wrap(clierr.CodeInternal, "build bungee quote request", err)
-	}
+	var headers map[string]string
 	if useDedicated {
-		req.Header.Set("x-api-key", apiKey)
-		req.Header.Set("affiliate", affiliate)
+		headers = map[string]string{"x-api-key": apiKey, "affiliate": affiliate}
 	}
-
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, base+"/bungee/quote?"+vals.Encode(), headers, &resp); err != nil {
 		return quoteResponse{}, err
 	}
 	if !resp.Success {

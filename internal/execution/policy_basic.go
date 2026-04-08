@@ -6,16 +6,15 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
 var (
-	policyERC20ABI           = mustPolicyABI(registry.ERC20MinimalABI)
-	policyUniswapV3RouterABI = mustPolicyABI(registry.UniswapV3RouterABI)
-	policyTempoDEXABI        = mustPolicyABI(registry.TempoStablecoinDEXABI)
+	policyERC20ABI           = registry.MustParseABI(registry.ERC20MinimalABI)
+	policyUniswapV3RouterABI = registry.MustParseABI(registry.UniswapV3RouterABI)
+	policyTempoDEXABI        = registry.MustParseABI(registry.TempoStablecoinDEXABI)
 
 	policyApproveSelector     = policyERC20ABI.Methods["approve"].ID
 	policyTransferSelector    = policyERC20ABI.Methods["transfer"].ID
@@ -351,10 +350,3 @@ func metadataString(metadata map[string]any, key string) string {
 	}
 }
 
-func mustPolicyABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}

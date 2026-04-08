@@ -2,13 +2,16 @@ package app
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
+	"github.com/ggonzalez94/defi-cli/internal/id"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/ows"
 	"github.com/spf13/cobra"
 )
@@ -139,6 +142,201 @@ func validateExecutionSender(action execution.Action, expectedSender, actualSend
 	return nil
 }
 
+// standardSubmitSchema is the tagged struct used by annotateStructuredSubmitCommand
+// for schema generation on commands that expose the full set of submit flags.
+// Commands with fewer flags (e.g. transfer) keep their own typed struct.
+type standardSubmitSchema struct {
+	ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
+	Simulate           bool    `json:"simulate" flag:"simulate"`
+	Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
+	KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
+	PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
+	FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
+	PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
+	StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
+	GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
+	MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
+	MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
+	AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
+	UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
+	FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
+}
+
+// executionSubmitArgs holds the common set of fields used by all execution
+// submit commands for flag binding (no struct tags needed).
+type executionSubmitArgs struct {
+	ActionID           string
+	Simulate           bool
+	Signer             string
+	KeySource          string
+	PrivateKey         string
+	FromAddress        string
+	PollInterval       string
+	StepTimeout        string
+	GasMultiplier      float64
+	MaxFeeGwei         string
+	MaxPriorityFeeGwei string
+	AllowMaxApproval   bool
+	UnsafeProviderTx   bool
+	FeeToken           string
+}
+
+// registerSubmitFlags registers the flags shared by all execution submit commands.
+func registerSubmitFlags(cmd *cobra.Command, args *executionSubmitArgs, commandName string) {
+	cmd.Flags().StringVar(&args.ActionID, "action-id", "", fmt.Sprintf("Action identifier returned by %s plan", commandName))
+	cmd.Flags().BoolVar(&args.Simulate, "simulate", true, "Run preflight simulation before submission")
+	cmd.Flags().StringVar(&args.Signer, "signer", "local", "Signer backend (local|tempo)")
+	cmd.Flags().StringVar(&args.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
+	cmd.Flags().StringVar(&args.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
+	cmd.Flags().StringVar(&args.FromAddress, "from-address", "", "Expected sender EOA address")
+	cmd.Flags().StringVar(&args.PollInterval, "poll-interval", "2s", "Receipt polling interval")
+	cmd.Flags().StringVar(&args.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
+	cmd.Flags().Float64Var(&args.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
+	cmd.Flags().StringVar(&args.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
+	cmd.Flags().StringVar(&args.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
+	cmd.Flags().BoolVar(&args.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
+	cmd.Flags().BoolVar(&args.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
+	cmd.Flags().StringVar(&args.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
+}
+
+func (s *runtimeState) newStatusCommand(commandName, expectedIntent, intentMismatchMsg string) *cobra.Command {
+	var actionID string
+	cmd := &cobra.Command{
+		Use:   "status",
+		Short: fmt.Sprintf("Get %s action status", commandName),
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return s.runStatusAction(cmd, actionID, expectedIntent, intentMismatchMsg)
+		},
+	}
+	cmd.Flags().StringVar(&actionID, "action-id", "", fmt.Sprintf("Action identifier returned by %s plan", commandName))
+	annotateExecutionStatusCommand(cmd)
+	return cmd
+}
+
+// addSubmitAndStatus creates and registers both submit and status subcommands
+// on root using the standard schema (standardSubmitSchema). Commands that need a
+// different schema type (e.g. transfer) should register submit/status inline.
+func (s *runtimeState) addSubmitAndStatus(root *cobra.Command, commandName, expectedIntent, intentMismatchMsg string) {
+	var submit executionSubmitArgs
+	submitCmd := &cobra.Command{
+		Use:   "submit",
+		Short: "Execute an existing " + commandName + " action",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return s.runSubmitAction(cmd, submit, expectedIntent, intentMismatchMsg)
+		},
+	}
+	registerSubmitFlags(submitCmd, &submit, commandName)
+	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
+
+	statusCmd := s.newStatusCommand(commandName, expectedIntent, intentMismatchMsg)
+
+	root.AddCommand(submitCmd)
+	root.AddCommand(statusCmd)
+}
+
+func (s *runtimeState) runSubmitAction(cmd *cobra.Command, args executionSubmitArgs, expectedIntent, intentMismatchMsg string) error {
+	actionID, err := resolveActionID(args.ActionID)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureActionStore(); err != nil {
+		return err
+	}
+	action, err := s.actionStore.Get(actionID)
+	if err != nil {
+		return clierr.Wrap(clierr.CodeUsage, "load action", err)
+	}
+	if action.IntentType != expectedIntent {
+		return clierr.New(clierr.CodeUsage, intentMismatchMsg)
+	}
+	if action.Status == execution.ActionStatusCompleted {
+		return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
+	}
+	resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
+		Signer:      args.Signer,
+		KeySource:   args.KeySource,
+		PrivateKey:  args.PrivateKey,
+		FromAddress: args.FromAddress,
+	})
+	if err != nil {
+		return err
+	}
+	if err := validateExecutionSender(action, args.FromAddress, resolvedExec.sender); err != nil {
+		return err
+	}
+	execOpts, err := parseExecuteOptions(
+		args.Simulate,
+		args.PollInterval,
+		args.StepTimeout,
+		args.GasMultiplier,
+		args.MaxFeeGwei,
+		args.MaxPriorityFeeGwei,
+		args.AllowMaxApproval,
+		args.UnsafeProviderTx,
+		args.FeeToken,
+	)
+	if err != nil {
+		return err
+	}
+	if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
+		return err
+	}
+	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+}
+
+func (s *runtimeState) runStatusAction(cmd *cobra.Command, actionIDStr, expectedIntent, intentMismatchMsg string) error {
+	actionID, err := resolveActionID(actionIDStr)
+	if err != nil {
+		return err
+	}
+	if err := s.ensureActionStore(); err != nil {
+		return err
+	}
+	action, err := s.actionStore.Get(actionID)
+	if err != nil {
+		return clierr.Wrap(clierr.CodeUsage, "load action", err)
+	}
+	if action.IntentType != expectedIntent {
+		return clierr.New(clierr.CodeUsage, intentMismatchMsg)
+	}
+	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+}
+
+// planActionConfig holds the parameters for runPlanAction, which encapsulates the
+// common plan command flow: resolve identity → build action → persist → emit.
+type planActionConfig struct {
+	ProviderName string
+	WalletRef    string
+	FromAddress  string
+	ChainArg     string
+	BuildAction  func(ctx context.Context, fromAddr string) (execution.Action, error)
+}
+
+func (s *runtimeState) runPlanAction(cmd *cobra.Command, cfg planActionConfig) error {
+	identity, err := resolveExecutionIdentity(cfg.WalletRef, cfg.FromAddress, cfg.ChainArg)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
+	defer cancel()
+	start := time.Now()
+	action, err := cfg.BuildAction(ctx, identity.FromAddress)
+	statuses := []model.ProviderStatus{{Name: cfg.ProviderName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+	if err != nil {
+		s.captureCommandDiagnostics(nil, statuses, false)
+		return err
+	}
+	applyExecutionIdentityToAction(&action, identity)
+	if err := s.ensureActionStore(); err != nil {
+		return err
+	}
+	if err := s.actionStore.Save(action); err != nil {
+		return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
+	}
+	s.captureCommandDiagnostics(nil, statuses, false)
+	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
+}
+
 // Execution timeout is derived from remaining action wait stages so short provider
 // request timeouts do not cancel transaction confirmation/settlement polling early.
 func estimateExecutionTimeout(action *execution.Action, opts execution.ExecuteOptions) time.Duration {
@@ -170,4 +368,11 @@ func estimateExecutionTimeout(action *execution.Action, opts execution.ExecuteOp
 	// Add per-step RPC headroom for chain-id/simulation/gas/fee/nonce/broadcast work
 	// so long-running receipt/settlement waits are less likely to be cut off early.
 	return time.Duration(stages)*stepTimeout + time.Duration(steps)*executionStepRPCOverhead
+}
+
+func normalizeAssetAmount(amountBase, amountDecimal string, decimals int) (string, string, error) {
+	if decimals <= 0 {
+		decimals = 18
+	}
+	return id.NormalizeAmount(amountBase, amountDecimal, decimals)
 }

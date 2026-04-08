@@ -3,7 +3,6 @@ package jupiter
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -11,7 +10,6 @@ import (
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
-	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
@@ -73,12 +71,9 @@ type quoteResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	if tradeType != providers.SwapTradeTypeExactInput {
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "jupiter supports only --type exact-input")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "jupiter", providers.SwapTradeTypeExactInput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	if !req.Chain.IsSolana() {
@@ -95,16 +90,12 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	vals.Set("slippageBps", "50")
 
 	endpoint := fmt.Sprintf("%s/quote?%s", strings.TrimRight(c.baseURL, "/"), vals.Encode())
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return model.SwapQuote{}, clierr.Wrap(clierr.CodeInternal, "build jupiter quote request", err)
-	}
+	var headers map[string]string
 	if c.apiKey != "" {
-		hReq.Header.Set("x-api-key", c.apiKey)
+		headers = map[string]string{"x-api-key": c.apiKey}
 	}
-
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, endpoint, headers, &resp); err != nil {
 		return model.SwapQuote{}, err
 	}
 	if strings.TrimSpace(resp.OutAmount) == "" {
@@ -122,11 +113,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: resp.OutAmount,
-			AmountDecimal:   id.FormatDecimalCompat(resp.OutAmount, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(resp.OutAmount, req.ToAsset.Decimals),
 		EstimatedGasUSD: 0,
 		PriceImpactPct:  parsePriceImpactPct(resp.PriceImpactPct),
 		Route:           routeFromPlan(resp.RoutePlan),

@@ -2,12 +2,8 @@ package moonwell
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
-	"fmt"
 	"math"
 	"math/big"
-	"sort"
 	"strings"
 	"time"
 
@@ -18,28 +14,12 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/multicall"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
-	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
 const secondsPerYear = 365.25 * 24 * 3600
-
-// Multicall3 is deployed at a standard address on all major EVM chains.
-var multicall3Addr = common.HexToAddress("0xcA11bde05977b3631167028862bE2a173976CA11")
-
-// multicall3Call matches Multicall3.Call3 struct.
-type multicall3Call struct {
-	Target       common.Address
-	AllowFailure bool
-	CallData     []byte
-}
-
-// multicall3Result matches Multicall3.Result struct.
-type multicall3Result struct {
-	Success    bool
-	ReturnData []byte
-}
 
 type Client struct {
 	now         func() time.Time
@@ -102,14 +82,14 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 
 	out := make([]model.LendMarket, 0, len(markets))
 	for _, m := range markets {
-		if !matchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
+		if !providers.MatchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
+		assetID := providers.CanonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
+		nativeID := providers.ProviderNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
 		out = append(out, model.LendMarket{
 			Protocol:             "moonwell",
 			Provider:             "moonwell",
@@ -126,12 +106,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TVLUSD != out[j].TVLUSD {
-			return out[i].TVLUSD > out[j].TVLUSD
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendMarkets(out)
 	return out, nil
 }
 
@@ -146,14 +121,14 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 
 	out := make([]model.LendRate, 0, len(markets))
 	for _, m := range markets {
-		if !matchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
+		if !providers.MatchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
+		assetID := providers.CanonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
+		nativeID := providers.ProviderNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
 		out = append(out, model.LendRate{
 			Protocol:             "moonwell",
 			Provider:             "moonwell",
@@ -169,12 +144,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SupplyAPY != out[j].SupplyAPY {
-			return out[i].SupplyAPY > out[j].SupplyAPY
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendRates(out)
 	return out, nil
 }
 
@@ -184,7 +154,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "moonwell supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "lend positions requires a valid EVM address")
 	}
@@ -229,7 +199,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	// Per mToken: getAccountSnapshot, underlying, supplyRate, borrowRate, getUnderlyingPrice
 	// Per underlying: symbol, decimals (phase 2 after we know underlying addresses)
 	const posCallsPerMarket = 5 // snapshot, underlying, supplyRate, borrowRate, price
-	snapshotCalls := make([]multicall3Call, 0, len(allMarkets)*posCallsPerMarket)
+	snapshotCalls := make([]multicall.Call, 0, len(allMarkets)*posCallsPerMarket)
 	underlyingCD, _ := mTokenABI.Pack("underlying")
 	supplyRateCD, _ := mTokenABI.Pack("supplyRatePerTimestamp")
 	borrowRateCD, _ := mTokenABI.Pack("borrowRatePerTimestamp")
@@ -238,15 +208,15 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		snapshotCD, _ := mTokenABI.Pack("getAccountSnapshot", accountAddr)
 		priceCD, _ := oracleABI.Pack("getUnderlyingPrice", mt)
 		snapshotCalls = append(snapshotCalls,
-			multicall3Call{Target: mt, AllowFailure: true, CallData: snapshotCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: underlyingCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: supplyRateCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: borrowRateCD},
-			multicall3Call{Target: oracleAddr, AllowFailure: true, CallData: priceCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: snapshotCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: underlyingCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: supplyRateCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: borrowRateCD},
+			multicall.Call{Target: oracleAddr, AllowFailure: true, CallData: priceCD},
 		)
 	}
 
-	phase1Results, err := execMulticall3(ctx, client, snapshotCalls)
+	phase1Results, err := multicall.Aggregate3(ctx, client,snapshotCalls)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeUnavailable, "multicall positions", err)
 	}
@@ -319,15 +289,15 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	// Phase 2: get symbol + decimals for each underlying.
 	symbolCD, _ := erc20ABI.Pack("symbol")
 	decimalsCD, _ := erc20ABI.Pack("decimals")
-	phase2Calls := make([]multicall3Call, 0, len(posMarkets)*2)
+	phase2Calls := make([]multicall.Call, 0, len(posMarkets)*2)
 	for _, pm := range posMarkets {
 		phase2Calls = append(phase2Calls,
-			multicall3Call{Target: pm.underlying, AllowFailure: true, CallData: symbolCD},
-			multicall3Call{Target: pm.underlying, AllowFailure: true, CallData: decimalsCD},
+			multicall.Call{Target: pm.underlying, AllowFailure: true, CallData: symbolCD},
+			multicall.Call{Target: pm.underlying, AllowFailure: true, CallData: decimalsCD},
 		)
 	}
 
-	phase2Results, err := execMulticall3(ctx, client, phase2Calls)
+	phase2Results, err := multicall.Aggregate3(ctx, client,phase2Calls)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeUnavailable, "multicall position metadata", err)
 	}
@@ -357,14 +327,14 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 
 		ulAddr := strings.ToLower(pm.underlying.Hex())
-		if !matchesAsset(ulAddr, symbol, req.Asset) {
+		if !providers.MatchesAsset(ulAddr, symbol, req.Asset) {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, ulAddr)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, ulAddr)
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", req.Chain.CAIP2, comptrollerAddr, ulAddr)
+		nativeID := providers.ProviderNativeID("moonwell", req.Chain.CAIP2, comptrollerAddr, ulAddr)
 		priceUSD := mantissaToUSD(pm.priceMantissa, decimals)
 
 		// Supply position.
@@ -376,7 +346,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			if collateralSet[pm.mToken] {
 				posType = providers.LendPositionTypeCollateral
 			}
-			if matchesPositionType(filterType, posType) {
+			if providers.MatchesPositionType(filterType, posType) {
 				amountUSD := bigIntToFloat(underlyingBal, decimals) * priceUSD
 				out = append(out, model.LendPosition{
 					Protocol:             "moonwell",
@@ -397,7 +367,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 
 		// Borrow position.
-		if pm.borrowBal.Sign() > 0 && matchesPositionType(filterType, providers.LendPositionTypeBorrow) {
+		if pm.borrowBal.Sign() > 0 && providers.MatchesPositionType(filterType, providers.LendPositionTypeBorrow) {
 			amountUSD := bigIntToFloat(pm.borrowBal, decimals) * priceUSD
 			out = append(out, model.LendPosition{
 				Protocol:             "moonwell",
@@ -417,11 +387,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 	}
 
-	sortLendPositions(out)
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	return providers.FinalizeLendPositions(out, req.Limit), nil
 }
 
 // ── YieldProvider ───────────────────────────────────────────────────────
@@ -434,7 +400,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 
 	out := make([]model.YieldOpportunity, 0, len(markets))
 	for _, m := range markets {
-		if !matchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, req.Asset) {
+		if !providers.MatchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, req.Asset) {
 			continue
 		}
 		if (m.SupplyAPY == 0 || m.TVLUSD == 0) && !req.IncludeIncomplete {
@@ -447,12 +413,12 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			continue
 		}
 
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, m.UnderlyingAddress)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, m.UnderlyingAddress)
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", req.Chain.CAIP2, comptroller, m.UnderlyingAddress)
-		opportunityID := hashOpportunity("moonwell", req.Chain.CAIP2, nativeID, assetID)
+		nativeID := providers.ProviderNativeID("moonwell", req.Chain.CAIP2, comptroller, m.UnderlyingAddress)
+		opportunityID := providers.HashOpportunity("moonwell", req.Chain.CAIP2, nativeID, assetID)
 
 		out = append(out, model.YieldOpportunity{
 			OpportunityID:        opportunityID,
@@ -480,14 +446,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		})
 	}
 
-	if len(out) == 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, "no moonwell yield opportunities for requested chain/asset")
-	}
-	yieldutil.Sort(out, req.SortBy)
-	if req.Limit <= 0 || req.Limit > len(out) {
-		req.Limit = len(out)
-	}
-	return out[:req.Limit], nil
+	return providers.FinalizeYieldOpportunities(out, "moonwell", req.SortBy, req.Limit)
 }
 
 // ── YieldPositionsProvider ──────────────────────────────────────────────
@@ -505,40 +464,8 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		return nil, err
 	}
 
-	out := make([]model.YieldPosition, 0, len(lendRows))
-	for _, row := range lendRows {
-		switch row.PositionType {
-		case string(providers.LendPositionTypeSupply), string(providers.LendPositionTypeCollateral):
-		default:
-			continue
-		}
-		opportunityID := ""
-		if strings.TrimSpace(row.ProviderNativeID) != "" {
-			opportunityID = hashOpportunity("moonwell", row.ChainID, row.ProviderNativeID, row.AssetID)
-		}
-		out = append(out, model.YieldPosition{
-			Protocol:             "moonwell",
-			Provider:             "moonwell",
-			ChainID:              row.ChainID,
-			AccountAddress:       row.AccountAddress,
-			PositionType:         "deposit",
-			OpportunityID:        opportunityID,
-			AssetID:              row.AssetID,
-			ProviderNativeID:     row.ProviderNativeID,
-			ProviderNativeIDKind: row.ProviderNativeIDKind,
-			Amount:               row.Amount,
-			AmountUSD:            row.AmountUSD,
-			APYTotal:             row.APY,
-			SourceURL:            row.SourceURL,
-			FetchedAt:            row.FetchedAt,
-		})
-	}
-
-	sortYieldPositions(out)
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	out := providers.LendToYieldPositions("moonwell", lendRows)
+	return providers.FinalizeYieldPositions(out, req.Limit), nil
 }
 
 // ── RPC data fetching ───────────────────────────────────────────────────
@@ -586,7 +513,7 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 	}
 
 	// 2. Phase 1 multicall: per-mToken data (underlying, rates, supply, exchange, borrows, cash, price).
-	phase1Calls := make([]multicall3Call, 0, len(mTokens)*callsPerMarketPhase1)
+	phase1Calls := make([]multicall.Call, 0, len(mTokens)*callsPerMarketPhase1)
 	underlyingCD, _ := mTokenABI.Pack("underlying")
 	supplyRateCD, _ := mTokenABI.Pack("supplyRatePerTimestamp")
 	borrowRateCD, _ := mTokenABI.Pack("borrowRatePerTimestamp")
@@ -598,18 +525,18 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 	for _, mt := range mTokens {
 		priceCD, _ := oracleABI.Pack("getUnderlyingPrice", mt)
 		phase1Calls = append(phase1Calls,
-			multicall3Call{Target: mt, AllowFailure: true, CallData: underlyingCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: supplyRateCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: borrowRateCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: totalSupplyCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: exchangeRateCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: totalBorrowsCD},
-			multicall3Call{Target: mt, AllowFailure: true, CallData: getCashCD},
-			multicall3Call{Target: oracleAddr, AllowFailure: true, CallData: priceCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: underlyingCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: supplyRateCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: borrowRateCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: totalSupplyCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: exchangeRateCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: totalBorrowsCD},
+			multicall.Call{Target: mt, AllowFailure: true, CallData: getCashCD},
+			multicall.Call{Target: oracleAddr, AllowFailure: true, CallData: priceCD},
 		)
 	}
 
-	phase1Results, err := execMulticall3(ctx, client, phase1Calls)
+	phase1Results, err := multicall.Aggregate3(ctx, client,phase1Calls)
 	if err != nil {
 		return nil, "", clierr.Wrap(clierr.CodeUnavailable, "multicall market data", err)
 	}
@@ -674,15 +601,15 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 	symbolCD, _ := erc20ABI.Pack("symbol")
 	decimalsCD, _ := erc20ABI.Pack("decimals")
 
-	phase2Calls := make([]multicall3Call, 0, len(p1Parsed)*callsPerMarketPhase2)
+	phase2Calls := make([]multicall.Call, 0, len(p1Parsed)*callsPerMarketPhase2)
 	for _, p := range p1Parsed {
 		phase2Calls = append(phase2Calls,
-			multicall3Call{Target: p.underlying, AllowFailure: true, CallData: symbolCD},
-			multicall3Call{Target: p.underlying, AllowFailure: true, CallData: decimalsCD},
+			multicall.Call{Target: p.underlying, AllowFailure: true, CallData: symbolCD},
+			multicall.Call{Target: p.underlying, AllowFailure: true, CallData: decimalsCD},
 		)
 	}
 
-	phase2Results, err := execMulticall3(ctx, client, phase2Calls)
+	phase2Results, err := multicall.Aggregate3(ctx, client,phase2Calls)
 	if err != nil {
 		return nil, "", clierr.Wrap(clierr.CodeUnavailable, "multicall token metadata", err)
 	}
@@ -746,7 +673,7 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, rpcOverride s
 }
 
 // decodeUint256Result decodes a single uint256 from a multicall result.
-func decodeUint256Result(r multicall3Result, a abi.ABI, method string) *big.Int {
+func decodeUint256Result(r multicall.Result, a abi.ABI, method string) *big.Int {
 	if !r.Success || len(r.ReturnData) < 32 {
 		return new(big.Int)
 	}
@@ -772,64 +699,6 @@ func mantissaToUSD(priceMantissa *big.Int, underlyingDecimals int) float64 {
 	priceFloat.Quo(priceFloat, scale)
 	result, _ := priceFloat.Float64()
 	return result
-}
-
-// execMulticall3 batches multiple contract calls into a single Multicall3.aggregate3 RPC call.
-func execMulticall3(ctx context.Context, client *ethclient.Client, calls []multicall3Call) ([]multicall3Result, error) {
-	if len(calls) == 0 {
-		return nil, nil
-	}
-
-	// Build the aggregate3 input as a tuple array.
-	type call3Tuple struct {
-		Target       common.Address `abi:"target"`
-		AllowFailure bool           `abi:"allowFailure"`
-		CallData     []byte         `abi:"callData"`
-	}
-	tuples := make([]call3Tuple, len(calls))
-	for i, c := range calls {
-		tuples[i] = call3Tuple{Target: c.Target, AllowFailure: c.AllowFailure, CallData: c.CallData}
-	}
-
-	data, err := mc3ABI.Pack("aggregate3", tuples)
-	if err != nil {
-		return nil, fmt.Errorf("pack aggregate3: %w", err)
-	}
-
-	mc3 := multicall3Addr
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &mc3, Data: data}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("call aggregate3: %w", err)
-	}
-
-	decoded, err := mc3ABI.Unpack("aggregate3", out)
-	if err != nil {
-		return nil, fmt.Errorf("decode aggregate3: %w", err)
-	}
-	if len(decoded) == 0 {
-		return nil, fmt.Errorf("empty aggregate3 response")
-	}
-
-	// decoded[0] is []struct{Success bool; ReturnData []byte}
-	type resultTuple struct {
-		Success    bool   `abi:"success"`
-		ReturnData []byte `abi:"returnData"`
-	}
-
-	// The ABI decoder returns a slice of anonymous structs.
-	rawResults, ok := decoded[0].([]struct {
-		Success    bool   `json:"success"`
-		ReturnData []byte `json:"returnData"`
-	})
-	if !ok {
-		return nil, fmt.Errorf("unexpected aggregate3 result type: %T", decoded[0])
-	}
-
-	results := make([]multicall3Result, len(rawResults))
-	for i, r := range rawResults {
-		results[i] = multicall3Result{Success: r.Success, ReturnData: r.ReturnData}
-	}
-	return results, nil
 }
 
 // ── RPC call helpers ────────────────────────────────────────────────────
@@ -945,101 +814,12 @@ func amountInfoFromBigInt(v *big.Int, decimals int) model.AmountInfo {
 	if v == nil {
 		v = new(big.Int)
 	}
-	base := v.String()
-	return model.AmountInfo{
-		AmountBaseUnits: base,
-		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
-		Decimals:        decimals,
-	}
-}
-
-func normalizeEVMAddress(address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
-		return ""
-	}
-	return addr
-}
-
-func canonicalAssetIDForChain(chainID, address string) string {
-	addr := normalizeEVMAddress(address)
-	if chainID == "" || addr == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
-}
-
-func providerNativeID(provider, chainID, comptrollerAddress, underlyingAddress string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(comptrollerAddress), normalizeEVMAddress(underlyingAddress))
-}
-
-func hashOpportunity(provider, chainID, marketID, assetID string) string {
-	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
-	h := sha1.Sum([]byte(seed))
-	return hex.EncodeToString(h[:])
-}
-
-func matchesAsset(address, symbol string, asset id.Asset) bool {
-	assetAddress := strings.TrimSpace(asset.Address)
-	if assetAddress != "" {
-		return strings.EqualFold(strings.TrimSpace(address), assetAddress)
-	}
-	assetSymbol := strings.TrimSpace(asset.Symbol)
-	if assetSymbol != "" {
-		return strings.EqualFold(strings.TrimSpace(symbol), assetSymbol)
-	}
-	return true
-}
-
-func matchesPositionType(filter, position providers.LendPositionType) bool {
-	if filter == "" || filter == providers.LendPositionTypeAll {
-		return true
-	}
-	return filter == position
-}
-
-func sortLendPositions(items []model.LendPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].PositionType != items[j].PositionType {
-			return items[i].PositionType < items[j].PositionType
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
+	return providers.AmountInfoFromBase(v.String(), decimals)
 }
 
 // ── ABI singletons ──────────────────────────────────────────────────────
 
-var comptrollerABI = mustABI(registry.MoonwellComptrollerABI)
-var mTokenABI = mustABI(registry.MoonwellMTokenABI)
-var oracleABI = mustABI(registry.MoonwellOracleABI)
-var erc20ABI = mustABI(registry.MoonwellERC20MinimalABI)
-var mc3ABI = mustABI(registry.Multicall3ABI)
-
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(fmt.Sprintf("invalid ABI: %v", err))
-	}
-	return parsed
-}
+var comptrollerABI = registry.MustParseABI(registry.MoonwellComptrollerABI)
+var mTokenABI = registry.MustParseABI(registry.MoonwellMTokenABI)
+var oracleABI = registry.MustParseABI(registry.MoonwellOracleABI)
+var erc20ABI = registry.MustParseABI(registry.MoonwellERC20MinimalABI)

@@ -3,10 +3,7 @@ package planner
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
-	"fmt"
 	"math/big"
-	"net/http"
 	"strings"
 	"time"
 
@@ -16,6 +13,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
@@ -51,38 +49,33 @@ type MorphoLendRequest struct {
 	MarketID        string
 }
 
-type morphoMarketByIDResponse struct {
-	Data struct {
-		Markets struct {
-			Items []struct {
-				UniqueKey string `json:"uniqueKey"`
-				IRM       string `json:"irmAddress"`
-				LLTV      string `json:"lltv"`
-				Morpho    struct {
-					Address string `json:"address"`
-				} `json:"morphoBlue"`
-				Oracle struct {
-					Address string `json:"address"`
-				} `json:"oracle"`
-				LoanAsset struct {
-					Address  string `json:"address"`
-					Symbol   string `json:"symbol"`
-					Decimals int    `json:"decimals"`
-					Chain    struct {
-						ID int64 `json:"id"`
-					} `json:"chain"`
-				} `json:"loanAsset"`
-				CollateralAsset *struct {
-					Address  string `json:"address"`
-					Symbol   string `json:"symbol"`
-					Decimals int    `json:"decimals"`
-				} `json:"collateralAsset"`
-			} `json:"items"`
-		} `json:"markets"`
-	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+type morphoMarketByIDData struct {
+	Markets struct {
+		Items []struct {
+			UniqueKey string `json:"uniqueKey"`
+			IRM       string `json:"irmAddress"`
+			LLTV      string `json:"lltv"`
+			Morpho    struct {
+				Address string `json:"address"`
+			} `json:"morphoBlue"`
+			Oracle struct {
+				Address string `json:"address"`
+			} `json:"oracle"`
+			LoanAsset struct {
+				Address  string `json:"address"`
+				Symbol   string `json:"symbol"`
+				Decimals int    `json:"decimals"`
+				Chain    struct {
+					ID int64 `json:"id"`
+				} `json:"chain"`
+			} `json:"loanAsset"`
+			CollateralAsset *struct {
+				Address  string `json:"address"`
+				Symbol   string `json:"symbol"`
+				Decimals int    `json:"decimals"`
+			} `json:"collateralAsset"`
+		} `json:"items"`
+	} `json:"markets"`
 }
 
 type morphoMarketParamsABI struct {
@@ -186,49 +179,19 @@ func BuildMorphoLendAction(ctx context.Context, req MorphoLendRequest) (executio
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho supply calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-supply",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Supply asset to Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply asset to Morpho market", morphoAddr.Hex(), data)
 	case string(AaveVerbWithdraw):
 		data, err := morphoBlueABI.Pack("withdraw", params, amount, zero, onBehalfOf, recipient)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho withdraw calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-withdraw",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Withdraw supplied assets from Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-withdraw", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Withdraw supplied assets from Morpho market", morphoAddr.Hex(), data)
 	case string(AaveVerbBorrow):
 		data, err := morphoBlueABI.Pack("borrow", params, amount, zero, onBehalfOf, recipient)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho borrow calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-borrow",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Borrow asset from Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-borrow", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Borrow asset from Morpho market", morphoAddr.Hex(), data)
 	case string(AaveVerbRepay):
 		if err := appendApprovalIfNeeded(ctx, client, &action, req.Chain.CAIP2, rpcURL, loanToken, sender, morphoAddr, amount, "Approve token for Morpho repay"); err != nil {
 			return execution.Action{}, err
@@ -237,17 +200,7 @@ func BuildMorphoLendAction(ctx context.Context, req MorphoLendRequest) (executio
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho repay calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-repay",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Repay borrowed assets in Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-repay", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Repay borrowed assets in Morpho market", morphoAddr.Hex(), data)
 	default:
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "unsupported lend action verb")
 	}
@@ -322,29 +275,18 @@ func fetchMorphoMarketByID(ctx context.Context, chainID int64, marketID string) 
 		} `json:"collateralAsset"`
 	}
 
-	body, err := json.Marshal(map[string]any{
-		"query": morphoMarketByIDQuery,
-		"variables": map[string]any{
-			"chain": chainID,
-			"key":   marketID,
-		},
-	})
-	if err != nil {
-		return market, clierr.Wrap(clierr.CodeInternal, "marshal morpho market lookup query", err)
-	}
-
 	client := httpx.New(10*time.Second, 0)
-	var resp morphoMarketByIDResponse
-	if _, err := httpx.DoBodyJSON(ctx, client, http.MethodPost, morphoGraphQLEndpoint, body, nil, &resp); err != nil {
+	var data morphoMarketByIDData
+	if err := providers.PostGraphQL(ctx, client, morphoGraphQLEndpoint, morphoMarketByIDQuery, map[string]any{
+		"chain": chainID,
+		"key":   marketID,
+	}, &data, "morpho"); err != nil {
 		return market, err
 	}
-	if len(resp.Errors) > 0 {
-		return market, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-	}
-	if len(resp.Data.Markets.Items) == 0 {
+	if len(data.Markets.Items) == 0 {
 		return market, clierr.New(clierr.CodeUsage, "morpho market-id not found for selected chain")
 	}
-	return resp.Data.Markets.Items[0], nil
+	return data.Markets.Items[0], nil
 }
 
-var morphoBlueABI = mustPlannerABI(registry.MorphoBlueABI)
+var morphoBlueABI = registry.MustParseABI(registry.MorphoBlueABI)

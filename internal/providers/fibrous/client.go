@@ -3,7 +3,6 @@ package fibrous
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -11,7 +10,6 @@ import (
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
-	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
@@ -55,12 +53,9 @@ type routeResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	if tradeType != providers.SwapTradeTypeExactInput {
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "fibrous supports only --type exact-input")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "fibrous", providers.SwapTradeTypeExactInput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	chainSlug, ok := chainSlugs[req.Chain.EVMChainID]
@@ -79,14 +74,8 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	vals.Set("tokenInAddress", req.FromAsset.Address)
 	vals.Set("tokenOutAddress", req.ToAsset.Address)
 
-	endpoint := fmt.Sprintf("%s/%s/route?%s", c.baseURL, chainSlug, vals.Encode())
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return model.SwapQuote{}, clierr.Wrap(clierr.CodeInternal, "build fibrous route request", err)
-	}
-
 	var resp routeResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, fmt.Sprintf("%s/%s/route?%s", c.baseURL, chainSlug, vals.Encode()), nil, &resp); err != nil {
 		return model.SwapQuote{}, err
 	}
 
@@ -112,11 +101,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: resp.OutputAmount,
-			AmountDecimal:   id.FormatDecimalCompat(resp.OutputAmount, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(resp.OutputAmount, req.ToAsset.Decimals),
 		EstimatedGasUSD: estimatedGasUSD,
 		PriceImpactPct:  0,
 		Route:           "fibrous",

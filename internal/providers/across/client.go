@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -58,14 +57,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 	vals.Set("token", req.FromAsset.Address)
 	vals.Set("amount", req.AmountBaseUnits)
 
-	limitsURL := c.baseURL + "/limits?" + vals.Encode()
-	limitsReq, err := http.NewRequestWithContext(ctx, http.MethodGet, limitsURL, nil)
-	if err != nil {
-		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeInternal, "build across limits request", err)
-	}
-
 	var limits map[string]any
-	if _, err := c.http.DoJSON(ctx, limitsReq, &limits); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/limits?"+vals.Encode(), nil, &limits); err != nil {
 		return model.BridgeQuote{}, err
 	}
 
@@ -73,14 +66,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		return model.BridgeQuote{}, clierr.New(clierr.CodeUsage, "amount is outside across bridge limits")
 	}
 
-	feesURL := c.baseURL + "/suggested-fees?" + vals.Encode()
-	feesReq, err := http.NewRequestWithContext(ctx, http.MethodGet, feesURL, nil)
-	if err != nil {
-		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeInternal, "build across fees request", err)
-	}
-
 	var fees map[string]any
-	if _, err := c.http.DoJSON(ctx, feesReq, &fees); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/suggested-fees?"+vals.Encode(), nil, &fees); err != nil {
 		return model.BridgeQuote{}, err
 	}
 
@@ -120,11 +107,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: estOut,
-			AmountDecimal:   id.FormatDecimalCompat(estOut, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(estOut, req.ToAsset.Decimals),
 		EstimatedFeeUSD: feeUSD,
 		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  estTime,
@@ -163,29 +146,20 @@ type swapApprovalResponse struct {
 }
 
 func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuoteRequest, opts providers.BridgeExecutionOptions) (execution.Action, error) {
-	sender := strings.TrimSpace(opts.Sender)
-	if sender == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution requires sender address")
+	sender, err := providers.ValidateEVMSender(opts.Sender, "bridge execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
-	if !common.IsHexAddress(sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution sender must be a valid EVM address")
-	}
-	recipient := strings.TrimSpace(opts.Recipient)
-	if recipient == "" {
-		recipient = sender
-	}
-	if !common.IsHexAddress(recipient) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution recipient must be a valid EVM address")
+	recipient, err := providers.ValidateEVMRecipient(opts.Recipient, sender, "bridge execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
 	if !common.IsHexAddress(req.FromAsset.Address) || !common.IsHexAddress(req.ToAsset.Address) {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution requires ERC20 token addresses for from/to assets")
 	}
-	slippageBps := opts.SlippageBps
-	if slippageBps <= 0 {
-		slippageBps = 50
-	}
-	if slippageBps >= 10_000 {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	slippageBps, err := providers.NormalizeSlippageBps(opts.SlippageBps)
+	if err != nil {
+		return execution.Action{}, err
 	}
 
 	vals := url.Values{}
@@ -196,15 +170,10 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	vals.Set("destinationChainId", strconv.FormatInt(req.ToChain.EVMChainID, 10))
 	vals.Set("depositor", sender)
 	vals.Set("recipient", recipient)
-	vals.Set("slippage", formatSlippage(slippageBps))
+	vals.Set("slippage", providers.FormatSlippageBps(slippageBps))
 
-	reqURL := c.baseURL + "/swap/approval?" + vals.Encode()
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "build across execution request", err)
-	}
 	var resp swapApprovalResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/swap/approval?"+vals.Encode(), nil, &resp); err != nil {
 		return execution.Action{}, err
 	}
 	if strings.TrimSpace(resp.SwapTx.To) == "" || strings.TrimSpace(resp.SwapTx.Data) == "" {
@@ -255,7 +224,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 			RPCURL:      rpcURL,
 			Description: "Approve across bridge contract for source token",
 			Target:      common.HexToAddress(approval.To).Hex(),
-			Data:        ensureHexPrefix(approval.Data),
+			Data:        providers.EnsureHexPrefix(approval.Data),
 			Value:       normalizeTransactionValue(approval.Value),
 		})
 	}
@@ -269,10 +238,10 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		RPCURL:      rpcURL,
 		Description: "Bridge transfer via Across",
 		Target:      common.HexToAddress(resp.SwapTx.To).Hex(),
-		Data:        ensureHexPrefix(resp.SwapTx.Data),
+		Data:        providers.EnsureHexPrefix(resp.SwapTx.Data),
 		Value:       swapValue,
 		ExpectedOutputs: map[string]string{
-			"to_amount_min":                firstNonEmpty(resp.MinOutputAmount, resp.ExpectedOutputAmount, resp.Steps.Bridge.OutputAmount),
+			"to_amount_min":                providers.FirstNonEmpty(resp.MinOutputAmount, resp.ExpectedOutputAmount, resp.Steps.Bridge.OutputAmount),
 			"settlement_provider":          "across",
 			"settlement_status_endpoint":   registry.AcrossSettlementURL,
 			"settlement_origin_chain":      strconv.FormatInt(req.FromChain.EVMChainID, 10),
@@ -338,29 +307,16 @@ func numberString(v any) string {
 }
 
 func floatValue(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		return t, true
-	case string:
-		if strings.TrimSpace(t) == "" {
-			return 0, false
-		}
-		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		if err != nil {
-			return 0, false
-		}
+	if f, ok := providers.ParseLooseFloat(v); ok {
 		return f, true
-	case map[string]any:
-		if f, ok := floatValue(t["usd"]); ok {
-			return f, true
-		}
-		if f, ok := floatValue(t["value"]); ok {
-			return f, true
-		}
-		return 0, false
-	default:
-		return 0, false
 	}
+	if m, ok := v.(map[string]any); ok {
+		if f, ok := providers.ParseLooseFloat(m["usd"]); ok {
+			return f, true
+		}
+		return providers.ParseLooseFloat(m["value"])
+	}
+	return 0, false
 }
 
 func buildAcrossFeeBreakdown(req providers.BridgeQuoteRequest, fees map[string]any, totalFeeBase, estimatedOut string, totalFeeUSD float64, hasProviderOutputAmount bool) *model.BridgeFeeBreakdown {
@@ -497,18 +453,6 @@ func toDigits(v string) string {
 	return trimLeadingZeros(v)
 }
 
-func formatSlippage(bps int64) string {
-	return strconv.FormatFloat(float64(bps)/10000, 'f', 6, 64)
-}
-
-func ensureHexPrefix(v string) string {
-	clean := strings.TrimSpace(v)
-	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
-		return clean
-	}
-	return "0x" + clean
-}
-
 func normalizeTransactionValue(v string) string {
 	clean := strings.TrimSpace(v)
 	if clean == "" {
@@ -525,13 +469,4 @@ func normalizeTransactionValue(v string) string {
 		return n.String()
 	}
 	return "0"
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }

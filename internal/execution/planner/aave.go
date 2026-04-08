@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -109,33 +110,13 @@ func BuildAaveLendAction(ctx context.Context, req AaveLendRequest) (execution.Ac
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave supply calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-supply",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Supply asset to Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply asset to Aave", poolAddr.Hex(), data)
 	case string(AaveVerbWithdraw):
 		data, err := aavePoolABI.Pack("withdraw", tokenAddr, amount, recipient)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave withdraw calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-withdraw",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Withdraw asset from Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-withdraw", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Withdraw asset from Aave", poolAddr.Hex(), data)
 	case string(AaveVerbBorrow):
 		rateMode := req.InterestRateMode
 		if rateMode == 0 {
@@ -148,17 +129,7 @@ func BuildAaveLendAction(ctx context.Context, req AaveLendRequest) (execution.Ac
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave borrow calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-borrow",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Borrow asset from Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-borrow", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Borrow asset from Aave", poolAddr.Hex(), data)
 	case string(AaveVerbRepay):
 		rateMode := req.InterestRateMode
 		if rateMode == 0 {
@@ -174,17 +145,7 @@ func BuildAaveLendAction(ctx context.Context, req AaveLendRequest) (execution.Ac
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave repay calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-repay",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Repay borrowed asset on Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-repay", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Repay borrowed asset on Aave", poolAddr.Hex(), data)
 	default:
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "unsupported lend action verb")
 	}
@@ -253,17 +214,7 @@ func BuildAaveRewardsClaimAction(ctx context.Context, req AaveRewardsClaimReques
 		"assets":            assets,
 		"amount_base_units": amount.String(),
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      "aave-claim-rewards",
-		Type:        execution.StepTypeClaim,
-		Status:      execution.StepStatusPending,
-		ChainID:     req.Chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: "Claim rewards from Aave incentives controller",
-		Target:      controller.Hex(),
-		Data:        "0x" + common.Bytes2Hex(data),
-		Value:       "0",
-	})
+	appendStep(&action, "aave-claim-rewards", execution.StepTypeClaim, req.Chain.CAIP2, rpcURL, "Claim rewards from Aave incentives controller", controller.Hex(), data)
 	return action, nil
 }
 
@@ -330,17 +281,7 @@ func BuildAaveRewardsCompoundAction(ctx context.Context, req AaveRewardsCompound
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave compound supply calldata", err)
 	}
-	claimAction.Steps = append(claimAction.Steps, execution.ActionStep{
-		StepID:      "aave-compound-supply",
-		Type:        execution.StepTypeLend,
-		Status:      execution.StepStatusPending,
-		ChainID:     req.Chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: "Supply claimed reward token to Aave",
-		Target:      poolAddr.Hex(),
-		Data:        "0x" + common.Bytes2Hex(supplyData),
-		Value:       "0",
-	})
+	appendStep(&claimAction, "aave-compound-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply claimed reward token to Aave", poolAddr.Hex(), supplyData)
 	claimAction.Metadata["pool"] = poolAddr.Hex()
 	claimAction.Metadata["on_behalf_of"] = onBehalfOf.Hex()
 	return claimAction, nil
@@ -386,43 +327,18 @@ func resolveAavePoolAddress(ctx context.Context, client *ethclient.Client, chain
 		}
 		return common.HexToAddress(poolAddress), nil
 	}
-	providerAddr := strings.TrimSpace(poolProvider)
-	if providerAddr == "" {
-		if discovered, ok := registry.AavePoolAddressProvider(chain.EVMChainID); ok {
-			providerAddr = discovered
+	provider, err := resolveAaveProviderAddr(chain, poolProvider)
+	if err != nil {
+		if ce, ok := clierr.As(err); ok && ce.Code == clierr.CodeUsage {
+			return common.Address{}, err
 		}
-	}
-	if providerAddr == "" {
 		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave pool address provider is unavailable for this chain; pass --pool-address or --pool-address-provider")
 	}
-	if !common.IsHexAddress(providerAddr) {
-		return common.Address{}, clierr.New(clierr.CodeUsage, "invalid --pool-address-provider")
-	}
-	provider := common.HexToAddress(providerAddr)
 	callData, err := aavePoolAddressProviderABI.Pack("getPool")
 	if err != nil {
 		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack getPool calldata", err)
 	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &provider, Data: callData}, nil)
-	if err != nil {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "fetch aave pool address", err)
-	}
-	decoded, err := aavePoolAddressProviderABI.Unpack("getPool", out)
-	if err != nil || len(decoded) == 0 {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "decode aave pool address", err)
-	}
-	pool, ok := decoded[0].(common.Address)
-	if !ok {
-		if ptr, ok := decoded[0].(*common.Address); ok && ptr != nil {
-			pool = *ptr
-		} else {
-			return common.Address{}, clierr.New(clierr.CodeUnavailable, "invalid aave pool response")
-		}
-	}
-	if pool == (common.Address{}) {
-		return common.Address{}, clierr.New(clierr.CodeUnavailable, "aave pool address is zero")
-	}
-	return pool, nil
+	return callContractForAddress(ctx, client, provider, aavePoolAddressProviderABI, "getPool", callData, "aave pool address")
 }
 
 func resolveIncentivesController(ctx context.Context, client *ethclient.Client, chain id.Chain, controllerAddress string, poolProvider string) (common.Address, error) {
@@ -432,6 +348,24 @@ func resolveIncentivesController(ctx context.Context, client *ethclient.Client, 
 		}
 		return common.HexToAddress(controllerAddress), nil
 	}
+	provider, err := resolveAaveProviderAddr(chain, poolProvider)
+	if err != nil {
+		if ce, ok := clierr.As(err); ok && ce.Code == clierr.CodeUsage {
+			return common.Address{}, err
+		}
+		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave incentives controller is unavailable for this chain; pass --controller-address")
+	}
+	slot := crypto.Keccak256Hash([]byte("INCENTIVES_CONTROLLER"))
+	callData, err := aavePoolAddressProviderABI.Pack("getAddress", slot)
+	if err != nil {
+		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack getAddress calldata", err)
+	}
+	return callContractForAddress(ctx, client, provider, aavePoolAddressProviderABI, "getAddress", callData, "incentives controller address")
+}
+
+// resolveAaveProviderAddr resolves the Aave pool address provider for a chain,
+// using the explicit value if given, otherwise falling back to the registry.
+func resolveAaveProviderAddr(chain id.Chain, poolProvider string) (common.Address, error) {
 	providerAddr := strings.TrimSpace(poolProvider)
 	if providerAddr == "" {
 		if discovered, ok := registry.AavePoolAddressProvider(chain.EVMChainID); ok {
@@ -439,55 +373,43 @@ func resolveIncentivesController(ctx context.Context, client *ethclient.Client, 
 		}
 	}
 	if providerAddr == "" {
-		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave incentives controller is unavailable for this chain; pass --controller-address")
+		return common.Address{}, fmt.Errorf("no provider address available")
 	}
 	if !common.IsHexAddress(providerAddr) {
 		return common.Address{}, clierr.New(clierr.CodeUsage, "invalid --pool-address-provider")
 	}
-	provider := common.HexToAddress(providerAddr)
-	slot := crypto.Keccak256Hash([]byte("INCENTIVES_CONTROLLER"))
-	callData, err := aavePoolAddressProviderABI.Pack("getAddress", slot)
+	return common.HexToAddress(providerAddr), nil
+}
+
+// callContractForAddress calls a contract method that returns a single address,
+// handling ABI unpacking, type assertion (value or pointer), and zero-address validation.
+func callContractForAddress(ctx context.Context, client *ethclient.Client, target common.Address, contractABI abi.ABI, method string, callData []byte, label string) (common.Address, error) {
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &target, Data: callData}, nil)
 	if err != nil {
-		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack getAddress calldata", err)
+		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "fetch "+label, err)
 	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &provider, Data: callData}, nil)
-	if err != nil {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "fetch incentives controller address", err)
-	}
-	decoded, err := aavePoolAddressProviderABI.Unpack("getAddress", out)
+	decoded, err := contractABI.Unpack(method, out)
 	if err != nil || len(decoded) == 0 {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "decode incentives controller address", err)
+		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "decode "+label, err)
 	}
-	controller, ok := decoded[0].(common.Address)
+	addr, ok := decoded[0].(common.Address)
 	if !ok {
 		if ptr, ok := decoded[0].(*common.Address); ok && ptr != nil {
-			controller = *ptr
+			addr = *ptr
 		} else {
-			return common.Address{}, clierr.New(clierr.CodeUnavailable, "invalid incentives controller response")
+			return common.Address{}, clierr.New(clierr.CodeUnavailable, "invalid "+label+" response")
 		}
 	}
-	if controller == (common.Address{}) {
-		return common.Address{}, clierr.New(clierr.CodeUnavailable, "incentives controller address is zero")
+	if addr == (common.Address{}) {
+		return common.Address{}, clierr.New(clierr.CodeUnavailable, label+" is zero")
 	}
-	return controller, nil
+	return addr, nil
 }
 
 func appendApprovalIfNeeded(ctx context.Context, client *ethclient.Client, action *execution.Action, chainID, rpcURL string, token, owner, spender common.Address, amount *big.Int, description string) error {
-	allowanceData, err := plannerERC20ABI.Pack("allowance", owner, spender)
+	currentAllowance, err := execution.ReadTokenAllowance(ctx, client, token, owner, spender)
 	if err != nil {
-		return clierr.Wrap(clierr.CodeInternal, "pack allowance calldata", err)
-	}
-	allowanceRaw, err := client.CallContract(ctx, ethereum.CallMsg{From: owner, To: &token, Data: allowanceData}, nil)
-	if err != nil {
-		return clierr.Wrap(clierr.CodeUnavailable, "read token allowance", err)
-	}
-	allowanceOut, err := plannerERC20ABI.Unpack("allowance", allowanceRaw)
-	if err != nil || len(allowanceOut) == 0 {
-		return clierr.Wrap(clierr.CodeUnavailable, "decode token allowance", err)
-	}
-	currentAllowance, ok := allowanceOut[0].(*big.Int)
-	if !ok {
-		return clierr.New(clierr.CodeUnavailable, "invalid allowance response")
+		return err
 	}
 	if currentAllowance.Cmp(amount) >= 0 {
 		return nil
@@ -496,17 +418,7 @@ func appendApprovalIfNeeded(ctx context.Context, client *ethclient.Client, actio
 	if err != nil {
 		return clierr.Wrap(clierr.CodeInternal, "pack approve calldata", err)
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      fmt.Sprintf("approve-%s", strings.TrimPrefix(strings.ToLower(token.Hex()), "0x")),
-		Type:        execution.StepTypeApproval,
-		Status:      execution.StepStatusPending,
-		ChainID:     chainID,
-		RPCURL:      rpcURL,
-		Description: description,
-		Target:      token.Hex(),
-		Data:        "0x" + common.Bytes2Hex(approveData),
-		Value:       "0",
-	})
+	appendStep(action, fmt.Sprintf("approve-%s", strings.TrimPrefix(strings.ToLower(token.Hex()), "0x")), execution.StepTypeApproval, chainID, rpcURL, description, token.Hex(), approveData)
 	return nil
 }
 
@@ -547,8 +459,8 @@ func parseRewardAmount(v string) (*big.Int, error) {
 	return amount, nil
 }
 
-var aavePoolAddressProviderABI = mustPlannerABI(registry.AavePoolAddressProviderABI)
+var aavePoolAddressProviderABI = registry.MustParseABI(registry.AavePoolAddressProviderABI)
 
-var aavePoolABI = mustPlannerABI(registry.AavePoolABI)
+var aavePoolABI = registry.MustParseABI(registry.AavePoolABI)
 
-var aaveRewardsABI = mustPlannerABI(registry.AaveRewardsABI)
+var aaveRewardsABI = registry.MustParseABI(registry.AaveRewardsABI)

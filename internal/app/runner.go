@@ -43,6 +43,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/taikoswap"
 	"github.com/ggonzalez94/defi-cli/internal/providers/tempo"
 	"github.com/ggonzalez94/defi-cli/internal/providers/uniswap"
+	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/ggonzalez94/defi-cli/internal/version"
@@ -359,12 +360,9 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ChainsTop(ctx, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ChainsTop(ctx, limit)
+			}))
 		},
 	}
 	topCmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
@@ -393,12 +391,9 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 				"limit": assetsLimit,
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
+			}))
 		},
 	}
 	assetsCmd.Flags().StringVar(&assetsChainArg, "chain", "", "Chain id/name/CAIP-2")
@@ -531,12 +526,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"category": category, "chain": chain, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsTop(ctx, category, chain, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsTop(ctx, category, chain, limit)
+			}))
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of protocols to return")
@@ -549,12 +541,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		Short: "List protocol categories with protocol counts and TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsCategories(ctx)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsCategories(ctx)
+			}))
 		},
 	}
 	root.AddCommand(catCmd)
@@ -568,12 +557,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"category": feesCategory, "chain": feesChain, "limit": feesLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsFees(ctx, feesCategory, feesChain, feesLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsFees(ctx, feesCategory, feesChain, feesLimit)
+			}))
 		},
 	}
 	feesCmd.Flags().IntVar(&feesLimit, "limit", 20, "Number of protocols to return")
@@ -590,12 +576,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"category": revCategory, "chain": revChain, "limit": revLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsRevenue(ctx, revCategory, revChain, revLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsRevenue(ctx, revCategory, revChain, revLimit)
+			}))
 		},
 	}
 	revCmd.Flags().IntVar(&revLimit, "limit", 20, "Number of protocols to return")
@@ -616,12 +599,9 @@ func (s *runtimeState) newDexesCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"chain": chain, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.DexesVolume(ctx, chain, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.DexesVolume(ctx, chain, limit)
+			}))
 		},
 	}
 	volCmd.Flags().IntVar(&limit, "limit", 20, "Number of DEXes to return")
@@ -641,12 +621,9 @@ func (s *runtimeState) newStablecoinsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"peg_type": pegType, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.StablecoinsTop(ctx, pegType, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.StablecoinsTop(ctx, pegType, limit)
+			}))
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of stablecoins to return")
@@ -660,12 +637,9 @@ func (s *runtimeState) newStablecoinsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"limit": chainsLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.StablecoinChains(ctx, chainsLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.StablecoinChains(ctx, chainsLimit)
+			}))
 		},
 	}
 	chainsCmd.Flags().IntVar(&chainsLimit, "limit", 20, "Number of chains to return")
@@ -723,96 +697,15 @@ func (s *runtimeState) newAssetsCommand() *cobra.Command {
 
 func (s *runtimeState) newLendCommand() *cobra.Command {
 	root := &cobra.Command{Use: "lend", Short: "Lending data"}
-	var providerArg string
-	var chainArg string
-	var assetArg string
-	var marketsLimit int
-	var marketsRPCURL string
 
-	marketsCmd := &cobra.Command{
-		Use:   "markets",
-		Short: "List lending markets",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := normalizeLendingProvider(providerArg)
-			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required")
-			}
-			chain, asset, err := parseChainAsset(chainArg, assetArg)
-			if err != nil {
-				return err
-			}
-			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": marketsLimit, "rpc_url": strings.TrimSpace(marketsRPCURL)}
-			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				provider, err := s.selectLendingProvider(providerName)
-				if err != nil {
-					return nil, nil, nil, false, err
-				}
-				applyRPCOverride(provider, marketsRPCURL)
-
-				start := time.Now()
-				data, err := provider.LendMarkets(ctx, providerName, chain, asset)
-				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				if err != nil {
-					return nil, statuses, nil, false, err
-				}
-				data = applyLendMarketLimit(data, marketsLimit)
-				return data, statuses, nil, false, nil
-			})
-		},
-	}
-	marketsCmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
-	marketsCmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
-	marketsCmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
-	marketsCmd.Flags().IntVar(&marketsLimit, "limit", 20, "Maximum lending markets to return")
-	marketsCmd.Flags().StringVar(&marketsRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
-	_ = marketsCmd.MarkFlagRequired("provider")
-	_ = marketsCmd.MarkFlagRequired("chain")
-	_ = marketsCmd.MarkFlagRequired("asset")
-
-	var ratesProvider, ratesChain, ratesAsset string
-	var ratesLimit int
-	var ratesRPCURL string
-	ratesCmd := &cobra.Command{
-		Use:   "rates",
-		Short: "List lending rates",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := normalizeLendingProvider(ratesProvider)
-			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required")
-			}
-			chain, asset, err := parseChainAsset(ratesChain, ratesAsset)
-			if err != nil {
-				return err
-			}
-			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": ratesLimit, "rpc_url": strings.TrimSpace(ratesRPCURL)}
-			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 30*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				provider, err := s.selectLendingProvider(providerName)
-				if err != nil {
-					return nil, nil, nil, false, err
-				}
-				applyRPCOverride(provider, ratesRPCURL)
-
-				start := time.Now()
-				data, err := provider.LendRates(ctx, providerName, chain, asset)
-				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				if err != nil {
-					return nil, statuses, nil, false, err
-				}
-				data = applyLendRateLimit(data, ratesLimit)
-				return data, statuses, nil, false, nil
-			})
-		},
-	}
-	ratesCmd.Flags().StringVar(&ratesProvider, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
-	ratesCmd.Flags().StringVar(&ratesChain, "chain", "", "Chain identifier")
-	ratesCmd.Flags().StringVar(&ratesAsset, "asset", "", "Asset (symbol/address/CAIP-19)")
-	ratesCmd.Flags().IntVar(&ratesLimit, "limit", 20, "Maximum lending rates to return")
-	ratesCmd.Flags().StringVar(&ratesRPCURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
-	_ = ratesCmd.MarkFlagRequired("provider")
-	_ = ratesCmd.MarkFlagRequired("chain")
-	_ = ratesCmd.MarkFlagRequired("asset")
+	marketsCmd := newLendingDataCommand(s, "markets", "List lending markets", 60*time.Second,
+		func(ctx context.Context, p providers.LendingProvider, name string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
+			return p.LendMarkets(ctx, name, chain, asset)
+		})
+	ratesCmd := newLendingDataCommand(s, "rates", "List lending rates", 30*time.Second,
+		func(ctx context.Context, p providers.LendingProvider, name string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
+			return p.LendRates(ctx, name, chain, asset)
+		})
 
 	var positionsProvider, positionsChain, positionsAddress, positionsAsset, positionsType, positionsRPCURL string
 	var positionsLimit int
@@ -820,7 +713,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 		Use:   "positions",
 		Short: "List lending positions for an account address",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := normalizeLendingProvider(positionsProvider)
+			providerName := providers.NormalizeLendingProvider(positionsProvider)
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
@@ -943,11 +836,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				return clierr.Wrap(clierr.CodeUsage, "resolve destination asset", err)
 			}
 
-			decimals := fromAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
-			}
-			base, decimal, err := id.NormalizeAmount(amountBase, amountDecimal, decimals)
+			base, decimal, err := normalizeAssetAmount(amountBase, amountDecimal, fromAsset.Decimals)
 			if err != nil {
 				return err
 			}
@@ -970,12 +859,9 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				"amount":              base,
 				"from_amount_for_gas": reqStruct.FromAmountForGas,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.QuoteBridge(ctx, reqStruct)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.QuoteBridge(ctx, reqStruct)
+			}))
 		},
 	}
 	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Bridge provider (across|lifi|bungee; no API key required)")
@@ -1020,12 +906,9 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				"limit":          req.Limit,
 				"include_chains": req.IncludeChains,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.ListBridges(ctx, req)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.ListBridges(ctx, req)
+			}))
 		},
 	}
 	listCmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum bridges to return")
@@ -1060,12 +943,9 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				"bridge":                  strings.ToLower(strings.TrimSpace(req.Bridge)),
 				"include_chain_breakdown": req.IncludeChainBreakdown,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.BridgeDetails(ctx, req)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.BridgeDetails(ctx, req)
+			}))
 		},
 	}
 	detailsCmd.Flags().StringVar(&bridgeArg, "bridge", "", "Bridge identifier (id, slug, or name)")
@@ -1136,11 +1016,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if amountOutBase != "" || amountOutDecimal != "" {
 				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "--amount-out/--amount-out-decimal are only valid with --type exact-output")
 			}
-			decimals := fromAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
-			}
-			base, decimal, err = id.NormalizeAmount(amountBase, amountDecimal, decimals)
+			base, decimal, err = normalizeAssetAmount(amountBase, amountDecimal, fromAsset.Decimals)
 			if err != nil {
 				return providers.SwapQuoteRequest{}, err
 			}
@@ -1151,11 +1027,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if amountOutBase == "" && amountOutDecimal == "" {
 				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "exact-output requires --amount-out or --amount-out-decimal")
 			}
-			decimals := toAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
-			}
-			base, decimal, err = id.NormalizeAmount(amountOutBase, amountOutDecimal, decimals)
+			base, decimal, err = normalizeAssetAmount(amountOutBase, amountOutDecimal, toAsset.Decimals)
 			if err != nil {
 				return providers.SwapQuoteRequest{}, err
 			}
@@ -1247,12 +1119,9 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				"swapper":       strings.ToLower(reqStruct.Swapper),
 				"rpc_url":       reqStruct.RPCURL,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.QuoteSwap(ctx, reqStruct)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.QuoteSwap(ctx, reqStruct)
+			}))
 		},
 	}
 	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
@@ -1323,22 +1192,6 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		SlippageBps      int64  `json:"slippage_bps" flag:"slippage-bps"`
 		Simulate         bool   `json:"simulate" flag:"simulate"`
 		RPCURL           string `json:"rpc_url" flag:"rpc-url" format:"url"`
-	}
-	type swapSubmitArgs struct {
-		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
-		Simulate           bool    `json:"simulate" flag:"simulate"`
-		Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
-		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
-		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
-		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
-		PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
-		StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
-		GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
-		MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
-		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
-		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
-		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
-		FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
 	}
 	var plan swapPlanArgs
 	planCmd := &cobra.Command{
@@ -1454,106 +1307,9 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		InputConstraints: swapPlanIdentityInputConstraints(),
 	})
 
-	var submit swapSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute a previously planned swap action",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			actionID, err := resolveActionID(submit.ActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "swap" {
-				return clierr.New(clierr.CodeUsage, "action is not a swap intent")
-			}
-			if action.Status == execution.ActionStatusCompleted {
-				return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, []string{"action already completed"}, cacheMetaBypass(), nil, false)
-			}
-
-			resolvedExec, err := resolveActionExecutionBackend(cmd, action, submitExecutionInputs{
-				Signer:      submit.Signer,
-				KeySource:   submit.KeySource,
-				PrivateKey:  submit.PrivateKey,
-				FromAddress: submit.FromAddress,
-			})
-			if err != nil {
-				return err
-			}
-			if err := validateExecutionSender(action, submit.FromAddress, resolvedExec.sender); err != nil {
-				return err
-			}
-			execOpts, err := parseExecuteOptions(
-				submit.Simulate,
-				submit.PollInterval,
-				submit.StepTimeout,
-				submit.GasMultiplier,
-				submit.MaxFeeGwei,
-				submit.MaxPriorityFeeGwei,
-				submit.AllowMaxApproval,
-				submit.UnsafeProviderTx,
-				submit.FeeToken,
-			)
-			if err != nil {
-				return err
-			}
-			if err := s.executeActionWithTimeout(&action, resolvedExec.txSigner, resolvedExec.evmBackend, execOpts); err != nil {
-				return err
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
-		},
-	}
-	submitCmd.Flags().StringVar(&submit.ActionID, "action-id", "", "Action identifier returned by swap plan")
-	submitCmd.Flags().BoolVar(&submit.Simulate, "simulate", true, "Run preflight simulation before submission")
-	submitCmd.Flags().StringVar(&submit.Signer, "signer", "local", "Signer backend (local|tempo)")
-	submitCmd.Flags().StringVar(&submit.KeySource, "key-source", execsigner.KeySourceAuto, "Key source (auto|env|file|keystore)")
-	submitCmd.Flags().StringVar(&submit.PrivateKey, "private-key", "", "Private key hex override for local signer (less safe)")
-	submitCmd.Flags().StringVar(&submit.FromAddress, "from-address", "", "Expected sender EOA address")
-	submitCmd.Flags().StringVar(&submit.PollInterval, "poll-interval", "2s", "Receipt polling interval")
-	submitCmd.Flags().StringVar(&submit.StepTimeout, "step-timeout", "2m", "Per-step receipt timeout")
-	submitCmd.Flags().Float64Var(&submit.GasMultiplier, "gas-multiplier", 1.2, "Gas estimate safety multiplier")
-	submitCmd.Flags().StringVar(&submit.MaxFeeGwei, "max-fee-gwei", "", "Optional EIP-1559 max fee (gwei)")
-	submitCmd.Flags().StringVar(&submit.MaxPriorityFeeGwei, "max-priority-fee-gwei", "", "Optional EIP-1559 max priority fee (gwei)")
-	submitCmd.Flags().BoolVar(&submit.AllowMaxApproval, "allow-max-approval", false, "Allow approval amounts greater than planned input amount")
-	submitCmd.Flags().BoolVar(&submit.UnsafeProviderTx, "unsafe-provider-tx", false, "Bypass provider transaction guardrails for bridge/aggregator payloads")
-	submitCmd.Flags().StringVar(&submit.FeeToken, "fee-token", "", "Fee token address for Tempo chains (defaults to chain USDC.e)")
-	annotateStructuredSubmitCommand(submitCmd, swapSubmitArgs{})
-
-	var statusActionID string
-	statusCmd := &cobra.Command{
-		Use:   "status",
-		Short: "Get swap action status",
-		RunE: func(cmd *cobra.Command, args []string) error {
-			actionID, err := resolveActionID(statusActionID)
-			if err != nil {
-				return err
-			}
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			action, err := s.actionStore.Get(actionID)
-			if err != nil {
-				return clierr.Wrap(clierr.CodeUsage, "load action", err)
-			}
-			if action.IntentType != "swap" {
-				return clierr.New(clierr.CodeUsage, "action is not a swap intent")
-			}
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
-		},
-	}
-	statusCmd.Flags().StringVar(&statusActionID, "action-id", "", "Action identifier returned by swap plan")
-	annotateExecutionStatusCommand(statusCmd)
-
 	root.AddCommand(quoteCmd)
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "swap", "swap", "action is not a swap intent")
 	return root
 }
 
@@ -1741,10 +1497,8 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				}
 
 				combined = dedupeYieldByOpportunityID(combined)
-				sortYieldOpportunities(combined, req.SortBy)
-				if req.Limit > 0 && len(combined) > req.Limit {
-					combined = combined[:req.Limit]
-				}
+				yieldutil.Sort(combined, req.SortBy)
+				combined = providers.ApplyLimit(combined, req.Limit)
 				if opportunitiesIncludeIncomplete {
 					warnings = append(warnings, fmt.Sprintf("returned %d combined opportunities across %d provider(s)", len(combined), len(selectedProviders)))
 				}
@@ -1856,10 +1610,8 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 					return nil, statuses, warnings, partial, clierr.New(clierr.CodeUnavailable, "no yield positions returned by selected providers")
 				}
 
-				sortYieldPositions(combined)
-				if positionsLimit > 0 && len(combined) > positionsLimit {
-					combined = combined[:positionsLimit]
-				}
+				providers.SortYieldPositions(combined)
+				combined = providers.ApplyLimit(combined, positionsLimit)
 				return combined, statuses, warnings, partial, nil
 			})
 		},
@@ -1967,9 +1719,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 					if len(opportunityIDSet) > 0 {
 						opportunities = filterYieldOpportunitiesByID(opportunities, opportunityIDSet)
 					}
-					if historyLimit > 0 && len(opportunities) > historyLimit {
-						opportunities = opportunities[:historyLimit]
-					}
+					opportunities = providers.ApplyLimit(opportunities, historyLimit)
 					if len(opportunities) == 0 {
 						providerErr = clierr.New(clierr.CodeUnavailable, fmt.Sprintf("provider %s returned no matching opportunities", providerName))
 						statuses = append(statuses, model.ProviderStatus{Name: provider.Info().Name, Status: statusFromErr(providerErr), LatencyMS: time.Since(providerStart).Milliseconds()})
@@ -2044,6 +1794,66 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 }
 
 type fetchFn func(ctx context.Context) (data any, providerStatus []model.ProviderStatus, warnings []string, partial bool, err error)
+
+// newLendingDataCommand creates a standard lending data subcommand (e.g. "markets", "rates")
+// with provider/chain/asset/limit/rpc-url flags and the common cached fetch-from-provider pattern.
+func newLendingDataCommand[T any](s *runtimeState, use, short string, ttl time.Duration, callFn func(ctx context.Context, provider providers.LendingProvider, name string, chain id.Chain, asset id.Asset) ([]T, error)) *cobra.Command {
+	var providerArg, chainArg, assetArg, rpcURL string
+	var limit int
+	cmd := &cobra.Command{
+		Use: use, Short: short,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			providerName := providers.NormalizeLendingProvider(providerArg)
+			if providerName == "" {
+				return clierr.New(clierr.CodeUsage, "--provider is required")
+			}
+			chain, asset, err := parseChainAsset(chainArg, assetArg)
+			if err != nil {
+				return err
+			}
+			req := map[string]any{"provider": providerName, "chain": chain.CAIP2, "asset": asset.AssetID, "limit": limit, "rpc_url": strings.TrimSpace(rpcURL)}
+			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, ttl, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+				provider, err := s.selectLendingProvider(providerName)
+				if err != nil {
+					return nil, nil, nil, false, err
+				}
+				applyRPCOverride(provider, rpcURL)
+				start := time.Now()
+				data, err := callFn(ctx, provider, providerName, chain, asset)
+				statuses := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+				if err != nil {
+					return nil, statuses, nil, false, err
+				}
+				return providers.ApplyLimit(data, limit), statuses, nil, false, nil
+			})
+		},
+	}
+	cmd.Flags().StringVar(&providerArg, "provider", "", "Lending provider (aave, morpho, kamino, moonwell)")
+	cmd.Flags().StringVar(&chainArg, "chain", "", "Chain identifier")
+	cmd.Flags().StringVar(&assetArg, "asset", "", "Asset (symbol/address/CAIP-19)")
+	cmd.Flags().IntVar(&limit, "limit", 20, fmt.Sprintf("Maximum lending %s to return", use))
+	cmd.Flags().StringVar(&rpcURL, "rpc-url", "", "Optional RPC URL override for on-chain providers")
+	_ = cmd.MarkFlagRequired("provider")
+	_ = cmd.MarkFlagRequired("chain")
+	_ = cmd.MarkFlagRequired("asset")
+	return cmd
+}
+
+// singleProviderQuery wraps a single provider call with timing and status tracking.
+func singleProviderQuery(providerName string, fn func(ctx context.Context) (any, error)) fetchFn {
+	return func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		start := time.Now()
+		data, err := fn(ctx)
+		status := []model.ProviderStatus{{Name: providerName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+		return data, status, nil, false, err
+	}
+}
+
+// marketQuery wraps a single marketProvider call with timing and status tracking.
+func (s *runtimeState) marketQuery(fn func(ctx context.Context) (any, error)) fetchFn {
+	return singleProviderQuery(s.marketProvider.Info().Name, fn)
+}
 
 func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Duration, fetch fetchFn) error {
 	s.resetCommandDiagnostics()
@@ -2214,10 +2024,6 @@ func (s *runtimeState) renderError(commandPath string, err error, warnings []str
 	_ = out.Render(s.runner.stderr, env, settings)
 }
 
-func normalizeLendingProvider(input string) string {
-	return providers.NormalizeLendingProvider(input)
-}
-
 func parseLendPositionType(input string) (providers.LendPositionType, error) {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case "", string(providers.LendPositionTypeAll):
@@ -2291,7 +2097,7 @@ func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpp
 	byID := make(map[string]model.YieldOpportunity, len(items))
 	for _, item := range items {
 		existing, ok := byID[item.OpportunityID]
-		if !ok || compareYieldOpportunities(item, existing, "apy_total") {
+		if !ok || yieldutil.Compare(item, existing, "apy_total") {
 			byID[item.OpportunityID] = item
 		}
 	}
@@ -2302,42 +2108,6 @@ func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpp
 	return out
 }
 
-func sortYieldOpportunities(items []model.YieldOpportunity, sortBy string) {
-	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
-	if sortBy == "" {
-		sortBy = "apy_total"
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return compareYieldOpportunities(items[i], items[j], sortBy)
-	})
-}
-
-func compareYieldOpportunities(a, b model.YieldOpportunity, sortBy string) bool {
-	switch sortBy {
-	case "tvl_usd":
-		if a.TVLUSD != b.TVLUSD {
-			return a.TVLUSD > b.TVLUSD
-		}
-	case "liquidity_usd":
-		if a.LiquidityUSD != b.LiquidityUSD {
-			return a.LiquidityUSD > b.LiquidityUSD
-		}
-	default:
-		if a.APYTotal != b.APYTotal {
-			return a.APYTotal > b.APYTotal
-		}
-	}
-	if a.APYTotal != b.APYTotal {
-		return a.APYTotal > b.APYTotal
-	}
-	if a.TVLUSD != b.TVLUSD {
-		return a.TVLUSD > b.TVLUSD
-	}
-	if a.LiquidityUSD != b.LiquidityUSD {
-		return a.LiquidityUSD > b.LiquidityUSD
-	}
-	return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
-}
 
 func filterYieldOpportunitiesByID(items []model.YieldOpportunity, ids map[string]struct{}) []model.YieldOpportunity {
 	if len(ids) == 0 {
@@ -2373,24 +2143,6 @@ func sortYieldHistorySeries(items []model.YieldHistorySeries) {
 			return a.Interval < b.Interval
 		}
 		return strings.Compare(a.StartTime, b.StartTime) < 0
-	})
-}
-
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].Provider != items[j].Provider {
-			return items[i].Provider < items[j].Provider
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
 	})
 }
 
@@ -2526,20 +2278,6 @@ func applyRPCOverride(provider any, rpcURL string) {
 			p.SetRPCOverride(url)
 		}
 	}
-}
-
-func applyLendMarketLimit(items []model.LendMarket, limit int) []model.LendMarket {
-	if limit <= 0 || len(items) <= limit {
-		return items
-	}
-	return items[:limit]
-}
-
-func applyLendRateLimit(items []model.LendRate, limit int) []model.LendRate {
-	if limit <= 0 || len(items) <= limit {
-		return items
-	}
-	return items[:limit]
 }
 
 func parseChainAsset(chainArg, assetArg string) (id.Chain, id.Asset, error) {

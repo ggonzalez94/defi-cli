@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -22,9 +20,9 @@ import (
 var (
 	feeTiers = []uint32{100, 500, 3000, 10000}
 
-	quoterABI = mustABI(registry.UniswapV3QuoterV2ABI)
-	erc20ABI  = mustABI(registry.ERC20MinimalABI)
-	routerABI = mustABI(registry.UniswapV3RouterABI)
+	quoterABI = registry.MustParseABI(registry.UniswapV3QuoterV2ABI)
+	erc20ABI  = registry.MustParseABI(registry.ERC20MinimalABI)
+	routerABI = registry.MustParseABI(registry.UniswapV3RouterABI)
 )
 
 type Client struct {
@@ -92,11 +90,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
 		InputAmount: model.AmountInfo{AmountBaseUnits: req.AmountBaseUnits, AmountDecimal: req.AmountDecimal, Decimals: req.FromAsset.Decimals},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: quoteOut.String(),
-			AmountDecimal:   id.FormatDecimalCompat(quoteOut.String(), req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(quoteOut.String(), req.ToAsset.Decimals),
 		EstimatedGasUSD: 0,
 		PriceImpactPct:  0,
 		Route:           fmt.Sprintf("taikoswap-v3-fee-%d", bestFee),
@@ -106,12 +100,9 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 }
 
 func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, error) {
-	sender := strings.TrimSpace(opts.Sender)
-	if sender == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution requires sender address")
-	}
-	if !common.IsHexAddress(sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution sender must be a valid EVM address")
+	sender, err := providers.ValidateEVMSender(opts.Sender, "swap execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
 	rpcURL, quoter, router, err := c.chainConfig(req.Chain, opts.RPCURL)
 	if err != nil {
@@ -129,12 +120,9 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	}
 	fromToken := common.HexToAddress(req.FromAsset.Address)
 	toToken := common.HexToAddress(req.ToAsset.Address)
-	recipient := strings.TrimSpace(opts.Recipient)
-	if recipient == "" {
-		recipient = sender
-	}
-	if !common.IsHexAddress(recipient) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution recipient must be a valid EVM address")
+	recipient, err := providers.ValidateEVMRecipient(opts.Recipient, sender, "swap execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
 	recipientAddr := common.HexToAddress(recipient)
 	senderAddr := common.HexToAddress(sender)
@@ -143,12 +131,9 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	if err != nil {
 		return execution.Action{}, err
 	}
-	slippage := opts.SlippageBps
-	if slippage <= 0 {
-		slippage = 50
-	}
-	if slippage >= 10_000 {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	slippage, err := providers.NormalizeSlippageBps(opts.SlippageBps)
+	if err != nil {
+		return execution.Action{}, err
 	}
 	amountOutMin := new(big.Int).Mul(quotedOut, big.NewInt(10_000-slippage))
 	amountOutMin.Div(amountOutMin, big.NewInt(10_000))
@@ -166,23 +151,10 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 		"amount_out_min": amountOutMin.String(),
 	}
 
-	allowanceData, err := erc20ABI.Pack("allowance", senderAddr, router)
+	allowance, err := execution.ReadTokenAllowance(ctx, client, fromToken, senderAddr, router)
 	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack allowance call", err)
+		return execution.Action{}, err
 	}
-	allowanceOut, err := client.CallContract(ctx, ethereum.CallMsg{From: senderAddr, To: &fromToken, Data: allowanceData}, nil)
-	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "read allowance", err)
-	}
-	values, err := erc20ABI.Unpack("allowance", allowanceOut)
-	if err != nil || len(values) == 0 {
-		return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "decode allowance", err)
-	}
-	allowance, ok := values[0].(*big.Int)
-	if !ok {
-		return execution.Action{}, clierr.New(clierr.CodeUnavailable, "invalid allowance response")
-	}
-
 	if allowance.Cmp(amountIn) < 0 {
 		approveData, err := erc20ABI.Pack("approve", router, amountIn)
 		if err != nil {
@@ -287,10 +259,3 @@ func quoteBestFee(ctx context.Context, client *ethclient.Client, quoter, tokenIn
 	return bestOut, bestFee, bestGas, nil
 }
 
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}

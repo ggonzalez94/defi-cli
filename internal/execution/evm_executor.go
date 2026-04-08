@@ -5,28 +5,25 @@ import (
 	"fmt"
 	"math/big"
 	"strings"
-	"sync"
 
 	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/core/types"
-	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 )
 
 // EVMStepExecutor executes action steps as EIP-1559 transactions on
 // EVM-compatible chains. It manages its own RPC client connections internally.
 type EVMStepExecutor struct {
-	backend    EVMSubmitBackend
-	rpcClients map[string]*ethclient.Client
-	mu         sync.Mutex
+	backend EVMSubmitBackend
+	rpcPool
 }
 
 // NewEVMStepExecutor creates an EVMStepExecutor backed by the given submit backend.
 func NewEVMStepExecutor(backend EVMSubmitBackend) *EVMStepExecutor {
 	return &EVMStepExecutor{
-		backend:    backend,
-		rpcClients: make(map[string]*ethclient.Client),
+		backend: backend,
+		rpcPool: newRPCPool(),
 	}
 }
 
@@ -36,33 +33,6 @@ func (e *EVMStepExecutor) EffectiveSender() common.Address {
 		return common.Address{}
 	}
 	return e.backend.EffectiveSender()
-}
-
-// Close closes all cached RPC client connections.
-func (e *EVMStepExecutor) Close() {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	for _, client := range e.rpcClients {
-		if client != nil {
-			client.Close()
-		}
-	}
-	e.rpcClients = make(map[string]*ethclient.Client)
-}
-
-// getClient returns a cached or newly created ethclient for the given RPC URL.
-func (e *EVMStepExecutor) getClient(ctx context.Context, rpcURL string) (*ethclient.Client, error) {
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	if client := e.rpcClients[rpcURL]; client != nil {
-		return client, nil
-	}
-	client, err := ethclient.DialContext(ctx, rpcURL)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
-	}
-	e.rpcClients[rpcURL] = client
-	return client, nil
 }
 
 // ExecuteStep executes a single action step as an EIP-1559 transaction.
@@ -111,16 +81,7 @@ func (e *EVMStepExecutor) ExecuteStep(ctx context.Context, store *Store, action 
 	}
 	msg := ethereum.CallMsg{From: sender, To: &target, Value: value, Data: data}
 
-	// Build a persist callback for the receipt-polling phase.
-	persist := func() error {
-		action.Touch()
-		if store != nil {
-			if err := store.Save(*action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
-			}
-		}
-		return nil
-	}
+	persist := makePersist(action, store)
 
 	if txHash, ok := normalizeStepTxHash(step.TxHash); ok {
 		step.Status = StepStatusSubmitted
@@ -156,19 +117,7 @@ func (e *EVMStepExecutor) ExecuteStep(ctx context.Context, store *Store, action 
 		return clierr.New(clierr.CodeActionSim, "estimate gas returned zero")
 	}
 
-	tipCap, err := resolveTipCap(ctx, client, opts.MaxPriorityFeeGwei)
-	if err != nil {
-		return err
-	}
-	header, err := client.HeaderByNumber(ctx, nil)
-	if err != nil {
-		return clierr.Wrap(clierr.CodeUnavailable, "fetch latest header", err)
-	}
-	baseFee := header.BaseFee
-	if baseFee == nil {
-		baseFee = big.NewInt(1_000_000_000)
-	}
-	feeCap, err := resolveFeeCap(baseFee, tipCap, opts.MaxFeeGwei)
+	tipCap, feeCap, err := resolveEIP1559Fees(ctx, client, opts)
 	if err != nil {
 		return err
 	}
