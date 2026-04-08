@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"math"
 	"math/big"
-	"sort"
 	"strings"
 	"time"
 
@@ -123,12 +122,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TVLUSD != out[j].TVLUSD {
-			return out[i].TVLUSD > out[j].TVLUSD
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendMarkets(out)
 	return out, nil
 }
 
@@ -166,12 +160,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SupplyAPY != out[j].SupplyAPY {
-			return out[i].SupplyAPY > out[j].SupplyAPY
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendRates(out)
 	return out, nil
 }
 

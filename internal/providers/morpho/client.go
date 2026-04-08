@@ -463,12 +463,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].TVLUSD != out[j].TVLUSD {
-			return out[i].TVLUSD > out[j].TVLUSD
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendMarkets(out)
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "no morpho lending market for requested chain/asset")
 	}
@@ -501,12 +496,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 		})
 	}
 
-	sort.Slice(out, func(i, j int) bool {
-		if out[i].SupplyAPY != out[j].SupplyAPY {
-			return out[i].SupplyAPY > out[j].SupplyAPY
-		}
-		return out[i].AssetID < out[j].AssetID
-	})
+	providers.SortLendRates(out)
 	if len(out) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "no morpho lending rates for requested chain/asset")
 	}
@@ -1152,9 +1142,7 @@ func convertMorphoPoints(points []morphoFloatDataPoint, percent bool) []model.Yi
 			Value:     val,
 		})
 	}
-	sort.Slice(out, func(i, j int) bool {
-		return strings.Compare(out[i].Timestamp, out[j].Timestamp) < 0
-	})
+	providers.SortHistoryPoints(out)
 	return out
 }
 

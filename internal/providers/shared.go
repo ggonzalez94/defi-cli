@@ -18,6 +18,26 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 )
 
+// SortLendMarkets sorts lend markets by TVL desc, then asset ID asc.
+func SortLendMarkets(items []model.LendMarket) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].TVLUSD != items[j].TVLUSD {
+			return items[i].TVLUSD > items[j].TVLUSD
+		}
+		return items[i].AssetID < items[j].AssetID
+	})
+}
+
+// SortLendRates sorts lend rates by supply APY desc, then asset ID asc.
+func SortLendRates(items []model.LendRate) {
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].SupplyAPY != items[j].SupplyAPY {
+			return items[i].SupplyAPY > items[j].SupplyAPY
+		}
+		return items[i].AssetID < items[j].AssetID
+	})
+}
+
 // SortLendPositions sorts lend positions by USD value desc, then type, asset, native ID.
 func SortLendPositions(items []model.LendPosition) {
 	sort.Slice(items, func(i, j int) bool {
@@ -253,7 +273,7 @@ func FinalizeYieldOpportunities(out []model.YieldOpportunity, provider, sortBy s
 // SortHistoryPoints sorts yield history points by timestamp ascending.
 func SortHistoryPoints(points []model.YieldHistoryPoint) {
 	sort.Slice(points, func(i, j int) bool {
-		return strings.Compare(points[i].Timestamp, points[j].Timestamp) < 0
+		return points[i].Timestamp < points[j].Timestamp
 	})
 }
 
