@@ -184,6 +184,46 @@ func ParseFloat(v string) float64 {
 	return f
 }
 
+func ParseLooseFloat(v any) (float64, bool) {
+	switch t := v.(type) {
+	case float64:
+		if math.IsNaN(t) || math.IsInf(t, 0) {
+			return 0, false
+		}
+		return t, true
+	case json.Number:
+		n, err := t.Float64()
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	case string:
+		value := strings.TrimSpace(t)
+		if value == "" {
+			return 0, false
+		}
+		n, err := strconv.ParseFloat(value, 64)
+		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
+			return 0, false
+		}
+		return n, true
+	case int:
+		return float64(t), true
+	case int64:
+		return float64(t), true
+	case int32:
+		return float64(t), true
+	case uint:
+		return float64(t), true
+	case uint64:
+		return float64(t), true
+	case uint32:
+		return float64(t), true
+	default:
+		return 0, false
+	}
+}
+
 // FirstNonEmpty returns the first non-blank value from the list, trimmed.
 func FirstNonEmpty(values ...string) string {
 	for _, v := range values {

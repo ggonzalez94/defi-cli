@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/url"
 	"sort"
 	"strconv"
@@ -1024,7 +1023,7 @@ func parseChainAssetBreakdown(raw json.RawMessage) (map[string]float64, error) {
 			if normSymbol == "" {
 				continue
 			}
-			amount, ok := parseLooseFloat(value)
+			amount, ok := providers.ParseLooseFloat(value)
 			if !ok || amount <= 0 {
 				continue
 			}
@@ -1032,46 +1031,6 @@ func parseChainAssetBreakdown(raw json.RawMessage) (map[string]float64, error) {
 		}
 	}
 	return out, nil
-}
-
-func parseLooseFloat(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		if math.IsNaN(t) || math.IsInf(t, 0) {
-			return 0, false
-		}
-		return t, true
-	case json.Number:
-		n, err := t.Float64()
-		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
-			return 0, false
-		}
-		return n, true
-	case string:
-		value := strings.TrimSpace(t)
-		if value == "" {
-			return 0, false
-		}
-		n, err := strconv.ParseFloat(value, 64)
-		if err != nil || math.IsNaN(n) || math.IsInf(n, 0) {
-			return 0, false
-		}
-		return n, true
-	case int:
-		return float64(t), true
-	case int64:
-		return float64(t), true
-	case int32:
-		return float64(t), true
-	case uint:
-		return float64(t), true
-	case uint64:
-		return float64(t), true
-	case uint32:
-		return float64(t), true
-	default:
-		return 0, false
-	}
 }
 
 func knownAssetID(chain id.Chain, symbol string) string {

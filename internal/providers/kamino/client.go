@@ -549,25 +549,7 @@ func parseHistoryMetric(metrics map[string]any, key string) (float64, bool) {
 	if !ok {
 		return 0, false
 	}
-	switch v := value.(type) {
-	case float64:
-		if math.IsNaN(v) || math.IsInf(v, 0) {
-			return 0, false
-		}
-		return v, true
-	case int:
-		return float64(v), true
-	case int64:
-		return float64(v), true
-	case string:
-		f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-		if err != nil || math.IsNaN(f) || math.IsInf(f, 0) {
-			return 0, false
-		}
-		return f, true
-	default:
-		return 0, false
-	}
+	return providers.ParseLooseFloat(value)
 }
 
 func reserveAssetID(chainID, fallbackAssetID, mint string) string {

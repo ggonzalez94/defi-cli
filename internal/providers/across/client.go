@@ -307,29 +307,16 @@ func numberString(v any) string {
 }
 
 func floatValue(v any) (float64, bool) {
-	switch t := v.(type) {
-	case float64:
-		return t, true
-	case string:
-		if strings.TrimSpace(t) == "" {
-			return 0, false
-		}
-		f, err := strconv.ParseFloat(strings.TrimSpace(t), 64)
-		if err != nil {
-			return 0, false
-		}
+	if f, ok := providers.ParseLooseFloat(v); ok {
 		return f, true
-	case map[string]any:
-		if f, ok := floatValue(t["usd"]); ok {
-			return f, true
-		}
-		if f, ok := floatValue(t["value"]); ok {
-			return f, true
-		}
-		return 0, false
-	default:
-		return 0, false
 	}
+	if m, ok := v.(map[string]any); ok {
+		if f, ok := providers.ParseLooseFloat(m["usd"]); ok {
+			return f, true
+		}
+		return providers.ParseLooseFloat(m["value"])
+	}
+	return 0, false
 }
 
 func buildAcrossFeeBreakdown(req providers.BridgeQuoteRequest, fees map[string]any, totalFeeBase, estimatedOut string, totalFeeUSD float64, hasProviderOutputAmount bool) *model.BridgeFeeBreakdown {
