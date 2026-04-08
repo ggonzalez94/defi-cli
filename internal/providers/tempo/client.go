@@ -118,19 +118,13 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 }
 
 func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteRequest, opts providers.SwapExecutionOptions) (execution.Action, error) {
-	sender := strings.TrimSpace(opts.Sender)
-	if sender == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution requires sender address")
+	sender, err := providers.ValidateEVMSender(opts.Sender, "swap execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
-	if !common.IsHexAddress(sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution sender must be a valid EVM address")
-	}
-	recipient := strings.TrimSpace(opts.Recipient)
-	if recipient == "" {
-		recipient = sender
-	}
-	if !common.IsHexAddress(recipient) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "swap execution recipient must be a valid EVM address")
+	recipient, err := providers.ValidateEVMRecipient(opts.Recipient, sender, "swap execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
 	if !strings.EqualFold(recipient, sender) {
 		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "tempo swap execution currently settles to the sender only; omit --recipient or set it equal to --from-address")
@@ -160,12 +154,9 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	if err != nil {
 		return execution.Action{}, err
 	}
-	slippage := opts.SlippageBps
-	if slippage <= 0 {
-		slippage = 50
-	}
-	if slippage >= 10_000 {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	slippage, err := providers.NormalizeSlippageBps(opts.SlippageBps)
+	if err != nil {
+		return execution.Action{}, err
 	}
 
 	tokenIn := common.HexToAddress(req.FromAsset.Address)

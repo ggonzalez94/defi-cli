@@ -159,29 +159,20 @@ type swapApprovalResponse struct {
 }
 
 func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuoteRequest, opts providers.BridgeExecutionOptions) (execution.Action, error) {
-	sender := strings.TrimSpace(opts.Sender)
-	if sender == "" {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution requires sender address")
+	sender, err := providers.ValidateEVMSender(opts.Sender, "bridge execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
-	if !common.IsHexAddress(sender) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution sender must be a valid EVM address")
-	}
-	recipient := strings.TrimSpace(opts.Recipient)
-	if recipient == "" {
-		recipient = sender
-	}
-	if !common.IsHexAddress(recipient) {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution recipient must be a valid EVM address")
+	recipient, err := providers.ValidateEVMRecipient(opts.Recipient, sender, "bridge execution")
+	if err != nil {
+		return execution.Action{}, err
 	}
 	if !common.IsHexAddress(req.FromAsset.Address) || !common.IsHexAddress(req.ToAsset.Address) {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "bridge execution requires ERC20 token addresses for from/to assets")
 	}
-	slippageBps := opts.SlippageBps
-	if slippageBps <= 0 {
-		slippageBps = 50
-	}
-	if slippageBps >= 10_000 {
-		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	slippageBps, err := providers.NormalizeSlippageBps(opts.SlippageBps)
+	if err != nil {
+		return execution.Action{}, err
 	}
 
 	vals := url.Values{}

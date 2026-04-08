@@ -9,6 +9,9 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/ethereum/go-ethereum/common"
+
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 )
@@ -177,4 +180,40 @@ func EnsureHexPrefix(v string) string {
 		return clean
 	}
 	return "0x" + clean
+}
+
+// ValidateEVMSender validates and returns a trimmed sender address.
+// The operation string is used in error messages (e.g. "bridge execution", "swap execution").
+func ValidateEVMSender(sender, operation string) (string, error) {
+	s := strings.TrimSpace(sender)
+	if s == "" {
+		return "", clierr.New(clierr.CodeUsage, operation+" requires sender address")
+	}
+	if !common.IsHexAddress(s) {
+		return "", clierr.New(clierr.CodeUsage, operation+" sender must be a valid EVM address")
+	}
+	return s, nil
+}
+
+// ValidateEVMRecipient validates and returns a trimmed recipient address, defaulting to sender if empty.
+func ValidateEVMRecipient(recipient, sender, operation string) (string, error) {
+	r := strings.TrimSpace(recipient)
+	if r == "" {
+		r = sender
+	}
+	if !common.IsHexAddress(r) {
+		return "", clierr.New(clierr.CodeUsage, operation+" recipient must be a valid EVM address")
+	}
+	return r, nil
+}
+
+// NormalizeSlippageBps returns a validated slippage value, defaulting to 50 bps if non-positive.
+func NormalizeSlippageBps(bps int64) (int64, error) {
+	if bps <= 0 {
+		bps = 50
+	}
+	if bps >= 10_000 {
+		return 0, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
+	}
+	return bps, nil
 }
