@@ -18,40 +18,44 @@ func PositiveFirst(values ...float64) float64 {
 }
 
 func Sort(items []model.YieldOpportunity, sortBy string) {
-	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
-	if sortBy == "" {
-		sortBy = "apy_total"
-	}
-
+	sortBy = normalizeSortBy(sortBy)
 	sort.Slice(items, func(i, j int) bool {
-		a, b := items[i], items[j]
-		switch sortBy {
-		case "apy_total":
-			if a.APYTotal != b.APYTotal {
-				return a.APYTotal > b.APYTotal
-			}
-		case "tvl_usd":
-			if a.TVLUSD != b.TVLUSD {
-				return a.TVLUSD > b.TVLUSD
-			}
-		case "liquidity_usd":
-			if a.LiquidityUSD != b.LiquidityUSD {
-				return a.LiquidityUSD > b.LiquidityUSD
-			}
-		default:
-			if a.APYTotal != b.APYTotal {
-				return a.APYTotal > b.APYTotal
-			}
-		}
-		if a.APYTotal != b.APYTotal {
-			return a.APYTotal > b.APYTotal
-		}
+		return Compare(items[i], items[j], sortBy)
+	})
+}
+
+// Compare reports whether a should sort before b for the given sortBy key.
+func Compare(a, b model.YieldOpportunity, sortBy string) bool {
+	switch normalizeSortBy(sortBy) {
+	case "tvl_usd":
 		if a.TVLUSD != b.TVLUSD {
 			return a.TVLUSD > b.TVLUSD
 		}
+	case "liquidity_usd":
 		if a.LiquidityUSD != b.LiquidityUSD {
 			return a.LiquidityUSD > b.LiquidityUSD
 		}
-		return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
-	})
+	default:
+		if a.APYTotal != b.APYTotal {
+			return a.APYTotal > b.APYTotal
+		}
+	}
+	if a.APYTotal != b.APYTotal {
+		return a.APYTotal > b.APYTotal
+	}
+	if a.TVLUSD != b.TVLUSD {
+		return a.TVLUSD > b.TVLUSD
+	}
+	if a.LiquidityUSD != b.LiquidityUSD {
+		return a.LiquidityUSD > b.LiquidityUSD
+	}
+	return a.OpportunityID < b.OpportunityID
+}
+
+func normalizeSortBy(sortBy string) string {
+	s := strings.ToLower(strings.TrimSpace(sortBy))
+	if s == "" {
+		return "apy_total"
+	}
+	return s
 }

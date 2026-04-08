@@ -10,6 +10,7 @@ import (
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/spf13/cobra"
 )
 
@@ -102,7 +103,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 			defer cancel()
 			start := time.Now()
 			action, err := buildAction(ctx, resolvedPlan)
-			providerName := normalizeLendingProvider(plan.Provider)
+			providerName := providers.NormalizeLendingProvider(plan.Provider)
 			if providerName == "" {
 				providerName = "yield"
 			}

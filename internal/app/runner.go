@@ -43,6 +43,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/taikoswap"
 	"github.com/ggonzalez94/defi-cli/internal/providers/tempo"
 	"github.com/ggonzalez94/defi-cli/internal/providers/uniswap"
+	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 	"github.com/ggonzalez94/defi-cli/internal/schema"
 	"github.com/ggonzalez94/defi-cli/internal/version"
@@ -706,7 +707,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 		Use:   "markets",
 		Short: "List lending markets",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := normalizeLendingProvider(providerArg)
+			providerName := providers.NormalizeLendingProvider(providerArg)
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
@@ -750,7 +751,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 		Use:   "rates",
 		Short: "List lending rates",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := normalizeLendingProvider(ratesProvider)
+			providerName := providers.NormalizeLendingProvider(ratesProvider)
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
@@ -793,7 +794,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 		Use:   "positions",
 		Short: "List lending positions for an account address",
 		RunE: func(cmd *cobra.Command, args []string) error {
-			providerName := normalizeLendingProvider(positionsProvider)
+			providerName := providers.NormalizeLendingProvider(positionsProvider)
 			if providerName == "" {
 				return clierr.New(clierr.CodeUsage, "--provider is required")
 			}
@@ -1702,7 +1703,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 				}
 
 				combined = dedupeYieldByOpportunityID(combined)
-				sortYieldOpportunities(combined, req.SortBy)
+				yieldutil.Sort(combined, req.SortBy)
 				if req.Limit > 0 && len(combined) > req.Limit {
 					combined = combined[:req.Limit]
 				}
@@ -2190,10 +2191,6 @@ func (s *runtimeState) renderError(commandPath string, err error, warnings []str
 	_ = out.Render(s.runner.stderr, env, settings)
 }
 
-func normalizeLendingProvider(input string) string {
-	return providers.NormalizeLendingProvider(input)
-}
-
 func parseLendPositionType(input string) (providers.LendPositionType, error) {
 	switch strings.ToLower(strings.TrimSpace(input)) {
 	case "", string(providers.LendPositionTypeAll):
@@ -2267,7 +2264,7 @@ func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpp
 	byID := make(map[string]model.YieldOpportunity, len(items))
 	for _, item := range items {
 		existing, ok := byID[item.OpportunityID]
-		if !ok || compareYieldOpportunities(item, existing, "apy_total") {
+		if !ok || yieldutil.Compare(item, existing, "apy_total") {
 			byID[item.OpportunityID] = item
 		}
 	}
@@ -2278,42 +2275,6 @@ func dedupeYieldByOpportunityID(items []model.YieldOpportunity) []model.YieldOpp
 	return out
 }
 
-func sortYieldOpportunities(items []model.YieldOpportunity, sortBy string) {
-	sortBy = strings.ToLower(strings.TrimSpace(sortBy))
-	if sortBy == "" {
-		sortBy = "apy_total"
-	}
-	sort.Slice(items, func(i, j int) bool {
-		return compareYieldOpportunities(items[i], items[j], sortBy)
-	})
-}
-
-func compareYieldOpportunities(a, b model.YieldOpportunity, sortBy string) bool {
-	switch sortBy {
-	case "tvl_usd":
-		if a.TVLUSD != b.TVLUSD {
-			return a.TVLUSD > b.TVLUSD
-		}
-	case "liquidity_usd":
-		if a.LiquidityUSD != b.LiquidityUSD {
-			return a.LiquidityUSD > b.LiquidityUSD
-		}
-	default:
-		if a.APYTotal != b.APYTotal {
-			return a.APYTotal > b.APYTotal
-		}
-	}
-	if a.APYTotal != b.APYTotal {
-		return a.APYTotal > b.APYTotal
-	}
-	if a.TVLUSD != b.TVLUSD {
-		return a.TVLUSD > b.TVLUSD
-	}
-	if a.LiquidityUSD != b.LiquidityUSD {
-		return a.LiquidityUSD > b.LiquidityUSD
-	}
-	return strings.Compare(a.OpportunityID, b.OpportunityID) < 0
-}
 
 func filterYieldOpportunitiesByID(items []model.YieldOpportunity, ids map[string]struct{}) []model.YieldOpportunity {
 	if len(ids) == 0 {
