@@ -730,7 +730,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 				if err != nil {
 					return nil, statuses, nil, false, err
 				}
-				data = applyLendMarketLimit(data, marketsLimit)
+				data = providers.ApplyLimit(data, marketsLimit)
 				return data, statuses, nil, false, nil
 			})
 		},
@@ -774,7 +774,7 @@ func (s *runtimeState) newLendCommand() *cobra.Command {
 				if err != nil {
 					return nil, statuses, nil, false, err
 				}
-				data = applyLendRateLimit(data, ratesLimit)
+				data = providers.ApplyLimit(data, ratesLimit)
 				return data, statuses, nil, false, nil
 			})
 		},
@@ -1579,9 +1579,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 
 				combined = dedupeYieldByOpportunityID(combined)
 				yieldutil.Sort(combined, req.SortBy)
-				if req.Limit > 0 && len(combined) > req.Limit {
-					combined = combined[:req.Limit]
-				}
+				combined = providers.ApplyLimit(combined, req.Limit)
 				if opportunitiesIncludeIncomplete {
 					warnings = append(warnings, fmt.Sprintf("returned %d combined opportunities across %d provider(s)", len(combined), len(selectedProviders)))
 				}
@@ -1693,10 +1691,8 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 					return nil, statuses, warnings, partial, clierr.New(clierr.CodeUnavailable, "no yield positions returned by selected providers")
 				}
 
-				sortYieldPositions(combined)
-				if positionsLimit > 0 && len(combined) > positionsLimit {
-					combined = combined[:positionsLimit]
-				}
+				providers.SortYieldPositions(combined)
+				combined = providers.ApplyLimit(combined, positionsLimit)
 				return combined, statuses, warnings, partial, nil
 			})
 		},
@@ -1804,9 +1800,7 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 					if len(opportunityIDSet) > 0 {
 						opportunities = filterYieldOpportunitiesByID(opportunities, opportunityIDSet)
 					}
-					if historyLimit > 0 && len(opportunities) > historyLimit {
-						opportunities = opportunities[:historyLimit]
-					}
+					opportunities = providers.ApplyLimit(opportunities, historyLimit)
 					if len(opportunities) == 0 {
 						providerErr = clierr.New(clierr.CodeUnavailable, fmt.Sprintf("provider %s returned no matching opportunities", providerName))
 						statuses = append(statuses, model.ProviderStatus{Name: provider.Info().Name, Status: statusFromErr(providerErr), LatencyMS: time.Since(providerStart).Milliseconds()})
@@ -2188,24 +2182,6 @@ func sortYieldHistorySeries(items []model.YieldHistorySeries) {
 	})
 }
 
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].Provider != items[j].Provider {
-			return items[i].Provider < items[j].Provider
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
 func parseYieldHistoryMetrics(input string) ([]providers.YieldHistoryMetric, error) {
 	parts := splitCSV(input)
 	if len(parts) == 0 {
@@ -2338,20 +2314,6 @@ func applyRPCOverride(provider any, rpcURL string) {
 			p.SetRPCOverride(url)
 		}
 	}
-}
-
-func applyLendMarketLimit(items []model.LendMarket, limit int) []model.LendMarket {
-	if limit <= 0 || len(items) <= limit {
-		return items
-	}
-	return items[:limit]
-}
-
-func applyLendRateLimit(items []model.LendRate, limit int) []model.LendRate {
-	if limit <= 0 || len(items) <= limit {
-		return items
-	}
-	return items[:limit]
 }
 
 func parseChainAsset(chainArg, assetArg string) (id.Chain, id.Asset, error) {

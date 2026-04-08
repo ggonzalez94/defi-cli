@@ -161,9 +161,7 @@ func (c *Client) ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asse
 		}
 		return strings.Compare(out[i].Asset, out[j].Asset) < 0
 	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
+	out = providers.ApplyLimit(out, limit)
 	for i := range out {
 		out[i].Rank = i + 1
 	}
@@ -552,9 +550,7 @@ func (c *Client) StablecoinChains(ctx context.Context, limit int) ([]model.Stabl
 	sort.Slice(out, func(i, j int) bool {
 		return out[i].CirculatingUSD > out[j].CirculatingUSD
 	})
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
+	out = providers.ApplyLimit(out, limit)
 	for i := range out {
 		out[i].Rank = i + 1
 	}
@@ -674,10 +670,7 @@ func (c *Client) ListBridges(ctx context.Context, req providers.BridgeListReques
 		return strings.Compare(out[i].Name, out[j].Name) < 0
 	})
 
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	return providers.ApplyLimit(out, req.Limit), nil
 }
 
 func (c *Client) BridgeDetails(ctx context.Context, req providers.BridgeDetailsRequest) (model.BridgeDetails, error) {

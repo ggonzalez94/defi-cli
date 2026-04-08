@@ -58,7 +58,7 @@ func SortLendPositions(items []model.LendPosition) {
 	})
 }
 
-// SortYieldPositions sorts yield positions by USD value desc, then APY, asset, native ID.
+// SortYieldPositions sorts yield positions by USD value desc, then APY, provider, asset, native ID.
 func SortYieldPositions(items []model.YieldPosition) {
 	sort.Slice(items, func(i, j int) bool {
 		if items[i].AmountUSD != items[j].AmountUSD {
@@ -66,6 +66,9 @@ func SortYieldPositions(items []model.YieldPosition) {
 		}
 		if items[i].APYTotal != items[j].APYTotal {
 			return items[i].APYTotal > items[j].APYTotal
+		}
+		if items[i].Provider != items[j].Provider {
+			return items[i].Provider < items[j].Provider
 		}
 		if items[i].AssetID != items[j].AssetID {
 			return items[i].AssetID < items[j].AssetID
@@ -284,22 +287,24 @@ func NormalizeSlippageBps(bps int64) (int64, error) {
 	return bps, nil
 }
 
+// ApplyLimit truncates a slice to at most limit items. A non-positive limit means no truncation.
+func ApplyLimit[T any](items []T, limit int) []T {
+	if limit <= 0 || len(items) <= limit {
+		return items
+	}
+	return items[:limit]
+}
+
 // FinalizeLendPositions sorts and applies limit to lend positions.
 func FinalizeLendPositions(out []model.LendPosition, limit int) []model.LendPosition {
 	SortLendPositions(out)
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return ApplyLimit(out, limit)
 }
 
 // FinalizeYieldPositions sorts and applies limit to yield positions.
 func FinalizeYieldPositions(out []model.YieldPosition, limit int) []model.YieldPosition {
 	SortYieldPositions(out)
-	if limit > 0 && len(out) > limit {
-		out = out[:limit]
-	}
-	return out
+	return ApplyLimit(out, limit)
 }
 
 // FinalizeYieldOpportunities sorts, checks for empty, and applies limit to yield opportunities.
@@ -308,10 +313,7 @@ func FinalizeYieldOpportunities(out []model.YieldOpportunity, provider, sortBy s
 		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("no %s yield opportunities for requested chain/asset", provider))
 	}
 	yieldutil.Sort(out, sortBy)
-	if limit <= 0 || limit > len(out) {
-		limit = len(out)
-	}
-	return out[:limit], nil
+	return ApplyLimit(out, limit), nil
 }
 
 // SortHistoryPoints sorts yield history points by timestamp ascending.
