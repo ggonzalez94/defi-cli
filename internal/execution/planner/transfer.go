@@ -75,16 +75,6 @@ func BuildTransferAction(req TransferRequest) (execution.Action, error) {
 		"asset_address": common.HexToAddress(req.Asset.Address).Hex(),
 		"recipient":     common.HexToAddress(recipient).Hex(),
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      "transfer-token",
-		Type:        execution.StepTypeTransfer,
-		Status:      execution.StepStatusPending,
-		ChainID:     req.Chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: fmt.Sprintf("Transfer %s to recipient", strings.ToUpper(req.Asset.Symbol)),
-		Target:      common.HexToAddress(req.Asset.Address).Hex(),
-		Data:        "0x" + common.Bytes2Hex(transferData),
-		Value:       "0",
-	})
+	appendStep(&action, "transfer-token", execution.StepTypeTransfer, req.Chain.CAIP2, rpcURL, fmt.Sprintf("Transfer %s to recipient", strings.ToUpper(req.Asset.Symbol)), common.HexToAddress(req.Asset.Address).Hex(), transferData)
 	return action, nil
 }

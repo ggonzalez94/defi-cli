@@ -109,33 +109,13 @@ func BuildAaveLendAction(ctx context.Context, req AaveLendRequest) (execution.Ac
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave supply calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-supply",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Supply asset to Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply asset to Aave", poolAddr.Hex(), data)
 	case string(AaveVerbWithdraw):
 		data, err := aavePoolABI.Pack("withdraw", tokenAddr, amount, recipient)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave withdraw calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-withdraw",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Withdraw asset from Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-withdraw", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Withdraw asset from Aave", poolAddr.Hex(), data)
 	case string(AaveVerbBorrow):
 		rateMode := req.InterestRateMode
 		if rateMode == 0 {
@@ -148,17 +128,7 @@ func BuildAaveLendAction(ctx context.Context, req AaveLendRequest) (execution.Ac
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave borrow calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-borrow",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Borrow asset from Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-borrow", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Borrow asset from Aave", poolAddr.Hex(), data)
 	case string(AaveVerbRepay):
 		rateMode := req.InterestRateMode
 		if rateMode == 0 {
@@ -174,17 +144,7 @@ func BuildAaveLendAction(ctx context.Context, req AaveLendRequest) (execution.Ac
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave repay calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "aave-repay",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Repay borrowed asset on Aave",
-			Target:      poolAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "aave-repay", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Repay borrowed asset on Aave", poolAddr.Hex(), data)
 	default:
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "unsupported lend action verb")
 	}
@@ -253,17 +213,7 @@ func BuildAaveRewardsClaimAction(ctx context.Context, req AaveRewardsClaimReques
 		"assets":            assets,
 		"amount_base_units": amount.String(),
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      "aave-claim-rewards",
-		Type:        execution.StepTypeClaim,
-		Status:      execution.StepStatusPending,
-		ChainID:     req.Chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: "Claim rewards from Aave incentives controller",
-		Target:      controller.Hex(),
-		Data:        "0x" + common.Bytes2Hex(data),
-		Value:       "0",
-	})
+	appendStep(&action, "aave-claim-rewards", execution.StepTypeClaim, req.Chain.CAIP2, rpcURL, "Claim rewards from Aave incentives controller", controller.Hex(), data)
 	return action, nil
 }
 
@@ -330,17 +280,7 @@ func BuildAaveRewardsCompoundAction(ctx context.Context, req AaveRewardsCompound
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack aave compound supply calldata", err)
 	}
-	claimAction.Steps = append(claimAction.Steps, execution.ActionStep{
-		StepID:      "aave-compound-supply",
-		Type:        execution.StepTypeLend,
-		Status:      execution.StepStatusPending,
-		ChainID:     req.Chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: "Supply claimed reward token to Aave",
-		Target:      poolAddr.Hex(),
-		Data:        "0x" + common.Bytes2Hex(supplyData),
-		Value:       "0",
-	})
+	appendStep(&claimAction, "aave-compound-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply claimed reward token to Aave", poolAddr.Hex(), supplyData)
 	claimAction.Metadata["pool"] = poolAddr.Hex()
 	claimAction.Metadata["on_behalf_of"] = onBehalfOf.Hex()
 	return claimAction, nil
@@ -496,17 +436,7 @@ func appendApprovalIfNeeded(ctx context.Context, client *ethclient.Client, actio
 	if err != nil {
 		return clierr.Wrap(clierr.CodeInternal, "pack approve calldata", err)
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      fmt.Sprintf("approve-%s", strings.TrimPrefix(strings.ToLower(token.Hex()), "0x")),
-		Type:        execution.StepTypeApproval,
-		Status:      execution.StepStatusPending,
-		ChainID:     chainID,
-		RPCURL:      rpcURL,
-		Description: description,
-		Target:      token.Hex(),
-		Data:        "0x" + common.Bytes2Hex(approveData),
-		Value:       "0",
-	})
+	appendStep(action, fmt.Sprintf("approve-%s", strings.TrimPrefix(strings.ToLower(token.Hex()), "0x")), execution.StepTypeApproval, chainID, rpcURL, description, token.Hex(), approveData)
 	return nil
 }
 

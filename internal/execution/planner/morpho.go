@@ -184,49 +184,19 @@ func BuildMorphoLendAction(ctx context.Context, req MorphoLendRequest) (executio
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho supply calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-supply",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Supply asset to Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply asset to Morpho market", morphoAddr.Hex(), data)
 	case string(AaveVerbWithdraw):
 		data, err := morphoBlueABI.Pack("withdraw", params, amount, zero, onBehalfOf, recipient)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho withdraw calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-withdraw",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Withdraw supplied assets from Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-withdraw", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Withdraw supplied assets from Morpho market", morphoAddr.Hex(), data)
 	case string(AaveVerbBorrow):
 		data, err := morphoBlueABI.Pack("borrow", params, amount, zero, onBehalfOf, recipient)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho borrow calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-borrow",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Borrow asset from Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-borrow", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Borrow asset from Morpho market", morphoAddr.Hex(), data)
 	case string(AaveVerbRepay):
 		if err := appendApprovalIfNeeded(ctx, client, &action, req.Chain.CAIP2, rpcURL, loanToken, sender, morphoAddr, amount, "Approve token for Morpho repay"); err != nil {
 			return execution.Action{}, err
@@ -235,17 +205,7 @@ func BuildMorphoLendAction(ctx context.Context, req MorphoLendRequest) (executio
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho repay calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-repay",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Repay borrowed assets in Morpho market",
-			Target:      morphoAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-repay", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Repay borrowed assets in Morpho market", morphoAddr.Hex(), data)
 	default:
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "unsupported lend action verb")
 	}

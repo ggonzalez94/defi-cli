@@ -110,17 +110,7 @@ func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (exec
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack moonwell mint calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "moonwell-supply",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Supply asset to Moonwell",
-			Target:      mTokenAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "moonwell-supply", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Supply asset to Moonwell", mTokenAddr.Hex(), data)
 
 	case string(AaveVerbWithdraw):
 		// Withdraw: mToken.redeemUnderlying(amount)
@@ -128,17 +118,7 @@ func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (exec
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack moonwell redeemUnderlying calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "moonwell-withdraw",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Withdraw asset from Moonwell",
-			Target:      mTokenAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "moonwell-withdraw", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Withdraw asset from Moonwell", mTokenAddr.Hex(), data)
 
 	case string(AaveVerbBorrow):
 		// Borrow: mToken.borrow(amount) — requires collateral
@@ -146,17 +126,7 @@ func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (exec
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack moonwell borrow calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "moonwell-borrow",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Borrow asset from Moonwell",
-			Target:      mTokenAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "moonwell-borrow", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Borrow asset from Moonwell", mTokenAddr.Hex(), data)
 
 	case string(AaveVerbRepay):
 		// Repay: approve underlying → mToken, then mToken.repayBorrow(amount)
@@ -167,17 +137,7 @@ func BuildMoonwellLendAction(ctx context.Context, req MoonwellLendRequest) (exec
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack moonwell repayBorrow calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "moonwell-repay",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Repay borrowed asset on Moonwell",
-			Target:      mTokenAddr.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "moonwell-repay", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Repay borrowed asset on Moonwell", mTokenAddr.Hex(), data)
 
 	default:
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "unsupported moonwell lend action verb")
@@ -219,17 +179,7 @@ func appendEnterMarketsIfNeeded(ctx context.Context, client *ethclient.Client, a
 	if err != nil {
 		return clierr.Wrap(clierr.CodeInternal, "pack enterMarkets", err)
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      "moonwell-enter-market",
-		Type:        execution.StepTypeLend,
-		Status:      execution.StepStatusPending,
-		ChainID:     chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: "Enable asset as collateral on Moonwell",
-		Target:      comptroller.Hex(),
-		Data:        "0x" + common.Bytes2Hex(enterData),
-		Value:       "0",
-	})
+	appendStep(action, "moonwell-enter-market", execution.StepTypeLend, chain.CAIP2, rpcURL, "Enable asset as collateral on Moonwell", comptroller.Hex(), enterData)
 	return nil
 }
 

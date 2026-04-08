@@ -172,33 +172,13 @@ func BuildMorphoVaultYieldAction(ctx context.Context, req MorphoVaultYieldReques
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho vault deposit calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-vault-deposit",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Deposit asset into Morpho vault",
-			Target:      vault.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-vault-deposit", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Deposit asset into Morpho vault", vault.Hex(), data)
 	case string(MorphoVaultYieldVerbWithdraw):
 		data, err := erc4626VaultABI.Pack("withdraw", amount, recipient, onBehalfOf)
 		if err != nil {
 			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack morpho vault withdraw calldata", err)
 		}
-		action.Steps = append(action.Steps, execution.ActionStep{
-			StepID:      "morpho-vault-withdraw",
-			Type:        execution.StepTypeLend,
-			Status:      execution.StepStatusPending,
-			ChainID:     req.Chain.CAIP2,
-			RPCURL:      rpcURL,
-			Description: "Withdraw asset from Morpho vault",
-			Target:      vault.Hex(),
-			Data:        "0x" + common.Bytes2Hex(data),
-			Value:       "0",
-		})
+		appendStep(&action, "morpho-vault-withdraw", execution.StepTypeLend, req.Chain.CAIP2, rpcURL, "Withdraw asset from Morpho vault", vault.Hex(), data)
 	}
 
 	return action, nil

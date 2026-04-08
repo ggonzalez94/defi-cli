@@ -64,21 +64,25 @@ func BuildApprovalAction(req ApprovalRequest) (execution.Action, error) {
 		"asset_id": req.Asset.AssetID,
 		"spender":  common.HexToAddress(spender).Hex(),
 	}
-	action.Steps = append(action.Steps, execution.ActionStep{
-		StepID:      "approve-token",
-		Type:        execution.StepTypeApproval,
-		Status:      execution.StepStatusPending,
-		ChainID:     req.Chain.CAIP2,
-		RPCURL:      rpcURL,
-		Description: fmt.Sprintf("Approve %s for spender", strings.ToUpper(req.Asset.Symbol)),
-		Target:      common.HexToAddress(req.Asset.Address).Hex(),
-		Data:        "0x" + common.Bytes2Hex(approveData),
-		Value:       "0",
-	})
+	appendStep(&action, "approve-token", execution.StepTypeApproval, req.Chain.CAIP2, rpcURL, fmt.Sprintf("Approve %s for spender", strings.ToUpper(req.Asset.Symbol)), common.HexToAddress(req.Asset.Address).Hex(), approveData)
 	return action, nil
 }
 
 var plannerERC20ABI = mustPlannerABI(registry.ERC20MinimalABI)
+
+func appendStep(action *execution.Action, stepID string, stepType execution.StepType, chainID, rpcURL, description, target string, data []byte) {
+	action.Steps = append(action.Steps, execution.ActionStep{
+		StepID:      stepID,
+		Type:        stepType,
+		Status:      execution.StepStatusPending,
+		ChainID:     chainID,
+		RPCURL:      rpcURL,
+		Description: description,
+		Target:      target,
+		Data:        "0x" + common.Bytes2Hex(data),
+		Value:       "0",
+	})
+}
 
 func mustPlannerABI(raw string) abi.ABI {
 	parsed, err := abi.JSON(strings.NewReader(raw))
