@@ -56,14 +56,9 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	}
 	defer client.Close()
 
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	switch tradeType {
-	case providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput:
-	default:
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "tempo swap type must be exact-input or exact-output")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "tempo", providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	amount, err := parseUint128(req.AmountBaseUnits)
@@ -139,14 +134,9 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	}
 	defer client.Close()
 
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	switch tradeType {
-	case providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput:
-	default:
-		return execution.Action{}, clierr.New(clierr.CodeUnsupported, "tempo swap type must be exact-input or exact-output")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "tempo", providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput)
+	if err != nil {
+		return execution.Action{}, err
 	}
 
 	amount, err := parseUint128(req.AmountBaseUnits)

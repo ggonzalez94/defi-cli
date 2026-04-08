@@ -50,12 +50,9 @@ type quoteResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	if tradeType != providers.SwapTradeTypeExactInput {
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "1inch supports only --type exact-input")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "1inch", providers.SwapTradeTypeExactInput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	if !req.Chain.IsEVM() {

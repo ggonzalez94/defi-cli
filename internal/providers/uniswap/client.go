@@ -69,14 +69,9 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		return model.SwapQuote{}, clierr.New(clierr.CodeAuth, "missing required API key for uniswap (DEFI_UNISWAP_API_KEY)")
 	}
 
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	switch tradeType {
-	case providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput:
-	default:
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "uniswap swap type must be exact-input or exact-output")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "uniswap", providers.SwapTradeTypeExactInput, providers.SwapTradeTypeExactOutput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 	swapper := strings.TrimSpace(req.Swapper)
 	if swapper == "" {

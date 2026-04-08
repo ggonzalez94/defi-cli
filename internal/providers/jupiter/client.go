@@ -71,12 +71,9 @@ type quoteResponse struct {
 }
 
 func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
-	tradeType := req.TradeType
-	if tradeType == "" {
-		tradeType = providers.SwapTradeTypeExactInput
-	}
-	if tradeType != providers.SwapTradeTypeExactInput {
-		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "jupiter supports only --type exact-input")
+	tradeType, err := providers.ValidateTradeType(req.TradeType, "jupiter", providers.SwapTradeTypeExactInput)
+	if err != nil {
+		return model.SwapQuote{}, err
 	}
 
 	if !req.Chain.IsSolana() {

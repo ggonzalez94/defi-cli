@@ -392,6 +392,24 @@ func IsMorphoNoResultsError(message string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(message)), "no results matching given parameters")
 }
 
+// ValidateTradeType defaults an empty trade type to ExactInput and validates it against
+// the supported set. Returns the normalized trade type or a clierr.CodeUnsupported error.
+func ValidateTradeType(tradeType SwapTradeType, provider string, supported ...SwapTradeType) (SwapTradeType, error) {
+	if tradeType == "" {
+		tradeType = SwapTradeTypeExactInput
+	}
+	for _, s := range supported {
+		if tradeType == s {
+			return tradeType, nil
+		}
+	}
+	names := make([]string, len(supported))
+	for i, s := range supported {
+		names[i] = string(s)
+	}
+	return "", clierr.New(clierr.CodeUnsupported, provider+" swap type must be "+strings.Join(names, " or "))
+}
+
 // LendToYieldPositions converts supply/collateral lend positions to yield deposit positions.
 func LendToYieldPositions(provider string, lendRows []model.LendPosition) []model.YieldPosition {
 	out := make([]model.YieldPosition, 0, len(lendRows))
