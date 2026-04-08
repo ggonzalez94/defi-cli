@@ -6,7 +6,6 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
-	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/spf13/cobra"
 )
@@ -47,11 +46,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		if err != nil {
 			return execution.Action{}, err
 		}
-		decimals := asset.Decimals
-		if decimals <= 0 {
-			decimals = 18
-		}
-		base, _, err := id.NormalizeAmount(args.AmountBase, args.AmountDecimal, decimals)
+		base, _, err := normalizeAssetAmount(args.AmountBase, args.AmountDecimal, asset.Decimals)
 		if err != nil {
 			return execution.Action{}, err
 		}

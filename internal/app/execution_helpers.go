@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
+	"github.com/ggonzalez94/defi-cli/internal/id"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/ows"
@@ -367,4 +368,11 @@ func estimateExecutionTimeout(action *execution.Action, opts execution.ExecuteOp
 	// Add per-step RPC headroom for chain-id/simulation/gas/fee/nonce/broadcast work
 	// so long-running receipt/settlement waits are less likely to be cut off early.
 	return time.Duration(stages)*stepTimeout + time.Duration(steps)*executionStepRPCOverhead
+}
+
+func normalizeAssetAmount(amountBase, amountDecimal string, decimals int) (string, string, error) {
+	if decimals <= 0 {
+		decimals = 18
+	}
+	return id.NormalizeAmount(amountBase, amountDecimal, decimals)
 }

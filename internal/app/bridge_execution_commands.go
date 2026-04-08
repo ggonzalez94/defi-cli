@@ -37,11 +37,7 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		if err != nil {
 			return providers.BridgeQuoteRequest{}, clierr.Wrap(clierr.CodeUsage, "resolve destination asset", err)
 		}
-		decimals := fromAsset.Decimals
-		if decimals <= 0 {
-			decimals = 18
-		}
-		base, decimal, err := id.NormalizeAmount(amountBase, amountDecimal, decimals)
+		base, decimal, err := normalizeAssetAmount(amountBase, amountDecimal, fromAsset.Decimals)
 		if err != nil {
 			return providers.BridgeQuoteRequest{}, err
 		}

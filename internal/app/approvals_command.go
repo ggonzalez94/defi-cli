@@ -32,11 +32,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		if err != nil {
 			return execution.Action{}, err
 		}
-		decimals := asset.Decimals
-		if decimals <= 0 {
-			decimals = 18
-		}
-		base, _, err := id.NormalizeAmount(args.AmountBase, args.AmountDecimal, decimals)
+		base, _, err := normalizeAssetAmount(args.AmountBase, args.AmountDecimal, asset.Decimals)
 		if err != nil {
 			return execution.Action{}, err
 		}

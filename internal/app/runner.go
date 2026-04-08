@@ -917,11 +917,7 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				return clierr.Wrap(clierr.CodeUsage, "resolve destination asset", err)
 			}
 
-			decimals := fromAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
-			}
-			base, decimal, err := id.NormalizeAmount(amountBase, amountDecimal, decimals)
+			base, decimal, err := normalizeAssetAmount(amountBase, amountDecimal, fromAsset.Decimals)
 			if err != nil {
 				return err
 			}
@@ -1101,11 +1097,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if amountOutBase != "" || amountOutDecimal != "" {
 				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "--amount-out/--amount-out-decimal are only valid with --type exact-output")
 			}
-			decimals := fromAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
-			}
-			base, decimal, err = id.NormalizeAmount(amountBase, amountDecimal, decimals)
+			base, decimal, err = normalizeAssetAmount(amountBase, amountDecimal, fromAsset.Decimals)
 			if err != nil {
 				return providers.SwapQuoteRequest{}, err
 			}
@@ -1116,11 +1108,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if amountOutBase == "" && amountOutDecimal == "" {
 				return providers.SwapQuoteRequest{}, clierr.New(clierr.CodeUsage, "exact-output requires --amount-out or --amount-out-decimal")
 			}
-			decimals := toAsset.Decimals
-			if decimals <= 0 {
-				decimals = 18
-			}
-			base, decimal, err = id.NormalizeAmount(amountOutBase, amountOutDecimal, decimals)
+			base, decimal, err = normalizeAssetAmount(amountOutBase, amountOutDecimal, toAsset.Decimals)
 			if err != nil {
 				return providers.SwapQuoteRequest{}, err
 			}
