@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/ethereum/go-ethereum/common"
 
@@ -247,6 +248,38 @@ func FinalizeYieldOpportunities(out []model.YieldOpportunity, provider, sortBy s
 		limit = len(out)
 	}
 	return out[:limit], nil
+}
+
+// SortHistoryPoints sorts yield history points by timestamp ascending.
+func SortHistoryPoints(points []model.YieldHistoryPoint) {
+	sort.Slice(points, func(i, j int) bool {
+		return strings.Compare(points[i].Timestamp, points[j].Timestamp) < 0
+	})
+}
+
+// ParseAPITime parses an RFC3339 (or RFC3339Nano) timestamp string, returning UTC time.
+func ParseAPITime(v string) (time.Time, bool) {
+	raw := strings.TrimSpace(v)
+	if raw == "" {
+		return time.Time{}, false
+	}
+	ts, err := time.Parse(time.RFC3339, raw)
+	if err == nil {
+		return ts.UTC(), true
+	}
+	ts, err = time.Parse(time.RFC3339Nano, raw)
+	if err == nil {
+		return ts.UTC(), true
+	}
+	return time.Time{}, false
+}
+
+// ValidateProvider checks that the given provider string matches the expected name (case-insensitive).
+func ValidateProvider(provider, expected string) error {
+	if !strings.EqualFold(strings.TrimSpace(provider), expected) {
+		return clierr.New(clierr.CodeUnsupported, expected+" adapter supports only provider="+expected)
+	}
+	return nil
 }
 
 // LendToYieldPositions converts supply/collateral lend positions to yield deposit positions.

@@ -85,8 +85,8 @@ type reserveMetricsHistoryItem struct {
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(strings.TrimSpace(provider), "kamino") {
-		return nil, clierr.New(clierr.CodeUnsupported, "kamino adapter supports only provider=kamino")
+	if err := providers.ValidateProvider(provider, "kamino"); err != nil {
+		return nil, err
 	}
 	reserves, err := c.fetchReserves(ctx, chain)
 	if err != nil {
@@ -139,8 +139,8 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 }
 
 func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(strings.TrimSpace(provider), "kamino") {
-		return nil, clierr.New(clierr.CodeUnsupported, "kamino adapter supports only provider=kamino")
+	if err := providers.ValidateProvider(provider, "kamino"); err != nil {
+		return nil, err
 	}
 	reserves, err := c.fetchReserves(ctx, chain)
 	if err != nil {
@@ -309,8 +309,8 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 	if _, ok := metricSet[providers.YieldHistoryMetricAPYTotal]; ok {
 		points := make([]model.YieldHistoryPoint, 0, len(history.History))
 		for _, sample := range history.History {
-			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(sample.Timestamp))
-			if err != nil {
+			ts, ok := providers.ParseAPITime(sample.Timestamp)
+			if !ok {
 				continue
 			}
 			value, ok := parseHistoryMetric(sample.Metrics, "supplyInterestAPY")
@@ -322,7 +322,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 				Value:     value * 100,
 			})
 		}
-		sortHistoryPoints(points)
+		providers.SortHistoryPoints(points)
 		if len(points) > 0 {
 			series = append(series, model.YieldHistorySeries{
 				OpportunityID:        req.Opportunity.OpportunityID,
@@ -345,8 +345,8 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 	if _, ok := metricSet[providers.YieldHistoryMetricTVLUSD]; ok {
 		points := make([]model.YieldHistoryPoint, 0, len(history.History))
 		for _, sample := range history.History {
-			ts, err := time.Parse(time.RFC3339, strings.TrimSpace(sample.Timestamp))
-			if err != nil {
+			ts, ok := providers.ParseAPITime(sample.Timestamp)
+			if !ok {
 				continue
 			}
 			value, ok := parseHistoryMetric(sample.Metrics, "depositTvl")
@@ -358,7 +358,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 				Value:     value,
 			})
 		}
-		sortHistoryPoints(points)
+		providers.SortHistoryPoints(points)
 		if len(points) > 0 {
 			series = append(series, model.YieldHistorySeries{
 				OpportunityID:        req.Opportunity.OpportunityID,
@@ -593,12 +593,6 @@ func parseHistoryMetric(metrics map[string]any, key string) (float64, bool) {
 	default:
 		return 0, false
 	}
-}
-
-func sortHistoryPoints(points []model.YieldHistoryPoint) {
-	sort.Slice(points, func(i, j int) bool {
-		return strings.Compare(points[i].Timestamp, points[j].Timestamp) < 0
-	})
 }
 
 func reserveAssetID(chainID, fallbackAssetID, mint string) string {

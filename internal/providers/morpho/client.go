@@ -445,8 +445,8 @@ type collateralShare struct {
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(provider, "morpho") {
-		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only provider=morpho")
+	if err := providers.ValidateProvider(provider, "morpho"); err != nil {
+		return nil, err
 	}
 	markets, err := c.fetchMarkets(ctx, chain, asset)
 	if err != nil {
@@ -490,8 +490,8 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 }
 
 func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(provider, "morpho") {
-		return nil, clierr.New(clierr.CodeUnsupported, "morpho adapter supports only provider=morpho")
+	if err := providers.ValidateProvider(provider, "morpho"); err != nil {
+		return nil, err
 	}
 	markets, err := c.fetchMarkets(ctx, chain, asset)
 	if err != nil {

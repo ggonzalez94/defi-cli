@@ -232,8 +232,8 @@ type aaveUserBorrow struct {
 }
 
 func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendMarket, error) {
-	if !strings.EqualFold(provider, "aave") {
-		return nil, clierr.New(clierr.CodeUnsupported, "aave adapter supports only provider=aave")
+	if err := providers.ValidateProvider(provider, "aave"); err != nil {
+		return nil, err
 	}
 	markets, err := c.fetchMarkets(ctx, chain)
 	if err != nil {
@@ -286,8 +286,8 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 }
 
 func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain, asset id.Asset) ([]model.LendRate, error) {
-	if !strings.EqualFold(provider, "aave") {
-		return nil, clierr.New(clierr.CodeUnsupported, "aave adapter supports only provider=aave")
+	if err := providers.ValidateProvider(provider, "aave"); err != nil {
+		return nil, err
 	}
 	markets, err := c.fetchMarkets(ctx, chain)
 	if err != nil {
@@ -596,7 +596,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 
 	points := make([]model.YieldHistoryPoint, 0, len(resp.Data.SupplyAPYHistory))
 	for _, sample := range resp.Data.SupplyAPYHistory {
-		ts, ok := parseAPITime(sample.Date)
+		ts, ok := providers.ParseAPITime(sample.Date)
 		if !ok {
 			continue
 		}
@@ -611,7 +611,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 	if req.Interval == providers.YieldHistoryIntervalDay {
 		points = averagePointsByDay(points)
 	} else {
-		sortHistoryPoints(points)
+		providers.SortHistoryPoints(points)
 	}
 	if len(points) == 0 {
 		return nil, clierr.New(clierr.CodeUnavailable, "no aave historical points for requested range")
@@ -757,33 +757,11 @@ func historyWindow(start, end, now time.Time) (string, error) {
 	}
 }
 
-func parseAPITime(v string) (time.Time, bool) {
-	raw := strings.TrimSpace(v)
-	if raw == "" {
-		return time.Time{}, false
-	}
-	ts, err := time.Parse(time.RFC3339, raw)
-	if err == nil {
-		return ts.UTC(), true
-	}
-	ts, err = time.Parse(time.RFC3339Nano, raw)
-	if err == nil {
-		return ts.UTC(), true
-	}
-	return time.Time{}, false
-}
-
-func sortHistoryPoints(points []model.YieldHistoryPoint) {
-	sort.Slice(points, func(i, j int) bool {
-		return strings.Compare(points[i].Timestamp, points[j].Timestamp) < 0
-	})
-}
-
 func averagePointsByDay(points []model.YieldHistoryPoint) []model.YieldHistoryPoint {
 	if len(points) == 0 {
 		return nil
 	}
-	sortHistoryPoints(points)
+	providers.SortHistoryPoints(points)
 	type bucket struct {
 		sum   float64
 		count int
