@@ -2,8 +2,6 @@ package moonwell
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"fmt"
 	"math"
 	"math/big"
@@ -102,10 +100,10 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 
 	out := make([]model.LendMarket, 0, len(markets))
 	for _, m := range markets {
-		if !matchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
+		if !providers.MatchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
+		assetID := providers.CanonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
 		if assetID == "" {
 			continue
 		}
@@ -146,10 +144,10 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 
 	out := make([]model.LendRate, 0, len(markets))
 	for _, m := range markets {
-		if !matchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
+		if !providers.MatchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, asset) {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
+		assetID := providers.CanonicalAssetIDForChain(chain.CAIP2, m.UnderlyingAddress)
 		if assetID == "" {
 			continue
 		}
@@ -184,7 +182,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "moonwell supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "lend positions requires a valid EVM address")
 	}
@@ -357,10 +355,10 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 
 		ulAddr := strings.ToLower(pm.underlying.Hex())
-		if !matchesAsset(ulAddr, symbol, req.Asset) {
+		if !providers.MatchesAsset(ulAddr, symbol, req.Asset) {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, ulAddr)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, ulAddr)
 		if assetID == "" {
 			continue
 		}
@@ -376,7 +374,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			if collateralSet[pm.mToken] {
 				posType = providers.LendPositionTypeCollateral
 			}
-			if matchesPositionType(filterType, posType) {
+			if providers.MatchesPositionType(filterType, posType) {
 				amountUSD := bigIntToFloat(underlyingBal, decimals) * priceUSD
 				out = append(out, model.LendPosition{
 					Protocol:             "moonwell",
@@ -397,7 +395,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 
 		// Borrow position.
-		if pm.borrowBal.Sign() > 0 && matchesPositionType(filterType, providers.LendPositionTypeBorrow) {
+		if pm.borrowBal.Sign() > 0 && providers.MatchesPositionType(filterType, providers.LendPositionTypeBorrow) {
 			amountUSD := bigIntToFloat(pm.borrowBal, decimals) * priceUSD
 			out = append(out, model.LendPosition{
 				Protocol:             "moonwell",
@@ -417,7 +415,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 	}
 
-	sortLendPositions(out)
+	providers.SortLendPositions(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
 	}
@@ -434,7 +432,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 
 	out := make([]model.YieldOpportunity, 0, len(markets))
 	for _, m := range markets {
-		if !matchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, req.Asset) {
+		if !providers.MatchesAsset(m.UnderlyingAddress, m.UnderlyingSymbol, req.Asset) {
 			continue
 		}
 		if (m.SupplyAPY == 0 || m.TVLUSD == 0) && !req.IncludeIncomplete {
@@ -447,12 +445,12 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			continue
 		}
 
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, m.UnderlyingAddress)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, m.UnderlyingAddress)
 		if assetID == "" {
 			continue
 		}
 		nativeID := providerNativeID("moonwell", req.Chain.CAIP2, comptroller, m.UnderlyingAddress)
-		opportunityID := hashOpportunity("moonwell", req.Chain.CAIP2, nativeID, assetID)
+		opportunityID := providers.HashOpportunity("moonwell", req.Chain.CAIP2, nativeID, assetID)
 
 		out = append(out, model.YieldOpportunity{
 			OpportunityID:        opportunityID,
@@ -514,7 +512,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		}
 		opportunityID := ""
 		if strings.TrimSpace(row.ProviderNativeID) != "" {
-			opportunityID = hashOpportunity("moonwell", row.ChainID, row.ProviderNativeID, row.AssetID)
+			opportunityID = providers.HashOpportunity("moonwell", row.ChainID, row.ProviderNativeID, row.AssetID)
 		}
 		out = append(out, model.YieldPosition{
 			Protocol:             "moonwell",
@@ -534,7 +532,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		})
 	}
 
-	sortYieldPositions(out)
+	providers.SortYieldPositions(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
 	}
@@ -945,87 +943,11 @@ func amountInfoFromBigInt(v *big.Int, decimals int) model.AmountInfo {
 	if v == nil {
 		v = new(big.Int)
 	}
-	base := v.String()
-	return model.AmountInfo{
-		AmountBaseUnits: base,
-		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
-		Decimals:        decimals,
-	}
-}
-
-func normalizeEVMAddress(address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
-		return ""
-	}
-	return addr
-}
-
-func canonicalAssetIDForChain(chainID, address string) string {
-	addr := normalizeEVMAddress(address)
-	if chainID == "" || addr == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
+	return providers.AmountInfoFromBase(v.String(), decimals)
 }
 
 func providerNativeID(provider, chainID, comptrollerAddress, underlyingAddress string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(comptrollerAddress), normalizeEVMAddress(underlyingAddress))
-}
-
-func hashOpportunity(provider, chainID, marketID, assetID string) string {
-	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
-	h := sha1.Sum([]byte(seed))
-	return hex.EncodeToString(h[:])
-}
-
-func matchesAsset(address, symbol string, asset id.Asset) bool {
-	assetAddress := strings.TrimSpace(asset.Address)
-	if assetAddress != "" {
-		return strings.EqualFold(strings.TrimSpace(address), assetAddress)
-	}
-	assetSymbol := strings.TrimSpace(asset.Symbol)
-	if assetSymbol != "" {
-		return strings.EqualFold(strings.TrimSpace(symbol), assetSymbol)
-	}
-	return true
-}
-
-func matchesPositionType(filter, position providers.LendPositionType) bool {
-	if filter == "" || filter == providers.LendPositionTypeAll {
-		return true
-	}
-	return filter == position
-}
-
-func sortLendPositions(items []model.LendPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].PositionType != items[j].PositionType {
-			return items[i].PositionType < items[j].PositionType
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
+	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, providers.NormalizeEVMAddress(comptrollerAddress), providers.NormalizeEVMAddress(underlyingAddress))
 }
 
 // ── ABI singletons ──────────────────────────────────────────────────────

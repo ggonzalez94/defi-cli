@@ -2,8 +2,6 @@ package morpho
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"math/big"
@@ -533,7 +531,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "morpho positions requires a valid EVM account address")
 	}
@@ -579,10 +577,10 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			continue
 		}
 
-		loanAssetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Market.LoanAsset.Address)
+		loanAssetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, item.Market.LoanAsset.Address)
 		if loanAssetID != "" {
-			if matchesPositionType(filterType, providers.LendPositionTypeSupply) &&
-				matchesPositionAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
+			if providers.MatchesPositionType(filterType, providers.LendPositionTypeSupply) &&
+				providers.MatchesAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
 				base := item.State.SupplyAssets.normalized()
 				if base != "0" {
 					supplyAPY := 0.0
@@ -598,7 +596,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 						AssetID:              loanAssetID,
 						ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
 						ProviderNativeIDKind: model.NativeIDKindMarketID,
-						Amount:               amountInfoFromBase(base, item.Market.LoanAsset.Decimals),
+						Amount:               providers.AmountInfoFromBase(base, item.Market.LoanAsset.Decimals),
 						AmountUSD:            item.State.SupplyAssetsUSD,
 						APY:                  supplyAPY,
 						SourceURL:            "https://app.morpho.org",
@@ -607,8 +605,8 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 				}
 			}
 
-			if matchesPositionType(filterType, providers.LendPositionTypeBorrow) &&
-				matchesPositionAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
+			if providers.MatchesPositionType(filterType, providers.LendPositionTypeBorrow) &&
+				providers.MatchesAsset(item.Market.LoanAsset.Address, item.Market.LoanAsset.Symbol, req.Asset) {
 				base := item.State.BorrowAssets.normalized()
 				if base != "0" {
 					borrowAPY := 0.0
@@ -624,7 +622,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 						AssetID:              loanAssetID,
 						ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
 						ProviderNativeIDKind: model.NativeIDKindMarketID,
-						Amount:               amountInfoFromBase(base, item.Market.LoanAsset.Decimals),
+						Amount:               providers.AmountInfoFromBase(base, item.Market.LoanAsset.Decimals),
 						AmountUSD:            item.State.BorrowAssetsUSD,
 						APY:                  borrowAPY,
 						SourceURL:            "https://app.morpho.org",
@@ -635,10 +633,10 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 
 		if item.Market.CollateralAsset != nil &&
-			matchesPositionType(filterType, providers.LendPositionTypeCollateral) &&
-			matchesPositionAsset(item.Market.CollateralAsset.Address, item.Market.CollateralAsset.Symbol, req.Asset) {
+			providers.MatchesPositionType(filterType, providers.LendPositionTypeCollateral) &&
+			providers.MatchesAsset(item.Market.CollateralAsset.Address, item.Market.CollateralAsset.Symbol, req.Asset) {
 			base := item.State.Collateral.normalized()
-			collateralAssetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Market.CollateralAsset.Address)
+			collateralAssetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, item.Market.CollateralAsset.Address)
 			if base != "0" && collateralAssetID != "" {
 				out = append(out, model.LendPosition{
 					Protocol:             "morpho",
@@ -649,7 +647,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 					AssetID:              collateralAssetID,
 					ProviderNativeID:     strings.TrimSpace(item.Market.UniqueKey),
 					ProviderNativeIDKind: model.NativeIDKindMarketID,
-					Amount:               amountInfoFromBase(base, item.Market.CollateralAsset.Decimals),
+					Amount:               providers.AmountInfoFromBase(base, item.Market.CollateralAsset.Decimals),
 					AmountUSD:            item.State.CollateralUSD,
 					APY:                  0,
 					SourceURL:            "https://app.morpho.org",
@@ -659,7 +657,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 	}
 
-	sortLendPositions(out)
+	providers.SortLendPositions(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
 	}
@@ -670,7 +668,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "morpho positions requires a valid EVM account address")
 	}
@@ -712,7 +710,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		if item.State == nil || item.Vault.Asset == nil {
 			continue
 		}
-		if !matchesPositionAsset(item.Vault.Asset.Address, item.Vault.Asset.Symbol, req.Asset) {
+		if !providers.MatchesAsset(item.Vault.Asset.Address, item.Vault.Asset.Symbol, req.Asset) {
 			continue
 		}
 
@@ -724,11 +722,11 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		if assetsBase == "0" {
 			continue
 		}
-		vaultAddress := normalizeEVMAddress(item.Vault.Address)
+		vaultAddress := providers.NormalizeEVMAddress(item.Vault.Address)
 		if vaultAddress == "" {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, item.Vault.Asset.Address)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, item.Vault.Asset.Address)
 		if assetID == "" {
 			continue
 		}
@@ -742,12 +740,12 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 			ChainID:              req.Chain.CAIP2,
 			AccountAddress:       account,
 			PositionType:         "deposit",
-			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
+			OpportunityID:        providers.HashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
 			AssetID:              assetID,
 			ProviderNativeID:     vaultAddress,
 			ProviderNativeIDKind: model.NativeIDKindVaultAddress,
-			Amount:               amountInfoFromBase(assetsBase, item.Vault.Asset.Decimals),
-			Shares:               ptrAmountInfo(amountInfoFromBase(sharesBase, 18)),
+			Amount:               providers.AmountInfoFromBase(assetsBase, item.Vault.Asset.Decimals),
+			Shares:               providers.PtrAmountInfo(providers.AmountInfoFromBase(sharesBase, 18)),
 			AmountUSD:            item.State.AssetsUSD,
 			APYTotal:             apyTotal,
 			SourceURL:            sourceURLForVault(vaultAddress),
@@ -755,7 +753,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		})
 	}
 
-	sortYieldPositions(out)
+	providers.SortYieldPositions(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
 	}
@@ -781,12 +779,12 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		backingAssets := backingAssetsFromShares(vault.BackingShares, req.Chain.CAIP2, vault.AssetAddress, vault.AssetSymbol, req.Asset.AssetID)
 		liq := vault.LiquidityUSD
 		assetID := canonicalAssetID(req.Asset, vault.AssetAddress)
-		vaultAddress := normalizeEVMAddress(vault.Address)
+		vaultAddress := providers.NormalizeEVMAddress(vault.Address)
 		if vaultAddress == "" {
 			continue
 		}
 		out = append(out, model.YieldOpportunity{
-			OpportunityID:        hashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
+			OpportunityID:        providers.HashOpportunity("morpho", req.Chain.CAIP2, vaultAddress, assetID),
 			Provider:             "morpho",
 			Protocol:             "morpho",
 			ChainID:              req.Chain.CAIP2,
@@ -832,7 +830,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 	if !chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho supports only EVM chains")
 	}
-	vaultAddress := normalizeEVMAddress(req.Opportunity.ProviderNativeID)
+	vaultAddress := providers.NormalizeEVMAddress(req.Opportunity.ProviderNativeID)
 	if vaultAddress == "" {
 		return nil, clierr.New(clierr.CodeUsage, "morpho opportunity requires a vault address provider_native_id")
 	}
@@ -1023,7 +1021,7 @@ func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset
 		"chainId_in": []int64{chain.EVMChainID},
 		"listed":     true,
 	}
-	if addr := normalizeEVMAddress(asset.Address); addr != "" {
+	if addr := providers.NormalizeEVMAddress(asset.Address); addr != "" {
 		where["assetAddress_in"] = []string{addr}
 	} else if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
 		where["assetSymbol_in"] = []string{symbol}
@@ -1196,8 +1194,8 @@ func convertMorphoPoints(points []morphoFloatDataPoint, percent bool) []model.Yi
 }
 
 func matchesVaultAsset(vaultAssetAddress, vaultAssetSymbol string, asset id.Asset) bool {
-	if addr := normalizeEVMAddress(asset.Address); addr != "" {
-		return strings.EqualFold(normalizeEVMAddress(vaultAssetAddress), addr)
+	if addr := providers.NormalizeEVMAddress(asset.Address); addr != "" {
+		return strings.EqualFold(providers.NormalizeEVMAddress(vaultAssetAddress), addr)
 	}
 	if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
 		return strings.EqualFold(strings.TrimSpace(vaultAssetSymbol), symbol)
@@ -1321,10 +1319,10 @@ func backingAssetsFromShares(
 		if share.USD <= 0 {
 			continue
 		}
-		assetID := canonicalAssetIDForChain(chainID, share.Address)
+		assetID := providers.CanonicalAssetIDForChain(chainID, share.Address)
 		symbol := strings.TrimSpace(share.Symbol)
 		if assetID == "" {
-			assetID = canonicalAssetIDForChain(chainID, fallbackAddress)
+			assetID = providers.CanonicalAssetIDForChain(chainID, fallbackAddress)
 		}
 		if assetID == "" {
 			assetID = strings.TrimSpace(fallbackAssetID)
@@ -1344,7 +1342,7 @@ func backingAssetsFromShares(
 		total += share.USD
 	}
 	if len(byAsset) == 0 {
-		assetID := canonicalAssetIDForChain(chainID, fallbackAddress)
+		assetID := providers.CanonicalAssetIDForChain(chainID, fallbackAddress)
 		if assetID == "" {
 			assetID = strings.TrimSpace(fallbackAssetID)
 		}
@@ -1380,7 +1378,7 @@ func backingAssetsFromShares(
 }
 
 func sourceURLForVault(address string) string {
-	addr := normalizeEVMAddress(address)
+	addr := providers.NormalizeEVMAddress(address)
 	if addr == "" {
 		return "https://app.morpho.org"
 	}
@@ -1393,20 +1391,6 @@ func canonicalAssetID(asset id.Asset, address string) string {
 		return asset.AssetID
 	}
 	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
-}
-
-func canonicalAssetIDForChain(chainID, address string) string {
-	addr := normalizeEVMAddress(address)
-	if chainID == "" || addr == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
-}
-
-func hashOpportunity(provider, chainID, marketID, assetID string) string {
-	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
-	h := sha1.Sum([]byte(seed))
-	return hex.EncodeToString(h[:])
 }
 
 type bigintString string
@@ -1441,73 +1425,3 @@ func (b bigintString) normalized() string {
 	return n.String()
 }
 
-func normalizeEVMAddress(address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
-		return ""
-	}
-	return addr
-}
-
-func matchesPositionType(filter, position providers.LendPositionType) bool {
-	if filter == "" || filter == providers.LendPositionTypeAll {
-		return true
-	}
-	return filter == position
-}
-
-func matchesPositionAsset(address, symbol string, asset id.Asset) bool {
-	if strings.TrimSpace(asset.Address) != "" {
-		return strings.EqualFold(strings.TrimSpace(address), strings.TrimSpace(asset.Address))
-	}
-	if strings.TrimSpace(asset.Symbol) != "" {
-		return strings.EqualFold(strings.TrimSpace(symbol), strings.TrimSpace(asset.Symbol))
-	}
-	return true
-}
-
-func amountInfoFromBase(base string, decimals int) model.AmountInfo {
-	if decimals < 0 {
-		decimals = 0
-	}
-	return model.AmountInfo{
-		AmountBaseUnits: base,
-		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
-		Decimals:        decimals,
-	}
-}
-
-func ptrAmountInfo(v model.AmountInfo) *model.AmountInfo {
-	copy := v
-	return &copy
-}
-
-func sortLendPositions(items []model.LendPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].PositionType != items[j].PositionType {
-			return items[i].PositionType < items[j].PositionType
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}

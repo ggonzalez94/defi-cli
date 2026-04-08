@@ -2,14 +2,10 @@ package aave
 
 import (
 	"context"
-	"crypto/sha1"
-	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"math"
 	"net/http"
 	"sort"
-	"strconv"
 	"strings"
 	"time"
 
@@ -251,12 +247,12 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 			if !matchesReserveAsset(r, asset) {
 				continue
 			}
-			supplyAPY := parseFloat(r.SupplyInfo.APY.Value) * 100
+			supplyAPY := providers.ParseFloat(r.SupplyInfo.APY.Value) * 100
 			borrowAPY := 0.0
 			if r.BorrowInfo != nil {
-				borrowAPY = parseFloat(r.BorrowInfo.APY.Value) * 100
+				borrowAPY = providers.ParseFloat(r.BorrowInfo.APY.Value) * 100
 			}
-			tvlUSD := parseFloat(r.Size.USD)
+			tvlUSD := providers.ParseFloat(r.Size.USD)
 			if tvlUSD <= 0 {
 				continue
 			}
@@ -305,12 +301,12 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 			if !matchesReserveAsset(r, asset) {
 				continue
 			}
-			supplyAPY := parseFloat(r.SupplyInfo.APY.Value) * 100
+			supplyAPY := providers.ParseFloat(r.SupplyInfo.APY.Value) * 100
 			borrowAPY := 0.0
 			utilization := 0.0
 			if r.BorrowInfo != nil {
-				borrowAPY = parseFloat(r.BorrowInfo.APY.Value) * 100
-				utilization = parseFloat(r.BorrowInfo.UtilizationRate.Value)
+				borrowAPY = providers.ParseFloat(r.BorrowInfo.APY.Value) * 100
+				utilization = providers.ParseFloat(r.BorrowInfo.UtilizationRate.Value)
 			}
 			out = append(out, model.LendRate{
 				Protocol:             "aave",
@@ -344,7 +340,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if !req.Chain.IsEVM() {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave supports only EVM chains")
 	}
-	account := normalizeEVMAddress(req.Account)
+	account := providers.NormalizeEVMAddress(req.Account)
 	if account == "" {
 		return nil, clierr.New(clierr.CodeUsage, "aave positions requires a valid EVM account address")
 	}
@@ -403,18 +399,18 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		if supply.IsCollateral {
 			positionType = providers.LendPositionTypeCollateral
 		}
-		if !matchesPositionType(filterType, positionType) {
+		if !providers.MatchesPositionType(filterType, positionType) {
 			continue
 		}
-		if !matchesPositionAsset(supply.Currency.Address, supply.Currency.Symbol, req.Asset) {
+		if !providers.MatchesAsset(supply.Currency.Address, supply.Currency.Symbol, req.Asset) {
 			continue
 		}
 
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, supply.Currency.Address)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, supply.Currency.Address)
 		if assetID == "" {
 			continue
 		}
-		amount := amountInfoFromRaw(supply.Balance.Amount.Raw, supply.Currency.Decimals)
+		amount := providers.AmountInfoFromRaw(supply.Balance.Amount.Raw, supply.Currency.Decimals)
 		out = append(out, model.LendPosition{
 			Protocol:             "aave",
 			Provider:             "aave",
@@ -425,26 +421,26 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			ProviderNativeID:     providerNativeID("aave", req.Chain.CAIP2, supply.Market.Address, supply.Currency.Address),
 			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
 			Amount:               amount,
-			AmountUSD:            parseFloat(supply.Balance.USD),
-			APY:                  parseFloat(supply.APY.Value) * 100,
+			AmountUSD:            providers.ParseFloat(supply.Balance.USD),
+			APY:                  providers.ParseFloat(supply.APY.Value) * 100,
 			SourceURL:            "https://app.aave.com",
 			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
 	for _, borrow := range resp.Data.UserBorrows {
-		if !matchesPositionType(filterType, providers.LendPositionTypeBorrow) {
+		if !providers.MatchesPositionType(filterType, providers.LendPositionTypeBorrow) {
 			continue
 		}
-		if !matchesPositionAsset(borrow.Currency.Address, borrow.Currency.Symbol, req.Asset) {
+		if !providers.MatchesAsset(borrow.Currency.Address, borrow.Currency.Symbol, req.Asset) {
 			continue
 		}
 
-		assetID := canonicalAssetIDForChain(req.Chain.CAIP2, borrow.Currency.Address)
+		assetID := providers.CanonicalAssetIDForChain(req.Chain.CAIP2, borrow.Currency.Address)
 		if assetID == "" {
 			continue
 		}
-		amount := amountInfoFromRaw(borrow.Debt.Amount.Raw, borrow.Currency.Decimals)
+		amount := providers.AmountInfoFromRaw(borrow.Debt.Amount.Raw, borrow.Currency.Decimals)
 		out = append(out, model.LendPosition{
 			Protocol:             "aave",
 			Provider:             "aave",
@@ -455,14 +451,14 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			ProviderNativeID:     providerNativeID("aave", req.Chain.CAIP2, borrow.Market.Address, borrow.Currency.Address),
 			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
 			Amount:               amount,
-			AmountUSD:            parseFloat(borrow.Debt.USD),
-			APY:                  parseFloat(borrow.APY.Value) * 100,
+			AmountUSD:            providers.ParseFloat(borrow.Debt.USD),
+			APY:                  providers.ParseFloat(borrow.APY.Value) * 100,
 			SourceURL:            "https://app.aave.com",
 			FetchedAt:            c.now().UTC().Format(time.RFC3339),
 		})
 	}
 
-	sortLendPositions(out)
+	providers.SortLendPositions(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
 	}
@@ -481,8 +477,8 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			if !matchesReserveAsset(r, req.Asset) {
 				continue
 			}
-			apy := parseFloat(r.SupplyInfo.APY.Value) * 100
-			tvl := parseFloat(r.Size.USD)
+			apy := providers.ParseFloat(r.SupplyInfo.APY.Value) * 100
+			tvl := providers.ParseFloat(r.Size.USD)
 			if (apy == 0 || tvl == 0) && !req.IncludeIncomplete {
 				continue
 			}
@@ -496,12 +492,12 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			assetID := canonicalAssetID(req.Asset, r.UnderlyingToken.Address)
 			liquidityUSD := tvl
 			if r.BorrowInfo != nil {
-				liquidityUSD = parseFloat(r.BorrowInfo.AvailableLiquidity.USD)
+				liquidityUSD = providers.ParseFloat(r.BorrowInfo.AvailableLiquidity.USD)
 			}
-			normalizedMarket := normalizeEVMAddress(m.Address)
-			normalizedUnderlying := normalizeEVMAddress(r.UnderlyingToken.Address)
+			normalizedMarket := providers.NormalizeEVMAddress(m.Address)
+			normalizedUnderlying := providers.NormalizeEVMAddress(r.UnderlyingToken.Address)
 			nativeID := providerNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
-			opportunityID := hashOpportunity("aave", req.Chain.CAIP2, nativeID, assetID)
+			opportunityID := providers.HashOpportunity("aave", req.Chain.CAIP2, nativeID, assetID)
 			out = append(out, model.YieldOpportunity{
 				OpportunityID:        opportunityID,
 				Provider:             "aave",
@@ -560,7 +556,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		}
 		opportunityID := ""
 		if strings.TrimSpace(row.ProviderNativeID) != "" {
-			opportunityID = hashOpportunity("aave", row.ChainID, row.ProviderNativeID, row.AssetID)
+			opportunityID = providers.HashOpportunity("aave", row.ChainID, row.ProviderNativeID, row.AssetID)
 		}
 		out = append(out, model.YieldPosition{
 			Protocol:             "aave",
@@ -580,7 +576,7 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		})
 	}
 
-	sortYieldPositions(out)
+	providers.SortYieldPositions(out)
 	if req.Limit > 0 && len(out) > req.Limit {
 		out = out[:req.Limit]
 	}
@@ -655,7 +651,7 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 		}
 		points = append(points, model.YieldHistoryPoint{
 			Timestamp: ts.UTC().Format(time.RFC3339),
-			Value:     parseFloat(sample.AvgRate.Value) * 100,
+			Value:     providers.ParseFloat(sample.AvgRate.Value) * 100,
 		})
 	}
 	if req.Interval == providers.YieldHistoryIntervalDay {
@@ -745,7 +741,7 @@ func (c *Client) fetchMarketAddresses(ctx context.Context, chain id.Chain) ([]st
 	}
 	out := make([]string, 0, len(resp.Data.Markets))
 	for _, market := range resp.Data.Markets {
-		address := normalizeEVMAddress(market.Address)
+		address := providers.NormalizeEVMAddress(market.Address)
 		if address != "" {
 			out = append(out, address)
 		}
@@ -772,24 +768,8 @@ func canonicalAssetID(asset id.Asset, address string) string {
 	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
 }
 
-func canonicalAssetIDForChain(chainID, address string) string {
-	addr := normalizeEVMAddress(address)
-	if chainID == "" || addr == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
-}
-
-func normalizeEVMAddress(address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if len(addr) != 42 || !strings.HasPrefix(addr, "0x") {
-		return ""
-	}
-	return addr
-}
-
 func providerNativeID(provider, chainID, marketAddress, underlyingAddress string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, normalizeEVMAddress(marketAddress), normalizeEVMAddress(underlyingAddress))
+	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, providers.NormalizeEVMAddress(marketAddress), providers.NormalizeEVMAddress(underlyingAddress))
 }
 
 func parseOpportunityNativeID(op model.YieldOpportunity) (string, string, error) {
@@ -806,8 +786,8 @@ func parseOpportunityNativeID(op model.YieldOpportunity) (string, string, error)
 	if len(parts) != 2 {
 		return "", "", clierr.New(clierr.CodeUsage, "invalid aave provider_native_id format")
 	}
-	marketAddress := normalizeEVMAddress(parts[0])
-	underlyingAddress := normalizeEVMAddress(parts[1])
+	marketAddress := providers.NormalizeEVMAddress(parts[0])
+	underlyingAddress := providers.NormalizeEVMAddress(parts[1])
 	if marketAddress == "" || underlyingAddress == "" {
 		return "", "", clierr.New(clierr.CodeUsage, "invalid aave provider_native_id addresses")
 	}
@@ -897,91 +877,3 @@ func averagePointsByDay(points []model.YieldHistoryPoint) []model.YieldHistoryPo
 	return out
 }
 
-func matchesPositionType(filter, position providers.LendPositionType) bool {
-	if filter == "" || filter == providers.LendPositionTypeAll {
-		return true
-	}
-	return filter == position
-}
-
-func matchesPositionAsset(address, symbol string, asset id.Asset) bool {
-	if strings.TrimSpace(asset.Address) != "" {
-		return strings.EqualFold(strings.TrimSpace(address), strings.TrimSpace(asset.Address))
-	}
-	if strings.TrimSpace(asset.Symbol) != "" {
-		return strings.EqualFold(strings.TrimSpace(symbol), strings.TrimSpace(asset.Symbol))
-	}
-	return true
-}
-
-func amountInfoFromRaw(raw string, decimals int) model.AmountInfo {
-	if decimals < 0 {
-		decimals = 0
-	}
-	base := normalizeBaseUnits(raw)
-	return model.AmountInfo{
-		AmountBaseUnits: base,
-		AmountDecimal:   id.FormatDecimalCompat(base, decimals),
-		Decimals:        decimals,
-	}
-}
-
-func normalizeBaseUnits(v string) string {
-	clean := strings.TrimSpace(v)
-	if clean == "" {
-		return "0"
-	}
-	for _, r := range clean {
-		if r < '0' || r > '9' {
-			return "0"
-		}
-	}
-	return clean
-}
-
-func sortLendPositions(items []model.LendPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].PositionType != items[j].PositionType {
-			return items[i].PositionType < items[j].PositionType
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
-func sortYieldPositions(items []model.YieldPosition) {
-	sort.Slice(items, func(i, j int) bool {
-		if items[i].AmountUSD != items[j].AmountUSD {
-			return items[i].AmountUSD > items[j].AmountUSD
-		}
-		if items[i].APYTotal != items[j].APYTotal {
-			return items[i].APYTotal > items[j].APYTotal
-		}
-		if items[i].AssetID != items[j].AssetID {
-			return items[i].AssetID < items[j].AssetID
-		}
-		return items[i].ProviderNativeID < items[j].ProviderNativeID
-	})
-}
-
-func parseFloat(v string) float64 {
-	f, err := strconv.ParseFloat(strings.TrimSpace(v), 64)
-	if err != nil {
-		return 0
-	}
-	if math.IsNaN(f) || math.IsInf(f, 0) {
-		return 0
-	}
-	return f
-}
-
-func hashOpportunity(provider, chainID, marketID, assetID string) string {
-	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
-	h := sha1.Sum([]byte(seed))
-	return hex.EncodeToString(h[:])
-}
