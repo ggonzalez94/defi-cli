@@ -13,7 +13,11 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/multicall"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
+
+var testMC3ABI = mustPlannerABI(registry.Multicall3ABI)
 
 const (
 	testMToken     = "0x0000000000000000000000000000000000000011"
@@ -354,7 +358,7 @@ func TestResolveMoonwellMTokenAutoResolve(t *testing.T) {
 
 	getAllMarketsSel := hex.EncodeToString(moonwellComptrollerABI.Methods["getAllMarkets"].ID)
 	underlyingSel := hex.EncodeToString(moonwellMTokenABI.Methods["underlying"].ID)
-	mc3Sel := hex.EncodeToString(plannerMC3ABI.Methods["aggregate3"].ID)
+	mc3Sel := hex.EncodeToString(testMC3ABI.Methods["aggregate3"].ID)
 
 	// dispatchSingle handles an individual contract call and returns the hex-encoded result.
 	dispatchSingle := func(selector string) string {
@@ -403,8 +407,8 @@ func TestResolveMoonwellMTokenAutoResolve(t *testing.T) {
 		selector := hex.EncodeToString(data[:4])
 
 		// Handle Multicall3 aggregate3.
-		if strings.EqualFold(callObj.To, plannerMC3Addr.Hex()) && selector == mc3Sel {
-			decoded, err := plannerMC3ABI.Methods["aggregate3"].Inputs.Unpack(data[4:])
+		if strings.EqualFold(callObj.To, multicall.Addr.Hex()) && selector == mc3Sel {
+			decoded, err := testMC3ABI.Methods["aggregate3"].Inputs.Unpack(data[4:])
 			if err != nil {
 				writePlannerRPCError(w, req.ID, -32602, "unpack aggregate3")
 				return
@@ -433,7 +437,7 @@ func TestResolveMoonwellMTokenAutoResolve(t *testing.T) {
 					results[i] = mc3Res{Success: true, ReturnData: resBytes}
 				}
 			}
-			encoded, _ := plannerMC3ABI.Methods["aggregate3"].Outputs.Pack(results)
+			encoded, _ := testMC3ABI.Methods["aggregate3"].Outputs.Pack(results)
 			writePlannerRPCResult(w, req.ID, "0x"+hex.EncodeToString(encoded))
 			return
 		}

@@ -12,21 +12,9 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/multicall"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
-
-var plannerMC3Addr = common.HexToAddress("0xcA11bde05977b3631167028862bE2a173976CA11")
-
-type plannerMC3Call struct {
-	Target       common.Address
-	AllowFailure bool
-	CallData     []byte
-}
-
-type plannerMC3Result struct {
-	Success    bool
-	ReturnData []byte
-}
 
 type MoonwellLendRequest struct {
 	Verb            AaveLendVerb // reuse same verb type: supply/withdraw/borrow/repay
@@ -224,12 +212,12 @@ func resolveMoonwellMToken(ctx context.Context, client *ethclient.Client, chain 
 		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack underlying calldata", err)
 	}
 
-	calls := make([]plannerMC3Call, len(markets))
+	calls := make([]multicall.Call, len(markets))
 	for i, mt := range markets {
-		calls[i] = plannerMC3Call{Target: mt, AllowFailure: true, CallData: underlyingCD}
+		calls[i] = multicall.Call{Target: mt, AllowFailure: true, CallData: underlyingCD}
 	}
 
-	results, err := plannerExecMulticall3(ctx, client, calls)
+	results, err := multicall.Aggregate3(ctx, client, calls)
 	if err != nil {
 		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "multicall3 underlying resolution", err)
 	}
@@ -247,39 +235,5 @@ func resolveMoonwellMToken(ctx context.Context, client *ethclient.Client, chain 
 	return common.Address{}, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("no moonwell mToken found for underlying %s on chain %d; pass --pool-address with the mToken address", underlying.Hex(), chain.EVMChainID))
 }
 
-// plannerExecMulticall3 batches calls via Multicall3.aggregate3 in a single RPC round-trip.
-func plannerExecMulticall3(ctx context.Context, client *ethclient.Client, calls []plannerMC3Call) ([]plannerMC3Result, error) {
-	packed, err := plannerMC3ABI.Pack("aggregate3", calls)
-	if err != nil {
-		return nil, fmt.Errorf("pack aggregate3: %w", err)
-	}
-	mc3 := plannerMC3Addr
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &mc3, Data: packed}, nil)
-	if err != nil {
-		return nil, fmt.Errorf("call multicall3: %w", err)
-	}
-	dec, err := plannerMC3ABI.Unpack("aggregate3", out)
-	if err != nil {
-		return nil, fmt.Errorf("unpack aggregate3: %w", err)
-	}
-	if len(dec) == 0 {
-		return nil, fmt.Errorf("empty aggregate3 response")
-	}
-	rawResults, ok := dec[0].([]struct {
-		Success    bool   `json:"success"`
-		ReturnData []byte `json:"returnData"`
-	})
-	if !ok {
-		return nil, fmt.Errorf("unexpected multicall3 response type: %T", dec[0])
-	}
-	results := make([]plannerMC3Result, len(rawResults))
-	for i, r := range rawResults {
-		results[i].Success = r.Success
-		results[i].ReturnData = r.ReturnData
-	}
-	return results, nil
-}
-
 var moonwellMTokenABI = mustPlannerABI(registry.MoonwellMTokenABI)
 var moonwellComptrollerABI = mustPlannerABI(registry.MoonwellComptrollerABI)
-var plannerMC3ABI = mustPlannerABI(registry.Multicall3ABI)

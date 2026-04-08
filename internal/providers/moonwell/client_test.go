@@ -15,11 +15,12 @@ import (
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/multicall"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
-// ── Test RPC helpers ────────────────────────────────────────────────────
+var testMC3ABI, _ = abi.JSON(strings.NewReader(registry.Multicall3ABI))
 
 type jsonRPCRequest struct {
 	JSONRPC string        `json:"jsonrpc"`
@@ -164,7 +165,7 @@ func newTestRPCServer(t *testing.T) *httptest.Server {
 	}
 	oABI, _ := abi.JSON(strings.NewReader(registry.MoonwellOracleABI))
 	oSel := selectorHex(oABI, "getUnderlyingPrice")
-	mc3Sel := selectorHex(mc3ABI, "aggregate3")
+	mc3Sel := selectorHex(testMC3ABI, "aggregate3")
 
 	supplyRate := big.NewInt(951293759)
 	borrowRate := big.NewInt(1585489599)
@@ -206,9 +207,9 @@ func newTestRPCServer(t *testing.T) *httptest.Server {
 		to := strings.ToLower(toHex)
 
 		// Handle Multicall3.aggregate3 — decode Call3[], dispatch each, re-encode Result[].
-		if to == strings.ToLower(multicall3Addr.Hex()) && selector == mc3Sel {
+		if to == strings.ToLower(multicall.Addr.Hex()) && selector == mc3Sel {
 			rawData, _ := hex.DecodeString(dataHex)
-			decoded, err := mc3ABI.Methods["aggregate3"].Inputs.Unpack(rawData[4:])
+			decoded, err := testMC3ABI.Methods["aggregate3"].Inputs.Unpack(rawData[4:])
 			if err != nil {
 				t.Logf("aggregate3 unpack error: %v", err)
 				json.NewEncoder(w).Encode(jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: "0x"})
@@ -234,7 +235,7 @@ func newTestRPCServer(t *testing.T) *httptest.Server {
 			}
 
 			// Encode as aggregate3 output: tuple[](bool success, bytes returnData)
-			encoded, err := mc3ABI.Methods["aggregate3"].Outputs.Pack(results)
+			encoded, err := testMC3ABI.Methods["aggregate3"].Outputs.Pack(results)
 			if err != nil {
 				t.Logf("aggregate3 pack error: %v", err)
 				json.NewEncoder(w).Encode(jsonRPCResponse{JSONRPC: "2.0", ID: req.ID, Result: "0x"})
