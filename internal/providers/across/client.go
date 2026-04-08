@@ -196,7 +196,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	vals.Set("destinationChainId", strconv.FormatInt(req.ToChain.EVMChainID, 10))
 	vals.Set("depositor", sender)
 	vals.Set("recipient", recipient)
-	vals.Set("slippage", formatSlippage(slippageBps))
+	vals.Set("slippage", providers.FormatSlippageBps(slippageBps))
 
 	reqURL := c.baseURL + "/swap/approval?" + vals.Encode()
 	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
@@ -255,7 +255,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 			RPCURL:      rpcURL,
 			Description: "Approve across bridge contract for source token",
 			Target:      common.HexToAddress(approval.To).Hex(),
-			Data:        ensureHexPrefix(approval.Data),
+			Data:        providers.EnsureHexPrefix(approval.Data),
 			Value:       normalizeTransactionValue(approval.Value),
 		})
 	}
@@ -269,10 +269,10 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		RPCURL:      rpcURL,
 		Description: "Bridge transfer via Across",
 		Target:      common.HexToAddress(resp.SwapTx.To).Hex(),
-		Data:        ensureHexPrefix(resp.SwapTx.Data),
+		Data:        providers.EnsureHexPrefix(resp.SwapTx.Data),
 		Value:       swapValue,
 		ExpectedOutputs: map[string]string{
-			"to_amount_min":                firstNonEmpty(resp.MinOutputAmount, resp.ExpectedOutputAmount, resp.Steps.Bridge.OutputAmount),
+			"to_amount_min":                providers.FirstNonEmpty(resp.MinOutputAmount, resp.ExpectedOutputAmount, resp.Steps.Bridge.OutputAmount),
 			"settlement_provider":          "across",
 			"settlement_status_endpoint":   registry.AcrossSettlementURL,
 			"settlement_origin_chain":      strconv.FormatInt(req.FromChain.EVMChainID, 10),
@@ -497,18 +497,6 @@ func toDigits(v string) string {
 	return trimLeadingZeros(v)
 }
 
-func formatSlippage(bps int64) string {
-	return strconv.FormatFloat(float64(bps)/10000, 'f', 6, 64)
-}
-
-func ensureHexPrefix(v string) string {
-	clean := strings.TrimSpace(v)
-	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
-		return clean
-	}
-	return "0x" + clean
-}
-
 func normalizeTransactionValue(v string) string {
 	clean := strings.TrimSpace(v)
 	if clean == "" {
@@ -525,13 +513,4 @@ func normalizeTransactionValue(v string) string {
 		return n.String()
 	}
 	return "0"
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return strings.TrimSpace(v)
-		}
-	}
-	return ""
 }

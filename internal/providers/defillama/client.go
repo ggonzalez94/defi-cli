@@ -1138,5 +1138,5 @@ func knownAssetID(chain id.Chain, symbol string) string {
 	if !ok {
 		return ""
 	}
-	return fmt.Sprintf("%s/erc20:%s", chain.CAIP2, strings.ToLower(token.Address))
+	return providers.CanonicalAssetIDForChain(chain.CAIP2, token.Address)
 }

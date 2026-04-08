@@ -154,3 +154,27 @@ func ParseFloat(v string) float64 {
 	}
 	return f
 }
+
+// FirstNonEmpty returns the first non-blank value from the list, trimmed.
+func FirstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if s := strings.TrimSpace(v); s != "" {
+			return s
+		}
+	}
+	return ""
+}
+
+// FormatSlippageBps formats a basis-points integer as a decimal fraction string (e.g. 50 → "0.005000").
+func FormatSlippageBps(bps int64) string {
+	return strconv.FormatFloat(float64(bps)/10000, 'f', 6, 64)
+}
+
+// EnsureHexPrefix prepends "0x" if the trimmed string doesn't already have it.
+func EnsureHexPrefix(v string) string {
+	clean := strings.TrimSpace(v)
+	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
+		return clean
+	}
+	return "0x" + clean
+}

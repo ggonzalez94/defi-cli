@@ -207,7 +207,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	if slippageBps >= 10_000 {
 		return execution.Action{}, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
 	}
-	fromAmountForGas, err := normalizeOptionalBaseUnits(firstNonEmpty(opts.FromAmountForGas, req.FromAmountForGas))
+	fromAmountForGas, err := normalizeOptionalBaseUnits(providers.FirstNonEmpty(opts.FromAmountForGas, req.FromAmountForGas))
 	if err != nil {
 		return execution.Action{}, clierr.Wrap(clierr.CodeUsage, "parse bridge gas reserve amount", err)
 	}
@@ -218,7 +218,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	vals.Set("fromToken", strings.ToLower(req.FromAsset.Address))
 	vals.Set("toToken", strings.ToLower(req.ToAsset.Address))
 	vals.Set("fromAmount", req.AmountBaseUnits)
-	vals.Set("slippage", formatSlippage(slippageBps))
+	vals.Set("slippage", providers.FormatSlippageBps(slippageBps))
 	vals.Set("fromAddress", sender)
 	vals.Set("toAddress", recipient)
 	if fromAmountForGas != "" {
@@ -263,7 +263,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		"to_chain_id":      req.ToChain.CAIP2,
 		"from_asset_id":    req.FromAsset.AssetID,
 		"to_asset_id":      req.ToAsset.AssetID,
-		"route":            firstNonEmpty(resp.ToolDetails.Name, resp.Tool),
+		"route":            providers.FirstNonEmpty(resp.ToolDetails.Name, resp.Tool),
 		"approval_spender": strings.TrimSpace(resp.Estimate.ApprovalAddress),
 	}
 	if fromAmountForGas != "" {
@@ -338,13 +338,13 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		RPCURL:      rpcURL,
 		Description: "Bridge transfer via LiFi route",
 		Target:      target,
-		Data:        ensureHexPrefix(resp.TransactionRequest.Data),
+		Data:        providers.EnsureHexPrefix(resp.TransactionRequest.Data),
 		Value:       bridgeValue,
 		ExpectedOutputs: map[string]string{
-			"to_amount_min":                firstNonEmpty(resp.Estimate.ToAmountMin, resp.Estimate.ToAmount),
+			"to_amount_min":                providers.FirstNonEmpty(resp.Estimate.ToAmountMin, resp.Estimate.ToAmount),
 			"settlement_provider":          "lifi",
 			"settlement_status_endpoint":   statusEndpoint,
-			"settlement_bridge":            firstNonEmpty(resp.ToolDetails.Key, resp.Tool),
+			"settlement_bridge":            providers.FirstNonEmpty(resp.ToolDetails.Key, resp.Tool),
 			"settlement_from_chain":        strconv.FormatInt(req.FromChain.EVMChainID, 10),
 			"settlement_to_chain":          strconv.FormatInt(req.ToChain.EVMChainID, 10),
 			"settlement_quote_response_id": resp.ID,
@@ -422,27 +422,6 @@ func normalizeOptionalBaseUnits(v string) (string, error) {
 		return "", fmt.Errorf("amount must be greater than zero")
 	}
 	return amount.String(), nil
-}
-
-func formatSlippage(bps int64) string {
-	return strconv.FormatFloat(float64(bps)/10000, 'f', 6, 64)
-}
-
-func firstNonEmpty(values ...string) string {
-	for _, v := range values {
-		if strings.TrimSpace(v) != "" {
-			return v
-		}
-	}
-	return ""
-}
-
-func ensureHexPrefix(v string) string {
-	clean := strings.TrimSpace(v)
-	if strings.HasPrefix(clean, "0x") || strings.HasPrefix(clean, "0X") {
-		return clean
-	}
-	return "0x" + clean
 }
 
 func hexToDecimal(v string) (string, error) {
