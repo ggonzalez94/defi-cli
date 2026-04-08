@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/ethereum/go-ethereum"
+	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethclient"
@@ -326,43 +327,15 @@ func resolveAavePoolAddress(ctx context.Context, client *ethclient.Client, chain
 		}
 		return common.HexToAddress(poolAddress), nil
 	}
-	providerAddr := strings.TrimSpace(poolProvider)
-	if providerAddr == "" {
-		if discovered, ok := registry.AavePoolAddressProvider(chain.EVMChainID); ok {
-			providerAddr = discovered
-		}
-	}
-	if providerAddr == "" {
+	provider, err := resolveAaveProviderAddr(chain, poolProvider)
+	if err != nil {
 		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave pool address provider is unavailable for this chain; pass --pool-address or --pool-address-provider")
 	}
-	if !common.IsHexAddress(providerAddr) {
-		return common.Address{}, clierr.New(clierr.CodeUsage, "invalid --pool-address-provider")
-	}
-	provider := common.HexToAddress(providerAddr)
 	callData, err := aavePoolAddressProviderABI.Pack("getPool")
 	if err != nil {
 		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack getPool calldata", err)
 	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &provider, Data: callData}, nil)
-	if err != nil {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "fetch aave pool address", err)
-	}
-	decoded, err := aavePoolAddressProviderABI.Unpack("getPool", out)
-	if err != nil || len(decoded) == 0 {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "decode aave pool address", err)
-	}
-	pool, ok := decoded[0].(common.Address)
-	if !ok {
-		if ptr, ok := decoded[0].(*common.Address); ok && ptr != nil {
-			pool = *ptr
-		} else {
-			return common.Address{}, clierr.New(clierr.CodeUnavailable, "invalid aave pool response")
-		}
-	}
-	if pool == (common.Address{}) {
-		return common.Address{}, clierr.New(clierr.CodeUnavailable, "aave pool address is zero")
-	}
-	return pool, nil
+	return callContractForAddress(ctx, client, provider, aavePoolAddressProviderABI, "getPool", callData, "aave pool address")
 }
 
 func resolveIncentivesController(ctx context.Context, client *ethclient.Client, chain id.Chain, controllerAddress string, poolProvider string) (common.Address, error) {
@@ -372,6 +345,21 @@ func resolveIncentivesController(ctx context.Context, client *ethclient.Client, 
 		}
 		return common.HexToAddress(controllerAddress), nil
 	}
+	provider, err := resolveAaveProviderAddr(chain, poolProvider)
+	if err != nil {
+		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave incentives controller is unavailable for this chain; pass --controller-address")
+	}
+	slot := crypto.Keccak256Hash([]byte("INCENTIVES_CONTROLLER"))
+	callData, err := aavePoolAddressProviderABI.Pack("getAddress", slot)
+	if err != nil {
+		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack getAddress calldata", err)
+	}
+	return callContractForAddress(ctx, client, provider, aavePoolAddressProviderABI, "getAddress", callData, "incentives controller address")
+}
+
+// resolveAaveProviderAddr resolves the Aave pool address provider for a chain,
+// using the explicit value if given, otherwise falling back to the registry.
+func resolveAaveProviderAddr(chain id.Chain, poolProvider string) (common.Address, error) {
 	providerAddr := strings.TrimSpace(poolProvider)
 	if providerAddr == "" {
 		if discovered, ok := registry.AavePoolAddressProvider(chain.EVMChainID); ok {
@@ -379,37 +367,37 @@ func resolveIncentivesController(ctx context.Context, client *ethclient.Client, 
 		}
 	}
 	if providerAddr == "" {
-		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave incentives controller is unavailable for this chain; pass --controller-address")
+		return common.Address{}, fmt.Errorf("no provider address available")
 	}
 	if !common.IsHexAddress(providerAddr) {
 		return common.Address{}, clierr.New(clierr.CodeUsage, "invalid --pool-address-provider")
 	}
-	provider := common.HexToAddress(providerAddr)
-	slot := crypto.Keccak256Hash([]byte("INCENTIVES_CONTROLLER"))
-	callData, err := aavePoolAddressProviderABI.Pack("getAddress", slot)
+	return common.HexToAddress(providerAddr), nil
+}
+
+// callContractForAddress calls a contract method that returns a single address,
+// handling ABI unpacking, type assertion (value or pointer), and zero-address validation.
+func callContractForAddress(ctx context.Context, client *ethclient.Client, target common.Address, contractABI abi.ABI, method string, callData []byte, label string) (common.Address, error) {
+	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &target, Data: callData}, nil)
 	if err != nil {
-		return common.Address{}, clierr.Wrap(clierr.CodeInternal, "pack getAddress calldata", err)
+		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "fetch "+label, err)
 	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{To: &provider, Data: callData}, nil)
-	if err != nil {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "fetch incentives controller address", err)
-	}
-	decoded, err := aavePoolAddressProviderABI.Unpack("getAddress", out)
+	decoded, err := contractABI.Unpack(method, out)
 	if err != nil || len(decoded) == 0 {
-		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "decode incentives controller address", err)
+		return common.Address{}, clierr.Wrap(clierr.CodeUnavailable, "decode "+label, err)
 	}
-	controller, ok := decoded[0].(common.Address)
+	addr, ok := decoded[0].(common.Address)
 	if !ok {
 		if ptr, ok := decoded[0].(*common.Address); ok && ptr != nil {
-			controller = *ptr
+			addr = *ptr
 		} else {
-			return common.Address{}, clierr.New(clierr.CodeUnavailable, "invalid incentives controller response")
+			return common.Address{}, clierr.New(clierr.CodeUnavailable, "invalid "+label+" response")
 		}
 	}
-	if controller == (common.Address{}) {
-		return common.Address{}, clierr.New(clierr.CodeUnavailable, "incentives controller address is zero")
+	if addr == (common.Address{}) {
+		return common.Address{}, clierr.New(clierr.CodeUnavailable, label+" is zero")
 	}
-	return controller, nil
+	return addr, nil
 }
 
 func appendApprovalIfNeeded(ctx context.Context, client *ethclient.Client, action *execution.Action, chainID, rpcURL string, token, owner, spender common.Address, amount *big.Int, description string) error {
