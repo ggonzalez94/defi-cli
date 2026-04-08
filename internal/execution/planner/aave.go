@@ -329,6 +329,9 @@ func resolveAavePoolAddress(ctx context.Context, client *ethclient.Client, chain
 	}
 	provider, err := resolveAaveProviderAddr(chain, poolProvider)
 	if err != nil {
+		if ce, ok := clierr.As(err); ok && ce.Code == clierr.CodeUsage {
+			return common.Address{}, err
+		}
 		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave pool address provider is unavailable for this chain; pass --pool-address or --pool-address-provider")
 	}
 	callData, err := aavePoolAddressProviderABI.Pack("getPool")
@@ -347,6 +350,9 @@ func resolveIncentivesController(ctx context.Context, client *ethclient.Client, 
 	}
 	provider, err := resolveAaveProviderAddr(chain, poolProvider)
 	if err != nil {
+		if ce, ok := clierr.As(err); ok && ce.Code == clierr.CodeUsage {
+			return common.Address{}, err
+		}
 		return common.Address{}, clierr.New(clierr.CodeUnsupported, "aave incentives controller is unavailable for this chain; pass --controller-address")
 	}
 	slot := crypto.Keccak256Hash([]byte("INCENTIVES_CONTROLLER"))

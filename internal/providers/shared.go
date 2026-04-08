@@ -384,7 +384,9 @@ func PostGraphQL(ctx context.Context, client *httpx.Client, endpoint string, que
 		return err
 	}
 	if result != nil {
-		return json.Unmarshal(raw.Data, result)
+		if err := json.Unmarshal(raw.Data, result); err != nil {
+			return clierr.Wrap(clierr.CodeUnavailable, provider+" graphql response decode", err)
+		}
 	}
 	return nil
 }
