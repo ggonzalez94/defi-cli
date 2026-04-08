@@ -359,12 +359,9 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ChainsTop(ctx, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ChainsTop(ctx, limit)
+			}))
 		},
 	}
 	topCmd.Flags().IntVar(&limit, "limit", 20, "Number of chains to return")
@@ -393,12 +390,9 @@ func (s *runtimeState) newChainsCommand() *cobra.Command {
 				"limit": assetsLimit,
 			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ChainsAssets(ctx, chain, asset, assetsLimit)
+			}))
 		},
 	}
 	assetsCmd.Flags().StringVar(&assetsChainArg, "chain", "", "Chain id/name/CAIP-2")
@@ -531,12 +525,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"category": category, "chain": chain, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsTop(ctx, category, chain, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsTop(ctx, category, chain, limit)
+			}))
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of protocols to return")
@@ -549,12 +540,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		Short: "List protocol categories with protocol counts and TVL",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsCategories(ctx)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsCategories(ctx)
+			}))
 		},
 	}
 	root.AddCommand(catCmd)
@@ -568,12 +556,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"category": feesCategory, "chain": feesChain, "limit": feesLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsFees(ctx, feesCategory, feesChain, feesLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsFees(ctx, feesCategory, feesChain, feesLimit)
+			}))
 		},
 	}
 	feesCmd.Flags().IntVar(&feesLimit, "limit", 20, "Number of protocols to return")
@@ -590,12 +575,9 @@ func (s *runtimeState) newProtocolsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"category": revCategory, "chain": revChain, "limit": revLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.ProtocolsRevenue(ctx, revCategory, revChain, revLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.ProtocolsRevenue(ctx, revCategory, revChain, revLimit)
+			}))
 		},
 	}
 	revCmd.Flags().IntVar(&revLimit, "limit", 20, "Number of protocols to return")
@@ -616,12 +598,9 @@ func (s *runtimeState) newDexesCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"chain": chain, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.DexesVolume(ctx, chain, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.DexesVolume(ctx, chain, limit)
+			}))
 		},
 	}
 	volCmd.Flags().IntVar(&limit, "limit", 20, "Number of DEXes to return")
@@ -641,12 +620,9 @@ func (s *runtimeState) newStablecoinsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"peg_type": pegType, "limit": limit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.StablecoinsTop(ctx, pegType, limit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.StablecoinsTop(ctx, pegType, limit)
+			}))
 		},
 	}
 	cmd.Flags().IntVar(&limit, "limit", 20, "Number of stablecoins to return")
@@ -660,12 +636,9 @@ func (s *runtimeState) newStablecoinsCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req := map[string]any{"limit": chainsLimit}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), req)
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := s.marketProvider.StablecoinChains(ctx, chainsLimit)
-				status := []model.ProviderStatus{{Name: s.marketProvider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 5*time.Minute, s.marketQuery(func(ctx context.Context) (any, error) {
+				return s.marketProvider.StablecoinChains(ctx, chainsLimit)
+			}))
 		},
 	}
 	chainsCmd.Flags().IntVar(&chainsLimit, "limit", 20, "Number of chains to return")
@@ -970,12 +943,9 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				"amount":              base,
 				"from_amount_for_gas": reqStruct.FromAmountForGas,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.QuoteBridge(ctx, reqStruct)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.QuoteBridge(ctx, reqStruct)
+			}))
 		},
 	}
 	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Bridge provider (across|lifi|bungee; no API key required)")
@@ -1020,12 +990,9 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				"limit":          req.Limit,
 				"include_chains": req.IncludeChains,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.ListBridges(ctx, req)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.ListBridges(ctx, req)
+			}))
 		},
 	}
 	listCmd.Flags().IntVar(&listLimit, "limit", 20, "Maximum bridges to return")
@@ -1060,12 +1027,9 @@ func (s *runtimeState) newBridgeCommand() *cobra.Command {
 				"bridge":                  strings.ToLower(strings.TrimSpace(req.Bridge)),
 				"include_chain_breakdown": req.IncludeChainBreakdown,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.BridgeDetails(ctx, req)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 60*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.BridgeDetails(ctx, req)
+			}))
 		},
 	}
 	detailsCmd.Flags().StringVar(&bridgeArg, "bridge", "", "Bridge identifier (id, slug, or name)")
@@ -1247,12 +1211,9 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				"swapper":       strings.ToLower(reqStruct.Swapper),
 				"rpc_url":       reqStruct.RPCURL,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
-				start := time.Now()
-				data, err := provider.QuoteSwap(ctx, reqStruct)
-				status := []model.ProviderStatus{{Name: provider.Info().Name, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-				return data, status, nil, false, err
-			})
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.QuoteSwap(ctx, reqStruct)
+			}))
 		},
 	}
 	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
@@ -2044,6 +2005,21 @@ func (s *runtimeState) newYieldCommand() *cobra.Command {
 }
 
 type fetchFn func(ctx context.Context) (data any, providerStatus []model.ProviderStatus, warnings []string, partial bool, err error)
+
+// singleProviderQuery wraps a single provider call with timing and status tracking.
+func singleProviderQuery(providerName string, fn func(ctx context.Context) (any, error)) fetchFn {
+	return func(ctx context.Context) (any, []model.ProviderStatus, []string, bool, error) {
+		start := time.Now()
+		data, err := fn(ctx)
+		status := []model.ProviderStatus{{Name: providerName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+		return data, status, nil, false, err
+	}
+}
+
+// marketQuery wraps a single marketProvider call with timing and status tracking.
+func (s *runtimeState) marketQuery(fn func(ctx context.Context) (any, error)) fetchFn {
+	return singleProviderQuery(s.marketProvider.Info().Name, fn)
+}
 
 func (s *runtimeState) runCachedCommand(commandPath, key string, ttl time.Duration, fetch fetchFn) error {
 	s.resetCommandDiagnostics()
