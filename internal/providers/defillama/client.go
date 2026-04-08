@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"math"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -90,13 +89,8 @@ type chainResp struct {
 }
 
 func (c *Client) ChainsTop(ctx context.Context, limit int) ([]model.ChainTVL, error) {
-	url := c.apiBase + "/v2/chains"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build chains request", err)
-	}
 	var resp []chainResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.apiBase+"/v2/chains", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -127,14 +121,8 @@ func (c *Client) ChainsAssets(ctx context.Context, chain id.Chain, asset id.Asse
 		return nil, err
 	}
 
-	endpoint := c.chainAssetsURL(nil)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build chain assets request", err)
-	}
-
 	var raw map[string]json.RawMessage
-	if _, err := c.http.DoJSON(ctx, req, &raw); err != nil {
+	if err := c.http.GetJSON(ctx, c.chainAssetsURL(nil), nil, &raw); err != nil {
 		return nil, err
 	}
 
@@ -193,13 +181,8 @@ type protocolResp struct {
 }
 
 func (c *Client) ProtocolsTop(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolTVL, error) {
-	url := c.apiBase + "/protocols"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build protocols request", err)
-	}
 	var resp []protocolResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.apiBase+"/protocols", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -269,13 +252,8 @@ func chainTVL(chainTvls map[string]float64, normChain string) (float64, bool) {
 }
 
 func (c *Client) ProtocolsCategories(ctx context.Context) ([]model.ProtocolCategory, error) {
-	url := c.apiBase + "/protocols"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build protocols request", err)
-	}
 	var resp []protocolResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.apiBase+"/protocols", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -337,13 +315,8 @@ type feesOverviewResp struct {
 }
 
 func (c *Client) ProtocolsFees(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolFees, error) {
-	endpoint := c.apiBase + "/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build fees request", err)
-	}
 	var resp feesOverviewResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.apiBase+"/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -369,13 +342,8 @@ func (c *Client) ProtocolsFees(ctx context.Context, category string, chain strin
 }
 
 func (c *Client) ProtocolsRevenue(ctx context.Context, category string, chain string, limit int) ([]model.ProtocolRevenue, error) {
-	endpoint := c.apiBase + "/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyRevenue"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build revenue request", err)
-	}
 	var resp feesOverviewResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.apiBase+"/overview/fees?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true&dataType=dailyRevenue", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -433,13 +401,8 @@ func capLimit(limit, total int) int {
 }
 
 func (c *Client) DexesVolume(ctx context.Context, chain string, limit int) ([]model.DexVolume, error) {
-	endpoint := c.apiBase + "/overview/dexs?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build dex volume request", err)
-	}
 	var resp feesOverviewResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.apiBase+"/overview/dexs?excludeTotalDataChart=true&excludeTotalDataChartBreakdown=true", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -502,13 +465,8 @@ type stablecoinsEnvelope struct {
 }
 
 func (c *Client) StablecoinsTop(ctx context.Context, pegType string, limit int) ([]model.Stablecoin, error) {
-	endpoint := c.stablecoinsAPIURL + "/stablecoins?includePrices=true"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build stablecoins request", err)
-	}
 	var resp stablecoinsEnvelope
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.stablecoinsAPIURL+"/stablecoins?includePrices=true", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -560,13 +518,8 @@ type stablecoinChainResp struct {
 }
 
 func (c *Client) StablecoinChains(ctx context.Context, limit int) ([]model.StablecoinChain, error) {
-	endpoint := c.stablecoinsAPIURL + "/stablecoinchains"
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build stablecoin chains request", err)
-	}
 	var resp []stablecoinChainResp
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.stablecoinsAPIURL+"/stablecoinchains", nil, &resp); err != nil {
 		return nil, err
 	}
 
@@ -742,14 +695,8 @@ func (c *Client) BridgeDetails(ctx context.Context, req providers.BridgeDetailsR
 		return model.BridgeDetails{}, err
 	}
 
-	endpoint := c.bridgeURL(fmt.Sprintf("/bridge/%d", bridgeID), nil)
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return model.BridgeDetails{}, clierr.Wrap(clierr.CodeInternal, "build bridge details request", err)
-	}
-
 	var resp bridgeDetailResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.bridgeURL(fmt.Sprintf("/bridge/%d", bridgeID), nil), nil, &resp); err != nil {
 		return model.BridgeDetails{}, err
 	}
 
@@ -834,14 +781,8 @@ func (c *Client) fetchBridgeList(ctx context.Context, includeChains bool) ([]bri
 	if includeChains {
 		query.Set("includeChains", "true")
 	}
-	endpoint := c.bridgeURL("/bridges", query)
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build bridges request", err)
-	}
-
 	var resp bridgeListEnvelope
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.bridgeURL("/bridges", query), nil, &resp); err != nil {
 		return nil, err
 	}
 	return resp.Bridges, nil

@@ -6,7 +6,6 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -382,14 +381,8 @@ func (c *Client) fetchReserves(ctx context.Context, chain id.Chain) ([]reserveWi
 		return nil, clierr.New(clierr.CodeUnsupported, "kamino supports only Solana mainnet")
 	}
 
-	marketsURL := fmt.Sprintf("%s/v2/kamino-market", strings.TrimRight(c.baseURL, "/"))
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, marketsURL, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build kamino markets request", err)
-	}
-
 	var markets []marketInfo
-	if _, err := c.http.DoJSON(ctx, req, &markets); err != nil {
+	if err := c.http.GetJSON(ctx, fmt.Sprintf("%s/v2/kamino-market", strings.TrimRight(c.baseURL, "/")), nil, &markets); err != nil {
 		return nil, err
 	}
 	if len(markets) == 0 {
@@ -476,12 +469,8 @@ func (c *Client) fetchMarketReserves(ctx context.Context, marketPubkey string) (
 		strings.TrimRight(c.baseURL, "/"),
 		strings.TrimSpace(marketPubkey),
 	)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "build kamino reserves request", err)
-	}
 	var reserves []reserveMetric
-	if _, err := c.http.DoJSON(ctx, req, &reserves); err != nil {
+	if err := c.http.GetJSON(ctx, endpoint, nil, &reserves); err != nil {
 		return nil, err
 	}
 	return reserves, nil
@@ -504,12 +493,8 @@ func (c *Client) fetchReserveMetricsHistory(
 		url.QueryEscape(end.UTC().Format(time.RFC3339)),
 		url.QueryEscape(strings.TrimSpace(frequency)),
 	)
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return reserveMetricsHistoryResponse{}, clierr.Wrap(clierr.CodeInternal, "build kamino reserve history request", err)
-	}
 	var resp reserveMetricsHistoryResponse
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, endpoint, nil, &resp); err != nil {
 		return reserveMetricsHistoryResponse{}, err
 	}
 	return resp, nil

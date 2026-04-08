@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -109,13 +108,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		vals.Set("fromAmountForGas", fromAmountForGas)
 	}
 
-	url := c.baseURL + "/quote?" + vals.Encode()
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeInternal, "build lifi quote request", err)
-	}
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/quote?"+vals.Encode(), nil, &resp); err != nil {
 		return model.BridgeQuote{}, err
 	}
 
@@ -210,13 +204,8 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		vals.Set("fromAmountForGas", fromAmountForGas)
 	}
 
-	reqURL := c.baseURL + "/quote?" + vals.Encode()
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "build lifi execution quote request", err)
-	}
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/quote?"+vals.Encode(), nil, &resp); err != nil {
 		return execution.Action{}, err
 	}
 	if strings.TrimSpace(resp.TransactionRequest.To) == "" || strings.TrimSpace(resp.TransactionRequest.Data) == "" {

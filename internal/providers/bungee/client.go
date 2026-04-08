@@ -2,7 +2,6 @@ package bungee
 
 import (
 	"context"
-	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -253,18 +252,12 @@ func (c *Client) quote(ctx context.Context, fromChain, toChain id.Chain, fromTok
 	if useDedicated {
 		base = c.dedicatedBaseURL
 	}
-	url := base + "/bungee/quote?" + vals.Encode()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return quoteResponse{}, clierr.Wrap(clierr.CodeInternal, "build bungee quote request", err)
-	}
+	var headers map[string]string
 	if useDedicated {
-		req.Header.Set("x-api-key", apiKey)
-		req.Header.Set("affiliate", affiliate)
+		headers = map[string]string{"x-api-key": apiKey, "affiliate": affiliate}
 	}
-
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, req, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, base+"/bungee/quote?"+vals.Encode(), headers, &resp); err != nil {
 		return quoteResponse{}, err
 	}
 	if !resp.Success {

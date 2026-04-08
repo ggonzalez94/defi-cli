@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
-	"net/http"
 	"net/url"
 	"strings"
 	"sync"
@@ -663,11 +662,7 @@ func queryLiFiStatus(ctx context.Context, sourceTxHash, statusEndpoint string, e
 	}
 	parsed.RawQuery = query.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil {
-		return out, err
-	}
-	if _, err := settlementHTTPClient.DoJSON(ctx, req, &out); err != nil {
+	if err := settlementHTTPClient.GetJSON(ctx, parsed.String(), nil, &out); err != nil {
 		return out, clierr.Wrap(clierr.CodeUnavailable, "query lifi settlement status", err)
 	}
 	if out.Code != 0 && out.Status == "" {
@@ -701,11 +696,7 @@ func queryAcrossStatus(ctx context.Context, sourceTxHash, statusEndpoint string,
 	}
 	parsed.RawQuery = query.Encode()
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, parsed.String(), nil)
-	if err != nil {
-		return out, err
-	}
-	if _, err := settlementHTTPClient.DoJSON(ctx, req, &out); err != nil {
+	if err := settlementHTTPClient.GetJSON(ctx, parsed.String(), nil, &out); err != nil {
 		return out, clierr.Wrap(clierr.CodeUnavailable, "query across settlement status", err)
 	}
 	if strings.TrimSpace(out.Error) != "" {

@@ -3,7 +3,6 @@ package fibrous
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"sort"
 	"strings"
@@ -78,14 +77,8 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	vals.Set("tokenInAddress", req.FromAsset.Address)
 	vals.Set("tokenOutAddress", req.ToAsset.Address)
 
-	endpoint := fmt.Sprintf("%s/%s/route?%s", c.baseURL, chainSlug, vals.Encode())
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return model.SwapQuote{}, clierr.Wrap(clierr.CodeInternal, "build fibrous route request", err)
-	}
-
 	var resp routeResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, fmt.Sprintf("%s/%s/route?%s", c.baseURL, chainSlug, vals.Encode()), nil, &resp); err != nil {
 		return model.SwapQuote{}, err
 	}
 

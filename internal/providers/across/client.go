@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -58,14 +57,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 	vals.Set("token", req.FromAsset.Address)
 	vals.Set("amount", req.AmountBaseUnits)
 
-	limitsURL := c.baseURL + "/limits?" + vals.Encode()
-	limitsReq, err := http.NewRequestWithContext(ctx, http.MethodGet, limitsURL, nil)
-	if err != nil {
-		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeInternal, "build across limits request", err)
-	}
-
 	var limits map[string]any
-	if _, err := c.http.DoJSON(ctx, limitsReq, &limits); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/limits?"+vals.Encode(), nil, &limits); err != nil {
 		return model.BridgeQuote{}, err
 	}
 
@@ -73,14 +66,8 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		return model.BridgeQuote{}, clierr.New(clierr.CodeUsage, "amount is outside across bridge limits")
 	}
 
-	feesURL := c.baseURL + "/suggested-fees?" + vals.Encode()
-	feesReq, err := http.NewRequestWithContext(ctx, http.MethodGet, feesURL, nil)
-	if err != nil {
-		return model.BridgeQuote{}, clierr.Wrap(clierr.CodeInternal, "build across fees request", err)
-	}
-
 	var fees map[string]any
-	if _, err := c.http.DoJSON(ctx, feesReq, &fees); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/suggested-fees?"+vals.Encode(), nil, &fees); err != nil {
 		return model.BridgeQuote{}, err
 	}
 
@@ -185,13 +172,8 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	vals.Set("recipient", recipient)
 	vals.Set("slippage", providers.FormatSlippageBps(slippageBps))
 
-	reqURL := c.baseURL + "/swap/approval?" + vals.Encode()
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, reqURL, nil)
-	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "build across execution request", err)
-	}
 	var resp swapApprovalResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, c.baseURL+"/swap/approval?"+vals.Encode(), nil, &resp); err != nil {
 		return execution.Action{}, err
 	}
 	if strings.TrimSpace(resp.SwapTx.To) == "" || strings.TrimSpace(resp.SwapTx.Data) == "" {

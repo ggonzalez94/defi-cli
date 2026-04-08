@@ -115,6 +115,20 @@ func (c *Client) DoJSON(ctx context.Context, req *http.Request, out any) (http.H
 	return nil, clierr.New(clierr.CodeUnavailable, "request failed")
 }
 
+// GetJSON performs a GET request and decodes the JSON response into out.
+// Optional headers are set on the request before sending.
+func (c *Client) GetJSON(ctx context.Context, url string, headers map[string]string, out any) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return clierr.Wrap(clierr.CodeInternal, "build request", err)
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	_, err = c.DoJSON(ctx, req, out)
+	return err
+}
+
 func DoBodyJSON(ctx context.Context, c *Client, method, url string, body []byte, headers map[string]string, out any) (http.Header, error) {
 	var reader io.Reader
 	if body != nil {

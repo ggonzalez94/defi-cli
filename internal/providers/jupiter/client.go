@@ -3,7 +3,6 @@ package jupiter
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"strings"
@@ -94,16 +93,12 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	vals.Set("slippageBps", "50")
 
 	endpoint := fmt.Sprintf("%s/quote?%s", strings.TrimRight(c.baseURL, "/"), vals.Encode())
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
-	if err != nil {
-		return model.SwapQuote{}, clierr.Wrap(clierr.CodeInternal, "build jupiter quote request", err)
-	}
+	var headers map[string]string
 	if c.apiKey != "" {
-		hReq.Header.Set("x-api-key", c.apiKey)
+		headers = map[string]string{"x-api-key": c.apiKey}
 	}
-
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, endpoint, headers, &resp); err != nil {
 		return model.SwapQuote{}, err
 	}
 	if strings.TrimSpace(resp.OutAmount) == "" {

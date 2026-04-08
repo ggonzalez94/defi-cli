@@ -3,7 +3,6 @@ package oneinch
 import (
 	"context"
 	"fmt"
-	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -72,15 +71,8 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	vals.Set("amount", req.AmountBaseUnits)
 	vals.Set("includeGas", "true")
 
-	url := fmt.Sprintf("%s/swap/v6.0/%s/quote?%s", c.baseURL, chainID, vals.Encode())
-	hReq, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
-	if err != nil {
-		return model.SwapQuote{}, clierr.Wrap(clierr.CodeInternal, "build 1inch quote request", err)
-	}
-	hReq.Header.Set("Authorization", "Bearer "+c.apiKey)
-
 	var resp quoteResponse
-	if _, err := c.http.DoJSON(ctx, hReq, &resp); err != nil {
+	if err := c.http.GetJSON(ctx, fmt.Sprintf("%s/swap/v6.0/%s/quote?%s", c.baseURL, chainID, vals.Encode()), map[string]string{"Authorization": "Bearer " + c.apiKey}, &resp); err != nil {
 		return model.SwapQuote{}, err
 	}
 	if resp.DstAmount == "" {
