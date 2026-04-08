@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ethereum/go-ethereum"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -264,21 +263,9 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 		tokenAddr := common.HexToAddress(req.FromAsset.Address)
 		ownerAddr := common.HexToAddress(sender)
 		spenderAddr := common.HexToAddress(resp.Estimate.ApprovalAddress)
-		allowanceData, err := lifiERC20ABI.Pack("allowance", ownerAddr, spenderAddr)
+		currentAllowance, err := execution.ReadTokenAllowance(ctx, client, tokenAddr, ownerAddr, spenderAddr)
 		if err != nil {
-			return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack allowance call", err)
-		}
-		allowanceRaw, err := client.CallContract(ctx, ethereum.CallMsg{From: ownerAddr, To: &tokenAddr, Data: allowanceData}, nil)
-		if err != nil {
-			return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "read allowance", err)
-		}
-		allowanceOut, err := lifiERC20ABI.Unpack("allowance", allowanceRaw)
-		if err != nil || len(allowanceOut) == 0 {
-			return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "decode allowance", err)
-		}
-		currentAllowance, ok := allowanceOut[0].(*big.Int)
-		if !ok {
-			return execution.Action{}, clierr.New(clierr.CodeUnavailable, "invalid allowance response type")
+			return execution.Action{}, err
 		}
 		if currentAllowance.Cmp(amountIn) < 0 {
 			approveData, err := lifiERC20ABI.Pack("approve", spenderAddr, amountIn)

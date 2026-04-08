@@ -78,7 +78,8 @@ func (p *rpcPool) Close() {
 	p.clients = make(map[string]*ethclient.Client)
 }
 
-type contractCaller interface {
+// ContractCaller abstracts read-only EVM contract calls.
+type ContractCaller interface {
 	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 }
 
@@ -351,7 +352,7 @@ func waitForRPCHeadAtLeast(ctx context.Context, reader headerReader, minBlock *b
 	}
 }
 
-func ensurePostConfirmationStateVisible(ctx context.Context, caller contractCaller, step *ActionStep, msg ethereum.CallMsg, pollInterval time.Duration) error {
+func ensurePostConfirmationStateVisible(ctx context.Context, caller ContractCaller, step *ActionStep, msg ethereum.CallMsg, pollInterval time.Duration) error {
 	if step == nil || step.Type != StepTypeApproval {
 		return nil
 	}
@@ -389,7 +390,7 @@ func approvalExpectationFromCallMsg(msg ethereum.CallMsg) (approvalExpectation, 
 	}, true, nil
 }
 
-func waitForAllowanceAtLeast(ctx context.Context, caller contractCaller, expectation approvalExpectation, pollInterval time.Duration) error {
+func waitForAllowanceAtLeast(ctx context.Context, caller ContractCaller, expectation approvalExpectation, pollInterval time.Duration) error {
 	if caller == nil {
 		return clierr.New(clierr.CodeUnavailable, "missing rpc caller for allowance readiness check")
 	}
@@ -404,7 +405,7 @@ func waitForAllowanceAtLeast(ctx context.Context, caller contractCaller, expecta
 
 	var lastErr error
 	for {
-		allowance, err := readTokenAllowance(ctx, caller, expectation.Token, expectation.Owner, expectation.Spender)
+		allowance, err := ReadTokenAllowance(ctx, caller, expectation.Token, expectation.Owner, expectation.Spender)
 		if err == nil && allowance.Cmp(expectation.Amount) >= 0 {
 			return nil
 		}
@@ -428,7 +429,8 @@ func waitForAllowanceAtLeast(ctx context.Context, caller contractCaller, expecta
 	}
 }
 
-func readTokenAllowance(ctx context.Context, caller contractCaller, token, owner, spender common.Address) (*big.Int, error) {
+// ReadTokenAllowance reads the ERC-20 allowance for (owner → spender) on the given token contract.
+func ReadTokenAllowance(ctx context.Context, caller ContractCaller, token, owner, spender common.Address) (*big.Int, error) {
 	allowanceData, err := policyERC20ABI.Pack("allowance", owner, spender)
 	if err != nil {
 		return nil, clierr.Wrap(clierr.CodeInternal, "pack allowance calldata", err)

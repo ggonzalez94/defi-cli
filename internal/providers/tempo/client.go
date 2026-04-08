@@ -225,7 +225,7 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 	// approve call precedes the swap call in the same Tempo transaction.
 	var calls []execution.StepCall
 
-	allowance, err := readAllowance(ctx, client, tokenIn, senderAddr, dexAddr)
+	allowance, err := execution.ReadTokenAllowance(ctx, client, tokenIn, senderAddr, dexAddr)
 	if err != nil {
 		return execution.Action{}, err
 	}
@@ -303,25 +303,6 @@ func callUint128Method(ctx context.Context, client *ethclient.Client, target com
 	return amount, nil
 }
 
-func readAllowance(ctx context.Context, client *ethclient.Client, token, owner, spender common.Address) (*big.Int, error) {
-	callData, err := tempoERC20.Pack("allowance", owner, spender)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeInternal, "pack tempo allowance calldata", err)
-	}
-	out, err := client.CallContract(ctx, ethereum.CallMsg{From: owner, To: &token, Data: callData}, nil)
-	if err != nil {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "read allowance", err)
-	}
-	values, err := tempoERC20.Unpack("allowance", out)
-	if err != nil || len(values) == 0 {
-		return nil, clierr.Wrap(clierr.CodeUnavailable, "decode allowance", err)
-	}
-	allowance, ok := values[0].(*big.Int)
-	if !ok || allowance == nil {
-		return nil, clierr.New(clierr.CodeUnavailable, "invalid allowance response")
-	}
-	return allowance, nil
-}
 
 func validateUSDPair(ctx context.Context, client *ethclient.Client, fromAsset, toAsset id.Asset, tokenIn, tokenOut common.Address) error {
 	fromCurrency, err := readTIP20Currency(ctx, client, tokenIn, fromAsset)

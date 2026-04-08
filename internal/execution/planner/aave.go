@@ -401,21 +401,9 @@ func callContractForAddress(ctx context.Context, client *ethclient.Client, targe
 }
 
 func appendApprovalIfNeeded(ctx context.Context, client *ethclient.Client, action *execution.Action, chainID, rpcURL string, token, owner, spender common.Address, amount *big.Int, description string) error {
-	allowanceData, err := plannerERC20ABI.Pack("allowance", owner, spender)
+	currentAllowance, err := execution.ReadTokenAllowance(ctx, client, token, owner, spender)
 	if err != nil {
-		return clierr.Wrap(clierr.CodeInternal, "pack allowance calldata", err)
-	}
-	allowanceRaw, err := client.CallContract(ctx, ethereum.CallMsg{From: owner, To: &token, Data: allowanceData}, nil)
-	if err != nil {
-		return clierr.Wrap(clierr.CodeUnavailable, "read token allowance", err)
-	}
-	allowanceOut, err := plannerERC20ABI.Unpack("allowance", allowanceRaw)
-	if err != nil || len(allowanceOut) == 0 {
-		return clierr.Wrap(clierr.CodeUnavailable, "decode token allowance", err)
-	}
-	currentAllowance, ok := allowanceOut[0].(*big.Int)
-	if !ok {
-		return clierr.New(clierr.CodeUnavailable, "invalid allowance response")
+		return err
 	}
 	if currentAllowance.Cmp(amount) >= 0 {
 		return nil

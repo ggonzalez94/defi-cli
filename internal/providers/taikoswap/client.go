@@ -151,23 +151,10 @@ func (c *Client) BuildSwapAction(ctx context.Context, req providers.SwapQuoteReq
 		"amount_out_min": amountOutMin.String(),
 	}
 
-	allowanceData, err := erc20ABI.Pack("allowance", senderAddr, router)
+	allowance, err := execution.ReadTokenAllowance(ctx, client, fromToken, senderAddr, router)
 	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeInternal, "pack allowance call", err)
+		return execution.Action{}, err
 	}
-	allowanceOut, err := client.CallContract(ctx, ethereum.CallMsg{From: senderAddr, To: &fromToken, Data: allowanceData}, nil)
-	if err != nil {
-		return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "read allowance", err)
-	}
-	values, err := erc20ABI.Unpack("allowance", allowanceOut)
-	if err != nil || len(values) == 0 {
-		return execution.Action{}, clierr.Wrap(clierr.CodeUnavailable, "decode allowance", err)
-	}
-	allowance, ok := values[0].(*big.Int)
-	if !ok {
-		return execution.Action{}, clierr.New(clierr.CodeUnavailable, "invalid allowance response")
-	}
-
 	if allowance.Cmp(amountIn) < 0 {
 		approveData, err := erc20ABI.Pack("approve", router, amountIn)
 		if err != nil {
