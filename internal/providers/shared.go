@@ -14,6 +14,7 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 )
 
 // SortLendPositions sorts lend positions by USD value desc, then type, asset, native ID.
@@ -216,4 +217,67 @@ func NormalizeSlippageBps(bps int64) (int64, error) {
 		return 0, clierr.New(clierr.CodeUsage, "slippage bps must be less than 10000")
 	}
 	return bps, nil
+}
+
+// FinalizeLendPositions sorts and applies limit to lend positions.
+func FinalizeLendPositions(out []model.LendPosition, limit int) []model.LendPosition {
+	SortLendPositions(out)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// FinalizeYieldPositions sorts and applies limit to yield positions.
+func FinalizeYieldPositions(out []model.YieldPosition, limit int) []model.YieldPosition {
+	SortYieldPositions(out)
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out
+}
+
+// FinalizeYieldOpportunities sorts, checks for empty, and applies limit to yield opportunities.
+func FinalizeYieldOpportunities(out []model.YieldOpportunity, provider, sortBy string, limit int) ([]model.YieldOpportunity, error) {
+	if len(out) == 0 {
+		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("no %s yield opportunities for requested chain/asset", provider))
+	}
+	yieldutil.Sort(out, sortBy)
+	if limit <= 0 || limit > len(out) {
+		limit = len(out)
+	}
+	return out[:limit], nil
+}
+
+// LendToYieldPositions converts supply/collateral lend positions to yield deposit positions.
+func LendToYieldPositions(provider string, lendRows []model.LendPosition) []model.YieldPosition {
+	out := make([]model.YieldPosition, 0, len(lendRows))
+	for _, row := range lendRows {
+		switch row.PositionType {
+		case string(LendPositionTypeSupply), string(LendPositionTypeCollateral):
+		default:
+			continue
+		}
+		opportunityID := ""
+		if strings.TrimSpace(row.ProviderNativeID) != "" {
+			opportunityID = HashOpportunity(provider, row.ChainID, row.ProviderNativeID, row.AssetID)
+		}
+		out = append(out, model.YieldPosition{
+			Protocol:             provider,
+			Provider:             provider,
+			ChainID:              row.ChainID,
+			AccountAddress:       row.AccountAddress,
+			PositionType:         "deposit",
+			OpportunityID:        opportunityID,
+			AssetID:              row.AssetID,
+			ProviderNativeID:     row.ProviderNativeID,
+			ProviderNativeIDKind: row.ProviderNativeIDKind,
+			Amount:               row.Amount,
+			AmountUSD:            row.AmountUSD,
+			APYTotal:             row.APY,
+			SourceURL:            row.SourceURL,
+			FetchedAt:            row.FetchedAt,
+		})
+	}
+	return out
 }

@@ -17,7 +17,6 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
-	"github.com/ggonzalez94/defi-cli/internal/providers/yieldutil"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
@@ -415,11 +414,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		}
 	}
 
-	providers.SortLendPositions(out)
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	return providers.FinalizeLendPositions(out, req.Limit), nil
 }
 
 // ── YieldProvider ───────────────────────────────────────────────────────
@@ -478,14 +473,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		})
 	}
 
-	if len(out) == 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, "no moonwell yield opportunities for requested chain/asset")
-	}
-	yieldutil.Sort(out, req.SortBy)
-	if req.Limit <= 0 || req.Limit > len(out) {
-		req.Limit = len(out)
-	}
-	return out[:req.Limit], nil
+	return providers.FinalizeYieldOpportunities(out, "moonwell", req.SortBy, req.Limit)
 }
 
 // ── YieldPositionsProvider ──────────────────────────────────────────────
@@ -503,40 +491,8 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 		return nil, err
 	}
 
-	out := make([]model.YieldPosition, 0, len(lendRows))
-	for _, row := range lendRows {
-		switch row.PositionType {
-		case string(providers.LendPositionTypeSupply), string(providers.LendPositionTypeCollateral):
-		default:
-			continue
-		}
-		opportunityID := ""
-		if strings.TrimSpace(row.ProviderNativeID) != "" {
-			opportunityID = providers.HashOpportunity("moonwell", row.ChainID, row.ProviderNativeID, row.AssetID)
-		}
-		out = append(out, model.YieldPosition{
-			Protocol:             "moonwell",
-			Provider:             "moonwell",
-			ChainID:              row.ChainID,
-			AccountAddress:       row.AccountAddress,
-			PositionType:         "deposit",
-			OpportunityID:        opportunityID,
-			AssetID:              row.AssetID,
-			ProviderNativeID:     row.ProviderNativeID,
-			ProviderNativeIDKind: row.ProviderNativeIDKind,
-			Amount:               row.Amount,
-			AmountUSD:            row.AmountUSD,
-			APYTotal:             row.APY,
-			SourceURL:            row.SourceURL,
-			FetchedAt:            row.FetchedAt,
-		})
-	}
-
-	providers.SortYieldPositions(out)
-	if req.Limit > 0 && len(out) > req.Limit {
-		out = out[:req.Limit]
-	}
-	return out, nil
+	out := providers.LendToYieldPositions("moonwell", lendRows)
+	return providers.FinalizeYieldPositions(out, req.Limit), nil
 }
 
 // ── RPC data fetching ───────────────────────────────────────────────────

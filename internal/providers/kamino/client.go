@@ -249,14 +249,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		})
 	}
 
-	if len(out) == 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, "no kamino yield opportunities for requested chain/asset")
-	}
-	yieldutil.Sort(out, req.SortBy)
-	if req.Limit <= 0 || req.Limit > len(out) {
-		req.Limit = len(out)
-	}
-	return out[:req.Limit], nil
+	return providers.FinalizeYieldOpportunities(out, "kamino", req.SortBy, req.Limit)
 }
 
 func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryRequest) ([]model.YieldHistorySeries, error) {
