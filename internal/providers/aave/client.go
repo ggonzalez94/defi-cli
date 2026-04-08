@@ -261,8 +261,8 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 				Protocol:             "aave",
 				Provider:             "aave",
 				ChainID:              chain.CAIP2,
-				AssetID:              canonicalAssetID(asset, r.UnderlyingToken.Address),
-				ProviderNativeID:     providerNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
+				AssetID:              providers.CanonicalAssetID(asset, r.UnderlyingToken.Address),
+				ProviderNativeID:     providers.ProviderNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
 				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
 				SupplyAPY:            supplyAPY,
 				BorrowAPY:            borrowAPY,
@@ -312,8 +312,8 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 				Protocol:             "aave",
 				Provider:             "aave",
 				ChainID:              chain.CAIP2,
-				AssetID:              canonicalAssetID(asset, r.UnderlyingToken.Address),
-				ProviderNativeID:     providerNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
+				AssetID:              providers.CanonicalAssetID(asset, r.UnderlyingToken.Address),
+				ProviderNativeID:     providers.ProviderNativeID("aave", chain.CAIP2, m.Address, r.UnderlyingToken.Address),
 				ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
 				SupplyAPY:            supplyAPY,
 				BorrowAPY:            borrowAPY,
@@ -418,7 +418,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			AccountAddress:       account,
 			PositionType:         string(positionType),
 			AssetID:              assetID,
-			ProviderNativeID:     providerNativeID("aave", req.Chain.CAIP2, supply.Market.Address, supply.Currency.Address),
+			ProviderNativeID:     providers.ProviderNativeID("aave", req.Chain.CAIP2, supply.Market.Address, supply.Currency.Address),
 			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
 			Amount:               amount,
 			AmountUSD:            providers.ParseFloat(supply.Balance.USD),
@@ -448,7 +448,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 			AccountAddress:       account,
 			PositionType:         string(providers.LendPositionTypeBorrow),
 			AssetID:              assetID,
-			ProviderNativeID:     providerNativeID("aave", req.Chain.CAIP2, borrow.Market.Address, borrow.Currency.Address),
+			ProviderNativeID:     providers.ProviderNativeID("aave", req.Chain.CAIP2, borrow.Market.Address, borrow.Currency.Address),
 			ProviderNativeIDKind: model.NativeIDKindCompositeMarketAsset,
 			Amount:               amount,
 			AmountUSD:            providers.ParseFloat(borrow.Debt.USD),
@@ -489,14 +489,14 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 				continue
 			}
 
-			assetID := canonicalAssetID(req.Asset, r.UnderlyingToken.Address)
+			assetID := providers.CanonicalAssetID(req.Asset, r.UnderlyingToken.Address)
 			liquidityUSD := tvl
 			if r.BorrowInfo != nil {
 				liquidityUSD = providers.ParseFloat(r.BorrowInfo.AvailableLiquidity.USD)
 			}
 			normalizedMarket := providers.NormalizeEVMAddress(m.Address)
 			normalizedUnderlying := providers.NormalizeEVMAddress(r.UnderlyingToken.Address)
-			nativeID := providerNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
+			nativeID := providers.ProviderNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
 			opportunityID := providers.HashOpportunity("aave", req.Chain.CAIP2, nativeID, assetID)
 			out = append(out, model.YieldOpportunity{
 				OpportunityID:        opportunityID,
@@ -758,18 +758,6 @@ func matchesReserveAsset(r aaveReserve, asset id.Asset) bool {
 		return strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Address), assetAddress)
 	}
 	return strings.EqualFold(strings.TrimSpace(r.UnderlyingToken.Symbol), strings.TrimSpace(asset.Symbol))
-}
-
-func canonicalAssetID(asset id.Asset, address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if addr == "" {
-		return asset.AssetID
-	}
-	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
-}
-
-func providerNativeID(provider, chainID, marketAddress, underlyingAddress string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, providers.NormalizeEVMAddress(marketAddress), providers.NormalizeEVMAddress(underlyingAddress))
 }
 
 func parseOpportunityNativeID(op model.YieldOpportunity) (string, string, error) {

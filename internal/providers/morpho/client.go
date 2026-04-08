@@ -465,7 +465,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 			Protocol:             "morpho",
 			Provider:             "morpho",
 			ChainID:              chain.CAIP2,
-			AssetID:              canonicalAssetID(asset, m.LoanAsset.Address),
+			AssetID:              providers.CanonicalAssetID(asset, m.LoanAsset.Address),
 			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
 			ProviderNativeIDKind: model.NativeIDKindMarketID,
 			SupplyAPY:            supplyAPY,
@@ -504,7 +504,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 			Protocol:             "morpho",
 			Provider:             "morpho",
 			ChainID:              chain.CAIP2,
-			AssetID:              canonicalAssetID(asset, m.LoanAsset.Address),
+			AssetID:              providers.CanonicalAssetID(asset, m.LoanAsset.Address),
 			ProviderNativeID:     strings.TrimSpace(m.UniqueKey),
 			ProviderNativeIDKind: model.NativeIDKindMarketID,
 			SupplyAPY:            m.State.SupplyAPY * 100,
@@ -778,7 +778,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		}
 		backingAssets := backingAssetsFromShares(vault.BackingShares, req.Chain.CAIP2, vault.AssetAddress, vault.AssetSymbol, req.Asset.AssetID)
 		liq := vault.LiquidityUSD
-		assetID := canonicalAssetID(req.Asset, vault.AssetAddress)
+		assetID := providers.CanonicalAssetID(req.Asset, vault.AssetAddress)
 		vaultAddress := providers.NormalizeEVMAddress(vault.Address)
 		if vaultAddress == "" {
 			continue
@@ -1383,14 +1383,6 @@ func sourceURLForVault(address string) string {
 		return "https://app.morpho.org"
 	}
 	return fmt.Sprintf("https://app.morpho.org/vault/%s", addr)
-}
-
-func canonicalAssetID(asset id.Asset, address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
-	if addr == "" {
-		return asset.AssetID
-	}
-	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
 }
 
 type bigintString string

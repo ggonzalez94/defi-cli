@@ -125,15 +125,30 @@ func AmountInfoFromRaw(raw string, decimals int) model.AmountInfo {
 
 // PtrAmountInfo returns a pointer to a copy of the given AmountInfo.
 func PtrAmountInfo(v model.AmountInfo) *model.AmountInfo {
-	copy := v
-	return &copy
+	out := v
+	return &out
 }
 
-// ── Hashing / IDs ──────────────────────────────────────────────────────
+// ── ID construction ───────────────────────────────────────────────────
+
+// CanonicalAssetID builds a CAIP-19 asset ID from an Asset and EVM address.
+// Falls back to asset.AssetID when the address is empty.
+func CanonicalAssetID(asset id.Asset, address string) string {
+	addr := strings.ToLower(strings.TrimSpace(address))
+	if addr == "" {
+		return asset.AssetID
+	}
+	return fmt.Sprintf("%s/erc20:%s", asset.ChainID, addr)
+}
+
+// ProviderNativeID builds a composite native ID from provider, chain, and two addresses.
+func ProviderNativeID(provider, chainID, addr1, addr2 string) string {
+	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, NormalizeEVMAddress(addr1), NormalizeEVMAddress(addr2))
+}
 
 // HashOpportunity produces a deterministic SHA-1 hex hash for opportunity dedup.
-func HashOpportunity(provider, chainID, marketID, assetID string) string {
-	seed := strings.Join([]string{provider, chainID, marketID, assetID}, "|")
+func HashOpportunity(provider, chainID, nativeID, assetID string) string {
+	seed := strings.Join([]string{provider, chainID, nativeID, assetID}, "|")
 	h := sha1.Sum([]byte(seed))
 	return hex.EncodeToString(h[:])
 }

@@ -107,7 +107,7 @@ func (c *Client) LendMarkets(ctx context.Context, provider string, chain id.Chai
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
+		nativeID := providers.ProviderNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
 		out = append(out, model.LendMarket{
 			Protocol:             "moonwell",
 			Provider:             "moonwell",
@@ -151,7 +151,7 @@ func (c *Client) LendRates(ctx context.Context, provider string, chain id.Chain,
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
+		nativeID := providers.ProviderNativeID("moonwell", chain.CAIP2, comptroller, m.UnderlyingAddress)
 		out = append(out, model.LendRate{
 			Protocol:             "moonwell",
 			Provider:             "moonwell",
@@ -362,7 +362,7 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", req.Chain.CAIP2, comptrollerAddr, ulAddr)
+		nativeID := providers.ProviderNativeID("moonwell", req.Chain.CAIP2, comptrollerAddr, ulAddr)
 		priceUSD := mantissaToUSD(pm.priceMantissa, decimals)
 
 		// Supply position.
@@ -449,7 +449,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 		if assetID == "" {
 			continue
 		}
-		nativeID := providerNativeID("moonwell", req.Chain.CAIP2, comptroller, m.UnderlyingAddress)
+		nativeID := providers.ProviderNativeID("moonwell", req.Chain.CAIP2, comptroller, m.UnderlyingAddress)
 		opportunityID := providers.HashOpportunity("moonwell", req.Chain.CAIP2, nativeID, assetID)
 
 		out = append(out, model.YieldOpportunity{
@@ -944,10 +944,6 @@ func amountInfoFromBigInt(v *big.Int, decimals int) model.AmountInfo {
 		v = new(big.Int)
 	}
 	return providers.AmountInfoFromBase(v.String(), decimals)
-}
-
-func providerNativeID(provider, chainID, comptrollerAddress, underlyingAddress string) string {
-	return fmt.Sprintf("%s:%s:%s:%s", provider, chainID, providers.NormalizeEVMAddress(comptrollerAddress), providers.NormalizeEVMAddress(underlyingAddress))
 }
 
 // ── ABI singletons ──────────────────────────────────────────────────────
