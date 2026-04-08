@@ -2,15 +2,12 @@ package app
 
 import (
 	"context"
-	"time"
 
-	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/execution/actionbuilder"
 	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
-	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/spf13/cobra"
 )
@@ -98,34 +95,21 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		Use:   "plan",
 		Short: "Create and persist a lend action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
-			if err != nil {
-				return err
-			}
-			resolvedPlan := plan
-			resolvedPlan.FromAddress = identity.FromAddress
-			ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
-			defer cancel()
-			start := time.Now()
-			action, err := buildAction(ctx, resolvedPlan)
 			providerName := providers.NormalizeLendingProvider(plan.Provider)
 			if providerName == "" {
 				providerName = "lend"
 			}
-			statuses := []model.ProviderStatus{{Name: providerName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-			if err != nil {
-				s.captureCommandDiagnostics(nil, statuses, false)
-				return err
-			}
-			applyExecutionIdentityToAction(&action, identity)
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			if err := s.actionStore.Save(action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-			s.captureCommandDiagnostics(nil, statuses, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
+			return s.runPlanAction(cmd, planActionConfig{
+				ProviderName: providerName,
+				WalletRef:    plan.WalletRef,
+				FromAddress:  plan.FromAddress,
+				ChainArg:     plan.ChainArg,
+				BuildAction: func(ctx context.Context, fromAddr string) (execution.Action, error) {
+					p := plan
+					p.FromAddress = fromAddr
+					return buildAction(ctx, p)
+				},
+			})
 		},
 	}
 	planCmd.Flags().StringVar(&plan.Provider, "provider", "", "Lending provider (aave|morpho|moonwell)")

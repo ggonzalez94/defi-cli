@@ -9,6 +9,7 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
+	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/ows"
 	"github.com/spf13/cobra"
 )
@@ -225,6 +226,41 @@ func (s *runtimeState) runStatusAction(cmd *cobra.Command, actionIDStr, expected
 		return clierr.New(clierr.CodeUsage, intentMismatchMsg)
 	}
 	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, nil, cacheMetaBypass(), nil, false)
+}
+
+// planActionConfig holds the parameters for runPlanAction, which encapsulates the
+// common plan command flow: resolve identity → build action → persist → emit.
+type planActionConfig struct {
+	ProviderName string
+	WalletRef    string
+	FromAddress  string
+	ChainArg     string
+	BuildAction  func(ctx context.Context, fromAddr string) (execution.Action, error)
+}
+
+func (s *runtimeState) runPlanAction(cmd *cobra.Command, cfg planActionConfig) error {
+	identity, err := resolveExecutionIdentity(cfg.WalletRef, cfg.FromAddress, cfg.ChainArg)
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
+	defer cancel()
+	start := time.Now()
+	action, err := cfg.BuildAction(ctx, identity.FromAddress)
+	statuses := []model.ProviderStatus{{Name: cfg.ProviderName, Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
+	if err != nil {
+		s.captureCommandDiagnostics(nil, statuses, false)
+		return err
+	}
+	applyExecutionIdentityToAction(&action, identity)
+	if err := s.ensureActionStore(); err != nil {
+		return err
+	}
+	if err := s.actionStore.Save(action); err != nil {
+		return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
+	}
+	s.captureCommandDiagnostics(nil, statuses, false)
+	return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), statuses, false)
 }
 
 // Execution timeout is derived from remaining action wait stages so short provider

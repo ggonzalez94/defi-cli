@@ -1,14 +1,12 @@
 package app
 
 import (
-	"time"
+	"context"
 
-	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/execution/planner"
 	execsigner "github.com/ggonzalez94/defi-cli/internal/execution/signer"
 	"github.com/ggonzalez94/defi-cli/internal/id"
-	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/spf13/cobra"
 )
 
@@ -75,28 +73,17 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		Use:   "plan",
 		Short: "Create and persist an approval action plan",
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			identity, err := resolveExecutionIdentity(plan.WalletRef, plan.FromAddress, plan.ChainArg)
-			if err != nil {
-				return err
-			}
-			resolvedPlan := plan
-			resolvedPlan.FromAddress = identity.FromAddress
-			start := time.Now()
-			action, err := buildAction(resolvedPlan)
-			status := []model.ProviderStatus{{Name: "native", Status: statusFromErr(err), LatencyMS: time.Since(start).Milliseconds()}}
-			if err != nil {
-				s.captureCommandDiagnostics(nil, status, false)
-				return err
-			}
-			applyExecutionIdentityToAction(&action, identity)
-			if err := s.ensureActionStore(); err != nil {
-				return err
-			}
-			if err := s.actionStore.Save(action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist planned action", err)
-			}
-			s.captureCommandDiagnostics(nil, status, false)
-			return s.emitSuccess(trimRootPath(cmd.CommandPath()), action, identity.Warnings, cacheMetaBypass(), status, false)
+			return s.runPlanAction(cmd, planActionConfig{
+				ProviderName: "native",
+				WalletRef:    plan.WalletRef,
+				FromAddress:  plan.FromAddress,
+				ChainArg:     plan.ChainArg,
+				BuildAction: func(_ context.Context, fromAddr string) (execution.Action, error) {
+					p := plan
+					p.FromAddress = fromAddr
+					return buildAction(p)
+				},
+			})
 		},
 	}
 	planCmd.Flags().StringVar(&plan.ChainArg, "chain", "", "Chain identifier")
