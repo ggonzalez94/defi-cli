@@ -212,6 +212,27 @@ func (s *runtimeState) newStatusCommand(commandName, expectedIntent, intentMisma
 	return cmd
 }
 
+// addSubmitAndStatus creates and registers both submit and status subcommands
+// on root using the standard schema (standardSubmitSchema). Commands that need a
+// different schema type (e.g. transfer) should register submit/status inline.
+func (s *runtimeState) addSubmitAndStatus(root *cobra.Command, commandName, expectedIntent, intentMismatchMsg string) {
+	var submit executionSubmitArgs
+	submitCmd := &cobra.Command{
+		Use:   "submit",
+		Short: "Execute an existing " + commandName + " action",
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return s.runSubmitAction(cmd, submit, expectedIntent, intentMismatchMsg)
+		},
+	}
+	registerSubmitFlags(submitCmd, &submit, commandName)
+	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
+
+	statusCmd := s.newStatusCommand(commandName, expectedIntent, intentMismatchMsg)
+
+	root.AddCommand(submitCmd)
+	root.AddCommand(statusCmd)
+}
+
 func (s *runtimeState) runSubmitAction(cmd *cobra.Command, args executionSubmitArgs, expectedIntent, intentMismatchMsg string) error {
 	actionID, err := resolveActionID(args.ActionID)
 	if err != nil {

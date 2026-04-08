@@ -118,21 +118,7 @@ func (s *runtimeState) newLendVerbExecutionCommand(verb planner.AaveLendVerb, sh
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing lend action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, expectedIntent, "action intent does not match lend verb")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "lend")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("lend", expectedIntent, "action intent does not match lend verb")
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "lend", expectedIntent, "action intent does not match lend verb")
 	return root
 }

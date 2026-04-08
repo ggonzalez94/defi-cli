@@ -86,21 +86,7 @@ func (s *runtimeState) newApprovalsCommand() *cobra.Command {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing approval action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, "approve", "action is not an approval intent")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "approvals")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("approval", "approve", "action is not an approval intent")
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "approval", "approve", "action is not an approval intent")
 	return root
 }

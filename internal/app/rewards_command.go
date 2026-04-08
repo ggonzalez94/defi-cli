@@ -111,22 +111,8 @@ func (s *runtimeState) newRewardsClaimCommand() *cobra.Command {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing rewards-claim action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, expectedIntent, "action is not a rewards claim intent")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "rewards claim")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("rewards-claim", expectedIntent, "action is not a rewards claim intent")
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "rewards-claim", expectedIntent, "action is not a rewards claim intent")
 	return root
 }
 
@@ -229,21 +215,7 @@ func (s *runtimeState) newRewardsCompoundCommand() *cobra.Command {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing rewards-compound action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, expectedIntent, "action is not a rewards compound intent")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "rewards compound")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("rewards-compound", expectedIntent, "action is not a rewards compound intent")
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "rewards-compound", expectedIntent, "action is not a rewards compound intent")
 	return root
 }

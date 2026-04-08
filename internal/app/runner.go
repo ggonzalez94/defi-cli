@@ -1400,23 +1400,9 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		InputConstraints: swapPlanIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute a previously planned swap action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, "swap", "action is not a swap intent")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "swap")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("swap", "swap", "action is not a swap intent")
-
 	root.AddCommand(quoteCmd)
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "swap", "swap", "action is not a swap intent")
 	return root
 }
 

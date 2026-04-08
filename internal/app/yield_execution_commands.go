@@ -112,21 +112,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing yield action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, expectedIntent, "action intent does not match yield verb")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "yield")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("yield", expectedIntent, "action intent does not match yield verb")
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "yield", expectedIntent, "action intent does not match yield verb")
 	return root
 }

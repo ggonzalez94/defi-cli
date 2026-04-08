@@ -142,20 +142,6 @@ func (s *runtimeState) addBridgeExecutionSubcommands(root *cobra.Command) {
 		InputConstraints: standardExecutionIdentityInputConstraints(),
 	})
 
-	var submit executionSubmitArgs
-	submitCmd := &cobra.Command{
-		Use:   "submit",
-		Short: "Execute an existing bridge action",
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			return s.runSubmitAction(cmd, submit, "bridge", "action is not a bridge intent")
-		},
-	}
-	registerSubmitFlags(submitCmd, &submit, "bridge")
-	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
-
-	statusCmd := s.newStatusCommand("bridge", "bridge", "action is not a bridge intent")
-
 	root.AddCommand(planCmd)
-	root.AddCommand(submitCmd)
-	root.AddCommand(statusCmd)
+	s.addSubmitAndStatus(root, "bridge", "bridge", "action is not a bridge intent")
 }
