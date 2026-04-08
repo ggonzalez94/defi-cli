@@ -194,9 +194,7 @@ type marketsResponse struct {
 			Items []morphoMarket `json:"items"`
 		} `json:"markets"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type positionsResponse struct {
@@ -205,9 +203,7 @@ type positionsResponse struct {
 			Items []morphoMarketPosition `json:"items"`
 		} `json:"marketPositions"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type vaultPositionsResponse struct {
@@ -216,9 +212,7 @@ type vaultPositionsResponse struct {
 			Items []morphoVaultPosition `json:"items"`
 		} `json:"vaultPositions"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type vaultsResponse struct {
@@ -227,9 +221,7 @@ type vaultsResponse struct {
 			Items []morphoVault `json:"items"`
 		} `json:"vaults"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type vaultV2sResponse struct {
@@ -238,9 +230,7 @@ type vaultV2sResponse struct {
 			Items []morphoVaultV2 `json:"items"`
 		} `json:"vaultV2s"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type vaultHistoryResponse struct {
@@ -253,9 +243,7 @@ type vaultHistoryResponse struct {
 			} `json:"historicalState"`
 		} `json:"vaultByAddress"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type vaultV2HistoryResponse struct {
@@ -268,9 +256,7 @@ type vaultV2HistoryResponse struct {
 			} `json:"historicalState"`
 		} `json:"vaultV2ByAddress"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type morphoFloatDataPoint struct {
@@ -567,8 +553,8 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+		return nil, err
 	}
 
 	out := make([]model.LendPosition, 0, len(resp.Data.MarketPositions.Items)*2)
@@ -697,8 +683,8 @@ func (c *Client) YieldPositions(ctx context.Context, req providers.YieldPosition
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+		return nil, err
 	}
 
 	out := make([]model.YieldPosition, 0, len(resp.Data.VaultPositions.Items))
@@ -992,8 +978,8 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain, asset id.Asse
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+		return nil, err
 	}
 	if len(resp.Data.Markets.Items) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "morpho has no market for requested chain/asset")
@@ -1030,8 +1016,8 @@ func (c *Client) fetchVaults(ctx context.Context, chain id.Chain, asset id.Asset
 		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 			return nil, err
 		}
-		if len(resp.Errors) > 0 {
-			return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+		if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+			return nil, err
 		}
 		out = append(out, resp.Data.Vaults.Items...)
 		if len(resp.Data.Vaults.Items) < yieldVaultPageSize {
@@ -1066,8 +1052,8 @@ func (c *Client) fetchVaultV2s(ctx context.Context, chain id.Chain) ([]morphoVau
 		if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 			return nil, err
 		}
-		if len(resp.Errors) > 0 {
-			return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+		if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+			return nil, err
 		}
 		out = append(out, resp.Data.VaultV2s.Items...)
 		if len(resp.Data.VaultV2s.Items) < yieldVaultPageSize {
@@ -1104,10 +1090,8 @@ func (c *Client) fetchVaultHistory(
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, nil, "", err
 	}
-	if len(resp.Errors) > 0 {
-		if !isMorphoNoResultsError(resp.Errors[0].Message) {
-			return nil, nil, "", clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
-		}
+	if len(resp.Errors) > 0 && !providers.IsMorphoNoResultsError(resp.Errors[0].Message) {
+		return nil, nil, "", providers.CheckGraphQLErrors(resp.Errors, "morpho")
 	}
 	if resp.Data.VaultByAddress != nil && resp.Data.VaultByAddress.HistoricalState != nil {
 		return resp.Data.VaultByAddress.HistoricalState.NetAPY, resp.Data.VaultByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
@@ -1131,8 +1115,8 @@ func (c *Client) fetchVaultHistory(
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &respV2); err != nil {
 		return nil, nil, "", err
 	}
-	if len(respV2.Errors) > 0 {
-		return nil, nil, "", clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", respV2.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(respV2.Errors, "morpho"); err != nil {
+		return nil, nil, "", err
 	}
 	if respV2.Data.VaultV2ByAddress == nil || respV2.Data.VaultV2ByAddress.HistoricalState == nil {
 		return nil, nil, "", clierr.New(clierr.CodeUnavailable, "morpho returned no vault history for requested opportunity")
@@ -1140,10 +1124,6 @@ func (c *Client) fetchVaultHistory(
 	return respV2.Data.VaultV2ByAddress.HistoricalState.AvgNetAPY, respV2.Data.VaultV2ByAddress.HistoricalState.TVLUSD, sourceURLForVault(address), nil
 }
 
-func isMorphoNoResultsError(message string) bool {
-	msg := strings.ToLower(strings.TrimSpace(message))
-	return strings.Contains(msg, "no results matching given parameters")
-}
 
 func morphoTimeseriesInterval(interval providers.YieldHistoryInterval) (string, error) {
 	switch interval {

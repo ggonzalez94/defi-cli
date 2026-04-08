@@ -282,6 +282,24 @@ func ValidateProvider(provider, expected string) error {
 	return nil
 }
 
+// GraphQLError represents a single error from a GraphQL response.
+type GraphQLError struct {
+	Message string `json:"message"`
+}
+
+// CheckGraphQLErrors returns an error if the GraphQL response contains errors.
+func CheckGraphQLErrors(errs []GraphQLError, provider string) error {
+	if len(errs) > 0 {
+		return clierr.New(clierr.CodeUnavailable, fmt.Sprintf("%s graphql error: %s", provider, errs[0].Message))
+	}
+	return nil
+}
+
+// IsMorphoNoResultsError reports whether a GraphQL error message indicates no results were found.
+func IsMorphoNoResultsError(message string) bool {
+	return strings.Contains(strings.ToLower(strings.TrimSpace(message)), "no results matching given parameters")
+}
+
 // LendToYieldPositions converts supply/collateral lend positions to yield deposit positions.
 func LendToYieldPositions(provider string, lendRows []model.LendPosition) []model.YieldPosition {
 	out := make([]model.YieldPosition, 0, len(lendRows))

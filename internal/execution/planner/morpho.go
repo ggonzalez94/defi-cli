@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"math/big"
 	"net/http"
 	"strings"
@@ -16,6 +15,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
@@ -80,9 +80,7 @@ type morphoMarketByIDResponse struct {
 			} `json:"items"`
 		} `json:"markets"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type morphoMarketParamsABI struct {
@@ -338,8 +336,8 @@ func fetchMorphoMarketByID(ctx context.Context, chainID int64, marketID string) 
 	if _, err := httpx.DoBodyJSON(ctx, client, http.MethodPost, morphoGraphQLEndpoint, body, nil, &resp); err != nil {
 		return market, err
 	}
-	if len(resp.Errors) > 0 {
-		return market, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "morpho"); err != nil {
+		return market, err
 	}
 	if len(resp.Data.Markets.Items) == 0 {
 		return market, clierr.New(clierr.CodeUsage, "morpho market-id not found for selected chain")

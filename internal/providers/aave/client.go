@@ -99,9 +99,7 @@ type marketsResponse struct {
 	Data struct {
 		Markets []aaveMarket `json:"markets"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type marketAddressesResponse struct {
@@ -110,9 +108,7 @@ type marketAddressesResponse struct {
 			Address string `json:"address"`
 		} `json:"markets"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type positionsResponse struct {
@@ -120,9 +116,7 @@ type positionsResponse struct {
 		UserSupplies []aaveUserSupply `json:"userSupplies"`
 		UserBorrows  []aaveUserBorrow `json:"userBorrows"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type supplyAPYHistoryResponse struct {
@@ -134,9 +128,7 @@ type supplyAPYHistoryResponse struct {
 			} `json:"avgRate"`
 		} `json:"supplyAPYHistory"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type aaveMarket struct {
@@ -384,8 +376,8 @@ func (c *Client) LendPositions(ctx context.Context, req providers.LendPositionsR
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
+		return nil, err
 	}
 
 	filterType := req.PositionType
@@ -590,8 +582,8 @@ func (c *Client) YieldHistory(ctx context.Context, req providers.YieldHistoryReq
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
+		return nil, err
 	}
 
 	points := make([]model.YieldHistoryPoint, 0, len(resp.Data.SupplyAPYHistory))
@@ -658,8 +650,8 @@ func (c *Client) fetchMarkets(ctx context.Context, chain id.Chain) ([]aaveMarket
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
+		return nil, err
 	}
 	if len(resp.Data.Markets) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave has no market for requested chain")
@@ -687,8 +679,8 @@ func (c *Client) fetchMarketAddresses(ctx context.Context, chain id.Chain) ([]st
 	if _, err := httpx.DoBodyJSON(ctx, c.http, http.MethodPost, c.endpoint, body, nil, &resp); err != nil {
 		return nil, err
 	}
-	if len(resp.Errors) > 0 {
-		return nil, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("aave graphql error: %s", resp.Errors[0].Message))
+	if err := providers.CheckGraphQLErrors(resp.Errors, "aave"); err != nil {
+		return nil, err
 	}
 	if len(resp.Data.Markets) == 0 {
 		return nil, clierr.New(clierr.CodeUnsupported, "aave has no market for requested chain")

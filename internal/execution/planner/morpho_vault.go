@@ -3,7 +3,6 @@ package planner
 import (
 	"context"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -14,6 +13,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
@@ -68,9 +68,7 @@ type morphoVaultLookupResponse struct {
 			} `json:"asset"`
 		} `json:"vaultByAddress"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type morphoVaultV2LookupResponse struct {
@@ -88,9 +86,7 @@ type morphoVaultV2LookupResponse struct {
 			} `json:"asset"`
 		} `json:"vaultV2ByAddress"`
 	} `json:"data"`
-	Errors []struct {
-		Message string `json:"message"`
-	} `json:"errors"`
+	Errors []providers.GraphQLError `json:"errors"`
 }
 
 type morphoVaultMetadata struct {
@@ -228,8 +224,8 @@ func fetchMorphoVaultByAddress(ctx context.Context, chainID int64, address strin
 	if _, err := httpx.DoBodyJSON(ctx, client, http.MethodPost, morphoGraphQLEndpoint, body, nil, &resp); err != nil {
 		return meta, err
 	}
-	if len(resp.Errors) > 0 && !isMorphoLookupNotFound(resp.Errors[0].Message) {
-		return meta, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", resp.Errors[0].Message))
+	if len(resp.Errors) > 0 && !providers.IsMorphoNoResultsError(resp.Errors[0].Message) {
+		return meta, providers.CheckGraphQLErrors(resp.Errors, "morpho")
 	}
 	if resp.Data.VaultByAddress != nil {
 		if !resp.Data.VaultByAddress.Listed {
@@ -263,10 +259,10 @@ func fetchMorphoVaultByAddress(ctx context.Context, chainID int64, address strin
 		return meta, err
 	}
 	if len(respV2.Errors) > 0 {
-		if isMorphoLookupNotFound(respV2.Errors[0].Message) {
+		if providers.IsMorphoNoResultsError(respV2.Errors[0].Message) {
 			return meta, clierr.New(clierr.CodeUsage, "morpho vault address not found for selected chain")
 		}
-		return meta, clierr.New(clierr.CodeUnavailable, fmt.Sprintf("morpho graphql error: %s", respV2.Errors[0].Message))
+		return meta, providers.CheckGraphQLErrors(respV2.Errors, "morpho")
 	}
 	if respV2.Data.VaultV2ByAddress == nil {
 		return meta, clierr.New(clierr.CodeUsage, "morpho vault address not found for selected chain")
@@ -284,10 +280,6 @@ func fetchMorphoVaultByAddress(ctx context.Context, chainID int64, address strin
 		AssetDecimals: respV2.Data.VaultV2ByAddress.Asset.Decimals,
 		Kind:          "vault_v2",
 	}, nil
-}
-
-func isMorphoLookupNotFound(message string) bool {
-	return strings.Contains(strings.ToLower(strings.TrimSpace(message)), "no results matching given parameters")
 }
 
 var erc4626VaultABI = mustPlannerABI(registry.ERC4626VaultABI)
