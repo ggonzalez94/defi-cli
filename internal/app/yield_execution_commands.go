@@ -38,22 +38,6 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		PoolAddress         string `json:"pool_address" flag:"pool-address" format:"evm-address"`
 		PoolAddressProvider string `json:"pool_address_provider" flag:"pool-address-provider" format:"evm-address"`
 	}
-	type yieldSubmitArgs struct {
-		ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
-		Simulate           bool    `json:"simulate" flag:"simulate"`
-		Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
-		KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
-		PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
-		FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
-		PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
-		StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
-		GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
-		MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
-		MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
-		AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
-		UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
-		FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
-	}
 	buildAction := func(ctx context.Context, args yieldArgs) (execution.Action, error) {
 		chain, asset, err := parseChainAsset(args.ChainArg, args.AssetArg)
 		if err != nil {
@@ -137,7 +121,7 @@ func (s *runtimeState) newYieldVerbExecutionCommand(verb actionbuilder.YieldVerb
 		},
 	}
 	registerSubmitFlags(submitCmd, &submit, "yield")
-	annotateStructuredSubmitCommand(submitCmd, yieldSubmitArgs{})
+	annotateStructuredSubmitCommand(submitCmd, standardSubmitSchema{})
 
 	statusCmd := s.newStatusCommand("yield", expectedIntent, "action intent does not match yield verb")
 

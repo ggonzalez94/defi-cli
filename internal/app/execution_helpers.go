@@ -141,9 +141,28 @@ func validateExecutionSender(action execution.Action, expectedSender, actualSend
 	return nil
 }
 
+// standardSubmitSchema is the tagged struct used by annotateStructuredSubmitCommand
+// for schema generation on commands that expose the full set of submit flags.
+// Commands with fewer flags (e.g. transfer) keep their own typed struct.
+type standardSubmitSchema struct {
+	ActionID           string  `json:"action_id" flag:"action-id" required:"true" format:"action-id"`
+	Simulate           bool    `json:"simulate" flag:"simulate"`
+	Signer             string  `json:"signer" flag:"signer" enum:"local,tempo"`
+	KeySource          string  `json:"key_source" flag:"key-source" enum:"auto,env,file,keystore"`
+	PrivateKey         string  `json:"private_key" flag:"private-key" format:"hex"`
+	FromAddress        string  `json:"from_address" flag:"from-address" format:"evm-address"`
+	PollInterval       string  `json:"poll_interval" flag:"poll-interval" format:"duration"`
+	StepTimeout        string  `json:"step_timeout" flag:"step-timeout" format:"duration"`
+	GasMultiplier      float64 `json:"gas_multiplier" flag:"gas-multiplier"`
+	MaxFeeGwei         string  `json:"max_fee_gwei" flag:"max-fee-gwei"`
+	MaxPriorityFeeGwei string  `json:"max_priority_fee_gwei" flag:"max-priority-fee-gwei"`
+	AllowMaxApproval   bool    `json:"allow_max_approval" flag:"allow-max-approval"`
+	UnsafeProviderTx   bool    `json:"unsafe_provider_tx" flag:"unsafe-provider-tx"`
+	FeeToken           string  `json:"fee_token" flag:"fee-token" format:"evm-address"`
+}
+
 // executionSubmitArgs holds the common set of fields used by all execution
-// submit commands. Each command keeps its own typed struct (with json/flag tags
-// for schema annotation) and passes these fields to runSubmitAction.
+// submit commands for flag binding (no struct tags needed).
 type executionSubmitArgs struct {
 	ActionID           string
 	Simulate           bool
