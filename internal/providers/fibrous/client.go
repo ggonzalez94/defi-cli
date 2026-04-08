@@ -11,7 +11,6 @@ import (
 
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
-	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 )
@@ -112,11 +111,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: resp.OutputAmount,
-			AmountDecimal:   id.FormatDecimalCompat(resp.OutputAmount, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(resp.OutputAmount, req.ToAsset.Decimals),
 		EstimatedGasUSD: estimatedGasUSD,
 		PriceImpactPct:  0,
 		Route:           "fibrous",

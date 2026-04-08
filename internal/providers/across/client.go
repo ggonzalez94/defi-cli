@@ -120,11 +120,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 			AmountDecimal:   req.AmountDecimal,
 			Decimals:        req.FromAsset.Decimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: estOut,
-			AmountDecimal:   id.FormatDecimalCompat(estOut, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(estOut, req.ToAsset.Decimals),
 		EstimatedFeeUSD: feeUSD,
 		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  estTime,

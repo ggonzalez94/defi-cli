@@ -17,7 +17,6 @@ import (
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
-	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
@@ -168,11 +167,7 @@ func (c *Client) QuoteBridge(ctx context.Context, req providers.BridgeQuoteReque
 		},
 		FromAmountForGas:           fromAmountForGas,
 		EstimatedDestinationNative: nativeEstimate,
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: resp.Estimate.ToAmount,
-			AmountDecimal:   id.FormatDecimalCompat(resp.Estimate.ToAmount, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(resp.Estimate.ToAmount, req.ToAsset.Decimals),
 		EstimatedFeeUSD: feeUSD,
 		FeeBreakdown:    feeBreakdown,
 		EstimatedTimeS:  resp.Estimate.ExecutionDuration,
@@ -393,11 +388,8 @@ func destinationNativeEstimate(steps []quoteStep, destinationChainID int64) *mod
 		if decimals <= 0 {
 			decimals = 18
 		}
-		return &model.AmountInfo{
-			AmountBaseUnits: amount,
-			AmountDecimal:   id.FormatDecimalCompat(amount, decimals),
-			Decimals:        decimals,
-		}
+		ai := providers.AmountInfoFromBase(amount, decimals)
+		return &ai
 	}
 	return nil
 }

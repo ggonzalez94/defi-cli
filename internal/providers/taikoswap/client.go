@@ -92,11 +92,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
 		InputAmount: model.AmountInfo{AmountBaseUnits: req.AmountBaseUnits, AmountDecimal: req.AmountDecimal, Decimals: req.FromAsset.Decimals},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: quoteOut.String(),
-			AmountDecimal:   id.FormatDecimalCompat(quoteOut.String(), req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(quoteOut.String(), req.ToAsset.Decimals),
 		EstimatedGasUSD: 0,
 		PriceImpactPct:  0,
 		Route:           fmt.Sprintf("taikoswap-v3-fee-%d", bestFee),

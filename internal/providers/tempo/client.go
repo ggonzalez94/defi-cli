@@ -107,16 +107,8 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		FromAssetID: req.FromAsset.AssetID,
 		ToAssetID:   req.ToAsset.AssetID,
 		TradeType:   string(tradeType),
-		InputAmount: model.AmountInfo{
-			AmountBaseUnits: inputAmount.String(),
-			AmountDecimal:   id.FormatDecimalCompat(inputAmount.String(), inputDecimals),
-			Decimals:        inputDecimals,
-		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: estimatedOut.String(),
-			AmountDecimal:   id.FormatDecimalCompat(estimatedOut.String(), outputDecimals),
-			Decimals:        outputDecimals,
-		},
+		InputAmount:  providers.AmountInfoFromBase(inputAmount.String(), inputDecimals),
+		EstimatedOut: providers.AmountInfoFromBase(estimatedOut.String(), outputDecimals),
 		EstimatedGasUSD: 0,
 		PriceImpactPct:  0,
 		Route:           "tempo-dex",

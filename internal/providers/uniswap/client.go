@@ -157,11 +157,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 			AmountDecimal:   inputAmountDecimal,
 			Decimals:        inputAmountDecimals,
 		},
-		EstimatedOut: model.AmountInfo{
-			AmountBaseUnits: amountOut,
-			AmountDecimal:   id.FormatDecimalCompat(amountOut, req.ToAsset.Decimals),
-			Decimals:        req.ToAsset.Decimals,
-		},
+		EstimatedOut: providers.AmountInfoFromBase(amountOut, req.ToAsset.Decimals),
 		EstimatedGasUSD: gasUSD,
 		PriceImpactPct:  0,
 		Route:           "uniswap",
