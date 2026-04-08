@@ -40,6 +40,44 @@ var (
 	signerNonceLocks     sync.Map
 )
 
+// rpcPool is a concurrency-safe cache of ethclient connections keyed by RPC URL.
+// Both EVMStepExecutor and TempoStepExecutor embed it to share client lifecycle
+// management.
+type rpcPool struct {
+	mu      sync.Mutex
+	clients map[string]*ethclient.Client
+}
+
+func newRPCPool() rpcPool {
+	return rpcPool{clients: make(map[string]*ethclient.Client)}
+}
+
+func (p *rpcPool) getClient(ctx context.Context, rpcURL string) (*ethclient.Client, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if client := p.clients[rpcURL]; client != nil {
+		return client, nil
+	}
+	client, err := ethclient.DialContext(ctx, rpcURL)
+	if err != nil {
+		return nil, clierr.Wrap(clierr.CodeUnavailable, "connect rpc", err)
+	}
+	p.clients[rpcURL] = client
+	return client, nil
+}
+
+// Close closes all cached RPC client connections.
+func (p *rpcPool) Close() {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, client := range p.clients {
+		if client != nil {
+			client.Close()
+		}
+	}
+	p.clients = make(map[string]*ethclient.Client)
+}
+
 type contractCaller interface {
 	CallContract(ctx context.Context, msg ethereum.CallMsg, blockNumber *big.Int) ([]byte, error)
 }
@@ -80,15 +118,7 @@ func ExecuteAction(ctx context.Context, store *Store, action *Action, txSigner s
 	if opts.GasMultiplier <= 1 {
 		return clierr.New(clierr.CodeUsage, "gas multiplier must be > 1")
 	}
-	persist := func() error {
-		action.Touch()
-		if store != nil {
-			if err := store.Save(*action); err != nil {
-				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
-			}
-		}
-		return nil
-	}
+	persist := makePersist(action, store)
 
 	executor, err := ResolveExecutionBackend(action, txSigner, evmBackend)
 	if err != nil {
@@ -273,6 +303,18 @@ func waitForStepConfirmation(ctx context.Context, client *ethclient.Client, step
 			return nil, clierr.Wrap(clierr.CodeActionTimeout, "timed out waiting for receipt", waitCtx.Err())
 		case <-ticker.C:
 		}
+	}
+}
+
+func makePersist(action *Action, store *Store) func() error {
+	return func() error {
+		action.Touch()
+		if store != nil {
+			if err := store.Save(*action); err != nil {
+				return clierr.Wrap(clierr.CodeInternal, "persist action state", err)
+			}
+		}
+		return nil
 	}
 }
 
@@ -725,6 +767,26 @@ func firstNonEmpty(values ...string) string {
 		}
 	}
 	return ""
+}
+
+func resolveEIP1559Fees(ctx context.Context, client *ethclient.Client, opts ExecuteOptions) (tipCap, feeCap *big.Int, err error) {
+	tipCap, err = resolveTipCap(ctx, client, opts.MaxPriorityFeeGwei)
+	if err != nil {
+		return nil, nil, err
+	}
+	header, err := client.HeaderByNumber(ctx, nil)
+	if err != nil {
+		return nil, nil, clierr.Wrap(clierr.CodeUnavailable, "fetch latest header", err)
+	}
+	baseFee := header.BaseFee
+	if baseFee == nil {
+		baseFee = big.NewInt(1_000_000_000)
+	}
+	feeCap, err = resolveFeeCap(baseFee, tipCap, opts.MaxFeeGwei)
+	if err != nil {
+		return nil, nil, err
+	}
+	return tipCap, feeCap, nil
 }
 
 func resolveTipCap(ctx context.Context, client *ethclient.Client, overrideGwei string) (*big.Int, error) {
