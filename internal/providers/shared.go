@@ -13,8 +13,6 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/model"
 )
 
-// ── Sorting ────────────────────────────────────────────────────────────
-
 // SortLendPositions sorts lend positions by USD value desc, then type, asset, native ID.
 func SortLendPositions(items []model.LendPosition) {
 	sort.Slice(items, func(i, j int) bool {
@@ -47,8 +45,6 @@ func SortYieldPositions(items []model.YieldPosition) {
 	})
 }
 
-// ── Matching / filtering ───────────────────────────────────────────────
-
 // MatchesPositionType returns true if the position matches the filter (empty or "all" matches everything).
 func MatchesPositionType(filter, position LendPositionType) bool {
 	if filter == "" || filter == LendPositionTypeAll {
@@ -69,8 +65,6 @@ func MatchesAsset(address, symbol string, asset id.Asset) bool {
 	return true
 }
 
-// ── EVM address helpers ────────────────────────────────────────────────
-
 // NormalizeEVMAddress lowercases and validates a 0x-prefixed 42-char hex address.
 // Returns empty string for invalid input.
 func NormalizeEVMAddress(address string) string {
@@ -89,8 +83,6 @@ func CanonicalAssetIDForChain(chainID, address string) string {
 	}
 	return fmt.Sprintf("%s/erc20:%s", chainID, addr)
 }
-
-// ── Amount helpers ─────────────────────────────────────────────────────
 
 // NormalizeBaseUnits sanitises a base-unit string, returning "0" for empty/non-numeric input.
 func NormalizeBaseUnits(v string) string {
@@ -129,12 +121,10 @@ func PtrAmountInfo(v model.AmountInfo) *model.AmountInfo {
 	return &out
 }
 
-// ── ID construction ───────────────────────────────────────────────────
-
 // CanonicalAssetID builds a CAIP-19 asset ID from an Asset and EVM address.
-// Falls back to asset.AssetID when the address is empty.
+// Falls back to asset.AssetID when the address is empty or invalid.
 func CanonicalAssetID(asset id.Asset, address string) string {
-	addr := strings.ToLower(strings.TrimSpace(address))
+	addr := NormalizeEVMAddress(address)
 	if addr == "" {
 		return asset.AssetID
 	}
@@ -152,8 +142,6 @@ func HashOpportunity(provider, chainID, nativeID, assetID string) string {
 	h := sha1.Sum([]byte(seed))
 	return hex.EncodeToString(h[:])
 }
-
-// ── Parsing ────────────────────────────────────────────────────────────
 
 // ParseFloat parses a string to float64, returning 0 for errors, NaN, or Inf.
 func ParseFloat(v string) float64 {

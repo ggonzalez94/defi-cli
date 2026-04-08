@@ -930,7 +930,7 @@ func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, 
 			assetAddress = vault.Asset.Address
 			assetSymbol = vault.Asset.Symbol
 		}
-		if !matchesVaultAsset(assetAddress, assetSymbol, asset) {
+		if !providers.MatchesAsset(assetAddress, assetSymbol, asset) {
 			continue
 		}
 		netAPY := 0.0
@@ -960,7 +960,7 @@ func (c *Client) fetchYieldVaultCandidates(ctx context.Context, chain id.Chain, 
 			assetAddress = vault.Asset.Address
 			assetSymbol = vault.Asset.Symbol
 		}
-		if !matchesVaultAsset(assetAddress, assetSymbol, asset) {
+		if !providers.MatchesAsset(assetAddress, assetSymbol, asset) {
 			continue
 		}
 		out = append(out, vaultYieldCandidate{
@@ -1191,16 +1191,6 @@ func convertMorphoPoints(points []morphoFloatDataPoint, percent bool) []model.Yi
 		return strings.Compare(out[i].Timestamp, out[j].Timestamp) < 0
 	})
 	return out
-}
-
-func matchesVaultAsset(vaultAssetAddress, vaultAssetSymbol string, asset id.Asset) bool {
-	if addr := providers.NormalizeEVMAddress(asset.Address); addr != "" {
-		return strings.EqualFold(providers.NormalizeEVMAddress(vaultAssetAddress), addr)
-	}
-	if symbol := strings.TrimSpace(asset.Symbol); symbol != "" {
-		return strings.EqualFold(strings.TrimSpace(vaultAssetSymbol), symbol)
-	}
-	return true
 }
 
 func allocationFromVault(vault morphoVault) []marketAllocation {

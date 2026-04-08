@@ -494,9 +494,7 @@ func (c *Client) YieldOpportunities(ctx context.Context, req providers.YieldRequ
 			if r.BorrowInfo != nil {
 				liquidityUSD = providers.ParseFloat(r.BorrowInfo.AvailableLiquidity.USD)
 			}
-			normalizedMarket := providers.NormalizeEVMAddress(m.Address)
-			normalizedUnderlying := providers.NormalizeEVMAddress(r.UnderlyingToken.Address)
-			nativeID := providers.ProviderNativeID("aave", req.Chain.CAIP2, normalizedMarket, normalizedUnderlying)
+			nativeID := providers.ProviderNativeID("aave", req.Chain.CAIP2, m.Address, r.UnderlyingToken.Address)
 			opportunityID := providers.HashOpportunity("aave", req.Chain.CAIP2, nativeID, assetID)
 			out = append(out, model.YieldOpportunity{
 				OpportunityID:        opportunityID,
