@@ -262,4 +262,4 @@ func fetchMorphoVaultByAddress(ctx context.Context, chainID int64, address strin
 	}, nil
 }
 
-var erc4626VaultABI = mustPlannerABI(registry.ERC4626VaultABI)
+var erc4626VaultABI = registry.MustParseABI(registry.ERC4626VaultABI)

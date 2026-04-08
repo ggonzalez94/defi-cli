@@ -289,4 +289,4 @@ func fetchMorphoMarketByID(ctx context.Context, chainID int64, marketID string) 
 	return data.Markets.Items[0], nil
 }
 
-var morphoBlueABI = mustPlannerABI(registry.MorphoBlueABI)
+var morphoBlueABI = registry.MustParseABI(registry.MorphoBlueABI)

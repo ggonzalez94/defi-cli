@@ -4,11 +4,9 @@ import (
 	"context"
 	"fmt"
 	"math/big"
-	"strings"
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -22,9 +20,9 @@ import (
 var (
 	feeTiers = []uint32{100, 500, 3000, 10000}
 
-	quoterABI = mustABI(registry.UniswapV3QuoterV2ABI)
-	erc20ABI  = mustABI(registry.ERC20MinimalABI)
-	routerABI = mustABI(registry.UniswapV3RouterABI)
+	quoterABI = registry.MustParseABI(registry.UniswapV3QuoterV2ABI)
+	erc20ABI  = registry.MustParseABI(registry.ERC20MinimalABI)
+	routerABI = registry.MustParseABI(registry.UniswapV3RouterABI)
 )
 
 type Client struct {
@@ -274,10 +272,3 @@ func quoteBestFee(ctx context.Context, client *ethclient.Client, quoter, tokenIn
 	return bestOut, bestFee, bestGas, nil
 }
 
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}

@@ -3,10 +3,8 @@ package multicall
 import (
 	"context"
 	"fmt"
-	"strings"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	"github.com/ggonzalez94/defi-cli/internal/registry"
@@ -66,12 +64,4 @@ func Aggregate3(ctx context.Context, client *ethclient.Client, calls []Call) ([]
 	return results, nil
 }
 
-var mc3ABI = mustABI(registry.Multicall3ABI)
-
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(fmt.Sprintf("invalid ABI: %v", err))
-	}
-	return parsed
-}
+var mc3ABI = registry.MustParseABI(registry.Multicall3ABI)

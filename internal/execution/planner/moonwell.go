@@ -235,5 +235,5 @@ func resolveMoonwellMToken(ctx context.Context, client *ethclient.Client, chain 
 	return common.Address{}, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("no moonwell mToken found for underlying %s on chain %d; pass --pool-address with the mToken address", underlying.Hex(), chain.EVMChainID))
 }
 
-var moonwellMTokenABI = mustPlannerABI(registry.MoonwellMTokenABI)
-var moonwellComptrollerABI = mustPlannerABI(registry.MoonwellComptrollerABI)
+var moonwellMTokenABI = registry.MustParseABI(registry.MoonwellMTokenABI)
+var moonwellComptrollerABI = registry.MustParseABI(registry.MoonwellComptrollerABI)

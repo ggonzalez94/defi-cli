@@ -477,8 +477,8 @@ func parseRewardAmount(v string) (*big.Int, error) {
 	return amount, nil
 }
 
-var aavePoolAddressProviderABI = mustPlannerABI(registry.AavePoolAddressProviderABI)
+var aavePoolAddressProviderABI = registry.MustParseABI(registry.AavePoolAddressProviderABI)
 
-var aavePoolABI = mustPlannerABI(registry.AavePoolABI)
+var aavePoolABI = registry.MustParseABI(registry.AavePoolABI)
 
-var aaveRewardsABI = mustPlannerABI(registry.AaveRewardsABI)
+var aaveRewardsABI = registry.MustParseABI(registry.AaveRewardsABI)

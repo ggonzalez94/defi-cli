@@ -1,5 +1,21 @@
 package registry
 
+import (
+	"fmt"
+	"strings"
+
+	"github.com/ethereum/go-ethereum/accounts/abi"
+)
+
+// MustParseABI parses a JSON ABI string, panicking on failure.
+func MustParseABI(raw string) abi.ABI {
+	parsed, err := abi.JSON(strings.NewReader(raw))
+	if err != nil {
+		panic(fmt.Sprintf("invalid ABI: %v", err))
+	}
+	return parsed
+}
+
 // ABI fragments used across execution planners/providers.
 const (
 	ERC20MinimalABI = `[

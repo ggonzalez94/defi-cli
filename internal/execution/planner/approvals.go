@@ -5,7 +5,6 @@ import (
 	"math/big"
 	"strings"
 
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
@@ -68,7 +67,7 @@ func BuildApprovalAction(req ApprovalRequest) (execution.Action, error) {
 	return action, nil
 }
 
-var plannerERC20ABI = mustPlannerABI(registry.ERC20MinimalABI)
+var plannerERC20ABI = registry.MustParseABI(registry.ERC20MinimalABI)
 
 func appendStep(action *execution.Action, stepID string, stepType execution.StepType, chainID, rpcURL, description, target string, data []byte) {
 	action.Steps = append(action.Steps, execution.ActionStep{
@@ -84,10 +83,3 @@ func appendStep(action *execution.Action, stepID string, stepType execution.Step
 	})
 }
 
-func mustPlannerABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}

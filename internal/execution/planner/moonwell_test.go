@@ -17,7 +17,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
-var testMC3ABI = mustPlannerABI(registry.Multicall3ABI)
+var testMC3ABI = registry.MustParseABI(registry.Multicall3ABI)
 
 const (
 	testMToken     = "0x0000000000000000000000000000000000000011"

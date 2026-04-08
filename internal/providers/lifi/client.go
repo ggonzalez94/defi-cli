@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -342,15 +341,7 @@ func (c *Client) BuildBridgeAction(ctx context.Context, req providers.BridgeQuot
 	return action, nil
 }
 
-var lifiERC20ABI = mustLifiABI(registry.ERC20MinimalABI)
-
-func mustLifiABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(err)
-	}
-	return parsed
-}
+var lifiERC20ABI = registry.MustParseABI(registry.ERC20MinimalABI)
 
 func shouldAddApproval(tokenAddr, spender string) bool {
 	if strings.TrimSpace(tokenAddr) == "" || strings.TrimSpace(spender) == "" {

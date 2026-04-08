@@ -2,7 +2,6 @@ package moonwell
 
 import (
 	"context"
-	"fmt"
 	"math"
 	"math/big"
 	"strings"
@@ -820,14 +819,7 @@ func amountInfoFromBigInt(v *big.Int, decimals int) model.AmountInfo {
 
 // ── ABI singletons ──────────────────────────────────────────────────────
 
-var comptrollerABI = mustABI(registry.MoonwellComptrollerABI)
-var mTokenABI = mustABI(registry.MoonwellMTokenABI)
-var oracleABI = mustABI(registry.MoonwellOracleABI)
-var erc20ABI = mustABI(registry.MoonwellERC20MinimalABI)
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(fmt.Sprintf("invalid ABI: %v", err))
-	}
-	return parsed
-}
+var comptrollerABI = registry.MustParseABI(registry.MoonwellComptrollerABI)
+var mTokenABI = registry.MustParseABI(registry.MoonwellMTokenABI)
+var oracleABI = registry.MustParseABI(registry.MoonwellOracleABI)
+var erc20ABI = registry.MustParseABI(registry.MoonwellERC20MinimalABI)

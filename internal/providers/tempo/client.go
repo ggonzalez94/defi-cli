@@ -8,7 +8,6 @@ import (
 	"time"
 
 	"github.com/ethereum/go-ethereum"
-	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/ethclient"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
@@ -20,9 +19,9 @@ import (
 )
 
 var (
-	tempoDEXABI   = mustABI(registry.TempoStablecoinDEXABI)
-	tempoERC20    = mustABI(registry.ERC20MinimalABI)
-	tempoTIP20ABI = mustABI(registry.TempoTIP20MetadataABI)
+	tempoDEXABI   = registry.MustParseABI(registry.TempoStablecoinDEXABI)
+	tempoERC20    = registry.MustParseABI(registry.ERC20MinimalABI)
+	tempoTIP20ABI = registry.MustParseABI(registry.TempoTIP20MetadataABI)
 )
 
 type Client struct {
@@ -419,10 +418,3 @@ func applySlippageCeil(amount *big.Int, bps int64) *big.Int {
 	return numerator.Div(numerator, big.NewInt(10_000))
 }
 
-func mustABI(raw string) abi.ABI {
-	parsed, err := abi.JSON(strings.NewReader(raw))
-	if err != nil {
-		panic(fmt.Sprintf("parse tempo ABI: %v", err))
-	}
-	return parsed
-}
