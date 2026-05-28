@@ -1656,6 +1656,9 @@ dependencies = [
 [[package]]
 name = "defi-policy"
 version = "0.5.0"
+dependencies = [
+ "defi-errors",
+]
 
 [[package]]
 name = "defi-providers"
@@ -1689,6 +1692,7 @@ dependencies = [
 name = "defi-schema"
 version = "0.5.0"
 dependencies = [
+ "indexmap 2.14.0",
  "serde",
  "serde_json",
 ]
