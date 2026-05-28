@@ -1,0 +1,26 @@
+{
+  "version": "v1",
+  "success": true,
+  "data": {
+    "input": "USDC",
+    "chain_id": "eip155:1",
+    "symbol": "USDC",
+    "asset_id": "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "address": "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48",
+    "decimals": 6,
+    "resolved_by": "registry",
+    "unambiguous": true
+  },
+  "error": null,
+  "meta": {
+    "request_id": "44e40b0caac6e0251b054b539782358e",
+    "timestamp": "2026-05-28T18:47:38.869272Z",
+    "command": "assets resolve",
+    "cache": {
+      "status": "bypass",
+      "age_ms": 0,
+      "stale": false
+    },
+    "partial": false
+  }
+}

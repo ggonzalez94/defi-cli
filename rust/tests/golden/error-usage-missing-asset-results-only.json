@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "success": false,
+  "data": [],
+  "error": {
+    "code": 2,
+    "type": "usage_error",
+    "message": "--asset or --symbol is required"
+  },
+  "meta": {
+    "request_id": "64ad00f2fc6e0899c6faa5fe6ea95632",
+    "timestamp": "2026-05-28T18:48:18.929963Z",
+    "command": "assets resolve",
+    "cache": {
+      "status": "bypass",
+      "age_ms": 0,
+      "stale": false
+    },
+    "partial": false
+  }
+}

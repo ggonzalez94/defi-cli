@@ -1,0 +1,23 @@
+[package]
+name = "defi-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+defi-errors = { workspace = true }
+defi-model = { workspace = true }
+defi-id = { workspace = true }
+defi-httpx = { workspace = true }
+defi-registry = { workspace = true }
+defi-evm = { workspace = true }
+defi-execution = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+tokio = { workspace = true }

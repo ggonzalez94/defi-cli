@@ -1,0 +1,11 @@
+[package]
+name = "defi-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+defi-id = { workspace = true }
+defi-evm = { workspace = true }
+alloy = { workspace = true }
