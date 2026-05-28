@@ -1564,6 +1564,7 @@ dependencies = [
  "defi-errors",
  "serde",
  "serde_yaml",
+ "tempfile",
 ]
 
 [[package]]
@@ -1611,6 +1612,8 @@ version = "0.5.0"
 dependencies = [
  "defi-errors",
  "reqwest",
+ "serde",
+ "serde_json",
  "tokio",
  "wiremock",
 ]
@@ -1689,6 +1692,7 @@ name = "defi-registry"
 version = "0.5.0"
 dependencies = [
  "alloy",
+ "defi-errors",
  "defi-evm",
  "defi-id",
 ]

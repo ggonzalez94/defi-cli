@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+defi-errors = { workspace = true }
 defi-id = { workspace = true }
 defi-evm = { workspace = true }
 alloy = { workspace = true }

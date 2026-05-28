@@ -9,6 +9,10 @@ repository.workspace = true
 defi-errors = { workspace = true }
 reqwest = { workspace = true }
 tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
 
 [dev-dependencies]
 wiremock = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
