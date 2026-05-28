@@ -51,6 +51,7 @@ alloy = { version = "2", features = [
 ruint = "1"
 num-bigint = "0.4"
 hex = "0.4"
+rand = "0.9"
 
 # Dev dependencies
 wiremock = "0.6"

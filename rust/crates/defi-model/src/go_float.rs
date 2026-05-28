@@ -42,7 +42,14 @@ use serde_json::value::RawValue;
 ///
 /// Returns the numeric token string (e.g. `"2"`, `"2.3"`, `"1e+21"`,
 /// `"0.000001"`, `"-0"`). The caller guarantees `value.is_finite()`.
-fn format_go_float(value: f64) -> String {
+///
+/// This is the single source of truth for Go `encoding/json` float64 rendering
+/// (scientific iff `abs >= 1e21` or `abs < 1e-6`, whole values drop the
+/// fraction, exponent not zero-padded). It is reused by `defi-out` for the rare
+/// raw-`Value::Number(f64)` that reaches plain rendering without first passing
+/// through a typed struct. Non-finite values are NOT valid JSON (same as Go) and
+/// must be filtered by the caller before calling this.
+pub fn format_go_float(value: f64) -> String {
     if value == 0.0 {
         // ryū/Go agree: 0.0 -> "0", -0.0 -> "-0".
         return if value.is_sign_negative() {

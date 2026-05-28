@@ -1593,17 +1593,28 @@ dependencies = [
 name = "defi-execution"
 version = "0.5.0"
 dependencies = [
+ "alloy",
  "async-trait",
  "chrono",
  "defi-cache",
+ "defi-config",
  "defi-errors",
  "defi-evm",
+ "defi-httpx",
  "defi-id",
  "defi-model",
  "defi-registry",
+ "fd-lock",
+ "hex",
+ "num-bigint",
+ "rand 0.9.4",
+ "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
+ "wiremock",
 ]
 
 [[package]]
@@ -1642,11 +1653,13 @@ dependencies = [
 name = "defi-out"
 version = "0.5.0"
 dependencies = [
+ "chrono",
  "defi-config",
  "defi-model",
  "indexmap 2.14.0",
  "serde",
  "serde_json",
+ "thiserror",
 ]
 
 [[package]]
@@ -1654,11 +1667,10 @@ name = "defi-ows"
 version = "0.5.0"
 dependencies = [
  "defi-errors",
- "defi-evm",
- "defi-httpx",
+ "hex",
  "serde",
  "serde_json",
- "wiremock",
+ "tempfile",
 ]
 
 [[package]]

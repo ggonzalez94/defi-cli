@@ -7,10 +7,9 @@ repository.workspace = true
 
 [dependencies]
 defi-errors = { workspace = true }
-defi-httpx = { workspace = true }
-defi-evm = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+hex = { workspace = true }
 
 [dev-dependencies]
-wiremock = { workspace = true }
+tempfile = { workspace = true }
