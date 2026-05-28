@@ -7,6 +7,7 @@
 
 pub mod domain;
 pub mod envelope;
+pub mod go_float;
 
 pub use domain::*;
 pub use envelope::*;

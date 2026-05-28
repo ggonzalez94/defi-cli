@@ -1579,8 +1579,13 @@ version = "0.5.0"
 dependencies = [
  "alloy",
  "defi-errors",
+ "hex",
+ "num-bigint",
  "ruint",
+ "serde",
+ "serde_json",
  "tokio",
+ "wiremock",
 ]
 
 [[package]]
