@@ -543,11 +543,12 @@ pub fn cache_key_for_quote(
 /// clap parsing + handler for the `swap` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
-    use defi_errors::Error;
-    use defi_model::Envelope;
+    use defi_errors::{Code, Error};
+    use defi_model::{Envelope, ProviderStatus};
 
     use crate::ctx::AppCtx;
     use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+    use crate::execident::{apply_execution_identity_to_action, resolve_execution_identity};
 
     /// `swap` subcommands (Go `newSwapCommand`).
     #[derive(Subcommand, Debug)]
@@ -669,10 +670,140 @@ pub mod cli {
     pub async fn handle(ctx: &AppCtx, cmd: SwapCmd) -> Result<Envelope, Error> {
         match cmd {
             SwapCmd::Quote(args) => handle_quote(ctx, args).await,
-            SwapCmd::Plan(_) => Err(AppCtx::unimplemented("swap plan", "WS3")),
+            SwapCmd::Plan(args) => handle_plan(ctx, args).await,
             SwapCmd::Submit(_) => Err(AppCtx::unimplemented("swap submit", "WS4")),
             SwapCmd::Status(_) => Err(AppCtx::unimplemented("swap status", "WS4")),
         }
+    }
+
+    /// Handle `swap plan` (Go `planCmd.RunE`, `runner.go` ~L1343-1431).
+    ///
+    /// Capability-based swap planning. Flow parity with the Go runner:
+    /// 1. `--provider` required (empty → usage, BEFORE anything else);
+    /// 2. `--type` parses (usage on unknown);
+    /// 3. exact-output capability gate: a non-tempo provider with
+    ///    `--type exact-output` → unsupported, BEFORE any build/persist;
+    /// 4. build the canonical [`SwapQuoteRequest`] ([`super::parse_swap_request`]:
+    ///    chain/asset parse, amount/flag cross-validation, base+decimal carry);
+    /// 5. resolve the sender identity — Tempo uses the `--from-address`-only path
+    ///    ([`super::resolve_swap_plan_sender`]); every other provider uses the
+    ///    shared OWS-first [`resolve_execution_identity`];
+    /// 6. route the build through the populated action-build registry
+    ///    ([`Registry::build_swap_action`] → the `taikoswap`/`tempo`
+    ///    `SwapActionBuilder`; unknown/quote-only providers error here), capturing
+    ///    a single [`ProviderStatus`] keyed on the builder display name;
+    /// 7. stamp the identity onto the action (Tempo: `from_address = checksummed
+    ///    sender` + `execution_backend = tempo`; standard:
+    ///    [`apply_execution_identity_to_action`]), persist to the action [`Store`],
+    ///    and emit the success envelope (cache bypassed for execution paths,
+    ///    spec §2.5) carrying the identity warnings.
+    ///
+    /// On every guard/build error the typed [`Error`] is returned (the runner
+    /// renders the full error envelope to stderr) and NOTHING is persisted.
+    ///
+    /// [`Registry`]: defi_execution::builder::Registry
+    /// [`Store`]: defi_execution::store::Store
+    /// [`SwapQuoteRequest`]: defi_execution::SwapQuoteRequest
+    async fn handle_plan(ctx: &AppCtx, args: PlanArgs) -> Result<Envelope, Error> {
+        use defi_execution::action::ExecutionBackend;
+        use defi_execution::SwapExecutionOptions;
+        use defi_providers::normalize::normalize_swap_provider;
+
+        // 1. `--provider` required (normalized first, like the Go runner).
+        let provider_name = normalize_swap_provider(args.provider.as_deref().unwrap_or_default());
+        if provider_name.is_empty() {
+            return Err(Error::new(Code::Usage, "--provider is required"));
+        }
+
+        // 2. `--type` parses (usage on unknown).
+        let trade_type = super::normalize_trade_type(&args.r#type)?;
+
+        // 3. exact-output capability gate (BEFORE any build/persist).
+        if trade_type == defi_execution::SwapTradeType::ExactOutput
+            && !super::swap_provider_supports_exact_output(&provider_name)
+        {
+            return Err(Error::new(
+                Code::Unsupported,
+                "exact-output swap planning currently supports only --provider tempo",
+            ));
+        }
+
+        // 4. Build the canonical request (chain/asset parse, amount cross-validation).
+        let req = super::parse_swap_request(
+            args.chain.as_deref().unwrap_or_default(),
+            args.from_asset.as_deref().unwrap_or_default(),
+            args.to_asset.as_deref().unwrap_or_default(),
+            trade_type,
+            args.amount.as_deref().unwrap_or_default(),
+            args.amount_decimal.as_deref().unwrap_or_default(),
+            args.amount_out.as_deref().unwrap_or_default(),
+            args.amount_out_decimal.as_deref().unwrap_or_default(),
+            args.rpc_url.as_deref().unwrap_or_default(),
+        )?;
+
+        // 5. Resolve the sender identity (Tempo = `--from-address` only; standard =
+        //    OWS-first shared resolver). Errors return before any build/persist.
+        let chain_arg = args.chain.as_deref().unwrap_or_default();
+        let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
+        let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
+
+        let mut identity = None;
+        let sender = if normalize_swap_provider(&provider_name) == "tempo" {
+            super::resolve_swap_plan_sender(&provider_name, wallet_ref, from_flag, || {
+                unreachable!("tempo path does not call the standard resolver")
+            })?
+            .sender
+        } else {
+            let resolved = resolve_execution_identity(wallet_ref, from_flag, chain_arg)?;
+            let sender = resolved.from_address.clone();
+            identity = Some(resolved);
+            sender
+        };
+
+        // 6. Route the build through the populated registry; capture the status.
+        let opts = SwapExecutionOptions {
+            sender: sender.clone(),
+            recipient: args.recipient.clone().unwrap_or_default(),
+            slippage_bps: args.slippage_bps,
+            simulate: args.simulate,
+            rpc_url: args.rpc_url.clone().unwrap_or_default(),
+        };
+        let built = ctx
+            .swap_action_registry()
+            .build_swap_action(&provider_name, "plan", req, opts)
+            .await;
+        // The captured provider status is keyed on the builder display name (Go
+        // `provider.Info().Name`), falling back to the normalized provider name.
+        let status_name = match &built {
+            Ok((_, display)) if !display.trim().is_empty() => display.clone(),
+            _ => provider_name.clone(),
+        };
+        let status = ProviderStatus {
+            name: status_name,
+            status: super::status_from_quote_result(&built),
+            latency_ms: 0,
+        };
+        let (mut action, _display) = built?;
+
+        // 7. Stamp the identity, persist, and emit the success envelope.
+        if let Some(identity) = &identity {
+            apply_execution_identity_to_action(&mut action, identity);
+        } else {
+            // Tempo path: stamp the checksummed sender + the Tempo backend.
+            action.from_address = sender;
+            action.execution_backend = Some(ExecutionBackend::Tempo);
+        }
+
+        let store = ctx.open_action_store()?;
+        store
+            .save(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "persist planned action", e))?;
+
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize planned action", e))?;
+        let mut env = ctx.metadata_envelope("swap plan", data, vec![status]);
+        env.warnings = identity.map(|i| i.warnings).unwrap_or_default();
+        Ok(env)
     }
 
     /// Handle `swap quote`: validate inputs, build the request, route through the
@@ -685,8 +816,6 @@ pub mod cli {
     /// inside [`crate::runner::run_cached_command`] (15s TTL) so a fresh cache
     /// hit short-circuits the provider.
     async fn handle_quote(ctx: &AppCtx, args: QuoteArgs) -> Result<Envelope, Error> {
-        use defi_model::ProviderStatus;
-
         // 1. Resolve flag values, merging any structured input (Go PreRunE
         //    `applyStructuredFlagInput`). Explicitly-set flags are never
         //    overridden; unknown JSON keys / null values are usage errors.
@@ -2035,6 +2164,1105 @@ mod quote_handler_tests {
         assert_eq!(
             code, 2,
             "--slippage-pct on a non-uniswap provider must be a usage error (exit 2)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod plan_app_tests {
+    //! # Success criteria — `defi-app::swap` `swap plan` HANDLER (WS3 exec-plan)
+    //!
+    //! Go source: `internal/app/runner.go` `newSwapCommand` `planCmd.RunE`
+    //! (lines ~1343-1431). These tests drive [`cli::handle`] (the real dispatch
+    //! entry the `defi` binary calls) end-to-end for `swap plan` ONLY, asserting
+    //! the full machine contract the Go runner emits via `emitSuccess(...)` (a
+    //! built+persisted [`Action`] envelope, cache bypassed per spec §2.5) and the
+    //! typed-error → full-envelope `renderError(...)` path on every guard.
+    //!
+    //! The handler is **capability-based** for swap (Go
+    //! `s.actionBuilderRegistry().BuildSwapAction(...)`): it routes by `--provider`
+    //! to a registered [`defi_execution::builder::SwapActionBuilder`]
+    //! (`taikoswap` / `tempo`), persists, then stamps identity. The TWO execution
+    //! providers exercise the TWO identity paths:
+    //!   * **taikoswap** — standard EVM identity (`--wallet` OWS-first OR
+    //!     `--from-address` legacy), via the shared
+    //!     [`crate::execident::resolve_execution_identity`] +
+    //!     `apply_execution_identity_to_action` (so `execution_backend ==
+    //!     legacy_local` and the OWS-recommended warning surface on the
+    //!     `--from-address` path); exact-input only.
+    //!   * **tempo** — Tempo-only `--from-address` identity (NO shared resolver;
+    //!     [`super::resolve_swap_plan_sender`]), where the handler stamps
+    //!     `action.from_address = sender` (checksummed) +
+    //!     `execution_backend == tempo`; supports exact-output.
+    //!
+    //! ## Determinism / offline seams
+    //!
+    //! Both builders connect to RPC through the already-present `--rpc-url` flag
+    //! (`PlanArgs.rpc_url`, resolved by `defi_registry::resolve_rpc_url(override,
+    //! chain_id)` where the override always wins). TaikoSwap's
+    //! `build_swap_action` issues four `quoteExactInputSingle` probes (one per
+    //! canonical fee tier) then one `allowance(owner,spender)` read; the mock
+    //! reproduces the provider-suite `RpcResponder` (probes return `1000, 2000,
+    //! 1500, 500` so the best tier is the 2nd, fee 500, and the 5th `eth_call`
+    //! returns the allowance). Tempo's `build_swap_action` issues `currency()`
+    //! TIP-20 reads for the USD-pair guard then a `quoteSwapExactAmountIn` /
+    //! `quoteSwapExactAmountOut`; the mock reproduces the Tempo provider-suite
+    //! `RpcResponder` (selector-routed). All RPC is offline + deterministic.
+    //! Identity is exercised through the OFFLINE `--from-address` (legacy / Tempo)
+    //! path so no OWS vault / network is touched; the `--wallet` happy path is
+    //! WS4b e2e territory and is asserted here only via its offline rejections.
+    //!
+    //! ## Criteria (each a failing test until `cli::handle` wires `swap plan`)
+    //!
+    //!  P1. **Plan success envelope (TaikoSwap, legacy `--from-address`).** A valid
+    //!      `swap plan --provider taikoswap --chain taiko --from-asset USDC
+    //!      --to-asset WETH --amount 1000000 --from-address 0x..aa --rpc-url
+    //!      <mock>` (allowance insufficient) returns `Ok(Envelope)` (exit 0) with:
+    //!      `version=="v1"`, `success==true`, `error==None`, `meta.partial==false`,
+    //!      `meta.command=="swap plan"`,
+    //!      `meta.cache=={status:"bypass", age_ms:0, stale:false}` (execution paths
+    //!      bypass the cache, spec §2.5), and `meta.providers==[{name:"taikoswap",
+    //!      status:"ok"}]` (Go captures one `ProviderStatus` keyed on the builder's
+    //!      returned display name with `statusFromErr(nil)=="ok"`).
+    //!
+    //!  P2. **Planned action `data` shape (TaikoSwap supply).** `env.data` is the
+    //!      serialized [`Action`]: `action_id` matches `^act_[0-9a-f]{32}$`;
+    //!      `intent_type=="swap"`; `provider=="taikoswap"`; `status=="planned"`;
+    //!      `chain_id=="eip155:167000"`; `from_address` == the EIP-55 checksum of
+    //!      the sender; `input_amount=="1000000"`. With an INSUFFICIENT allowance
+    //!      the action has TWO steps — `[approval, swap]` — where step 0
+    //!      `type=="approval"` and step 1 `type=="swap"`, `value=="0"`,
+    //!      `chain_id=="eip155:167000"`. (Go `BuildSwapAction` →
+    //!      `taikoswap.build_swap_action` + `emitSuccess`.)
+    //!
+    //!  P3. **TaikoSwap swap-step calldata reuses the alloy/ABI golden.** The swap
+    //!      step `target` == the TaikoSwap router (`UNISWAP_V3_ROUTER` for chain
+    //!      167000) and `data` starts with the `exactInputSingle` selector
+    //!      (computed in-test from the canonical `UNISWAP_V3_ROUTER_ABI`, NOT
+    //!      re-encoded by the handler); the approval step `data` starts with the
+    //!      ERC-20 `approve` selector `0x095ea7b3`. This proves the handler routes
+    //!      through the builder (no re-encoding) and base⇔decimal amounts stay
+    //!      consistent (spec §2.4).
+    //!
+    //!  P4. **TaikoSwap skips the approval step when allowance is sufficient.** The
+    //!      same plan against a mock whose `allowance` >= the requested amount
+    //!      yields a SINGLE `swap` step (no leading `approval`). (Go
+    //!      inline allowance read → no approval.)
+    //!
+    //!  P5. **Plan persists the action to the Store.** After a successful TaikoSwap
+    //!      plan the action is retrievable by its `action_id` from a freshly
+    //!      opened [`defi_execution::store::Store`] over the same path, with
+    //!      `intent_type=="swap"`, `input_amount=="1000000"`, and
+    //!      `provider=="taikoswap"`. (Go `s.actionStore.Save`.)
+    //!
+    //!  P6. **Legacy-identity warning + backend stamping (TaikoSwap).** The
+    //!      `--from-address` path stamps `execution_backend=="legacy_local"` on the
+    //!      action AND surfaces the Go warning `--wallet (OWS) is recommended over
+    //!      --from-address for planning; see docs for details` in `env.warnings`.
+    //!      (Go `resolveExecutionIdentity` legacy branch +
+    //!      `emitSuccess(..., identity.Warnings, ...)`.)
+    //!
+    //!  P7. **Decimal amount parity (TaikoSwap).** `--amount-decimal 1` (no
+    //!      `--amount`) on USDC (6 decimals) yields the same `input_amount==
+    //!      "1000000"` and the same two-step shape — base⇔decimal stay consistent
+    //!      (spec §2.4).
+    //!
+    //!  P8. **Tempo plan stamps the Tempo backend (exact-input).** A valid `swap
+    //!      plan --provider tempo --chain tempo --from-asset pathUSD --to-asset
+    //!      USDC.e --amount 1000000 --from-address 0x..aa --rpc-url <mock>` returns
+    //!      `Ok(Envelope)` (exit 0) whose action has
+    //!      `execution_backend=="tempo"`, `provider=="tempo"`,
+    //!      `intent_type=="swap"`, `from_address` == the EIP-55 checksum of the
+    //!      sender (Go stamps `action.FromAddress = sender`), and a SINGLE Tempo
+    //!      swap step (`tempo-swap-exact-input`). `meta.providers==[{name:"tempo",
+    //!      status:"ok"}]`, NO legacy warning (Tempo path surfaces none). (Go
+    //!      `planCmd.RunE` tempo branch +
+    //!      `action.ExecutionBackend = ExecutionBackendTempo`.)
+    //!
+    //!  P9. **Tempo exact-output plan.** `swap plan --provider tempo --type
+    //!      exact-output --amount-out 1000000 ...` builds a single Tempo
+    //!      exact-output swap step (`tempo-swap-exact-output`), still
+    //!      `execution_backend=="tempo"`. (Go: exact-output planning supports only
+    //!      tempo — `swapProviderSupportsExactOutput`.)
+    //!
+    //! P10. **`--provider` is required.** `swap plan` with an empty/missing
+    //!      `--provider` → [`Code::Usage`] (exit 2) and persists NOTHING. (Go
+    //!      `NormalizeSwapProvider("")=="" → --provider is required`.)
+    //!
+    //! P11. **Unknown / quote-only swap provider → unsupported.** `--provider
+    //!      bogus` and a markets/quote-only provider like `--provider 1inch` (no
+    //!      execution builder registered) → [`Code::Unsupported`] (exit 13);
+    //!      persists NOTHING. (Go `BuildSwapAction`: unknown → unsupported,
+    //!      quote-only → `provider X does not support swap planning`.)
+    //!
+    //! P12. **Exact-output capability gate (TaikoSwap).** `swap plan --provider
+    //!      taikoswap --type exact-output --amount-out 1000000 ...` →
+    //!      [`Code::Unsupported`] (exit 13) with the Go message `exact-output swap
+    //!      planning currently supports only --provider tempo`, BEFORE any
+    //!      build/persist. Persists NOTHING. (Go gate
+    //!      `swapProviderSupportsExactOutput`.)
+    //!
+    //! P13. **`--type` enum validation.** An invalid `--type limit-order` →
+    //!      [`Code::Usage`] (exit 2) (Go `normalizeTradeType`). Persists NOTHING.
+    //!
+    //! P14. **TaikoSwap identity-constraint errors (offline).**
+    //!      (a) BOTH `--wallet` and `--from-address` → [`Code::Usage`] (exit 2);
+    //!      (b) NEITHER `--wallet` nor `--from-address` → [`Code::Usage`] (exit 2);
+    //!      (c) a malformed `--from-address` → [`Code::Usage`] (exit 2).
+    //!      (Go `resolveExecutionIdentity`.) On every error the handler returns the
+    //!      typed `Err(Error)` (the runner renders the full error envelope to
+    //!      stderr, spec §2.1) and persists NOTHING.
+    //!
+    //! P15. **Tempo identity-constraint errors (offline).**
+    //!      (a) `--wallet` on a Tempo plan → [`Code::Unsupported`] (exit 13) with
+    //!          `--wallet planning is not supported on Tempo chains yet`;
+    //!      (b) BOTH `--wallet` and `--from-address` → [`Code::Usage`] (exit 2);
+    //!      (c) NEITHER → [`Code::Usage`] (exit 2)
+    //!          (`--from-address is required for --provider tempo`);
+    //!      (d) a malformed `--from-address` → [`Code::Usage`] (exit 2).
+    //!      (Go `planCmd.RunE` tempo branch.) Persists NOTHING.
+    //!
+    //! P16. **Full-binary exit codes.** Through `run_with_args` (the real binary
+    //!      path with no env): `swap plan` with no `--provider` → exit 2; a missing
+    //!      identity input on `--provider taikoswap` → exit 2. (Confirms the wired
+    //!      dispatch + clap surface, not just the in-process handler.)
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * the TaikoSwap/Tempo best-fee selection, slippage math, USD-pair gating,
+    //!     and exact ABI tuple encoding internals — owned by the
+    //!     `defi-providers::{taikoswap,tempo}` RED suites (ported from
+    //!     `client_test.go`);
+    //!   * the `build_swap_action` registry routing itself — `defi-execution::
+    //!     builder` suite;
+    //!   * the pure pre-provider helpers (`normalize_trade_type`,
+    //!     `swap_provider_supports_exact_output`, `parse_swap_request`,
+    //!     `resolve_swap_plan_sender`, `swap_plan_identity_constraints`) — the
+    //!     sibling `tests` module;
+    //!   * the OWS `--wallet` happy-path resolve + wallet-id persistence — WS4b
+    //!     e2e (here only its offline guard rejections are asserted);
+    //!   * `--input-json`/`--input-file` precedence — structured-input unit;
+    //!   * `swap submit|status` — WS4;
+    //!   * the JSON field-declaration-order rendering — `defi-out` golden tests.
+
+    use super::cli::{handle, PlanArgs, SwapCmd};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags};
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::{json, Value};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+
+    use alloy::dyn_abi::{FunctionExt, JsonAbiExt};
+    use alloy::json_abi::{Function as JsonFunction, JsonAbi};
+    use alloy::primitives::U256;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants -------------------------------------------------
+
+    /// Sender EOA (legacy / Tempo `--from-address` identity); its EIP-55 checksum
+    /// lands on the action.
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    /// A second address used only for the both-identity-inputs rejection.
+    const OTHER: &str = "0x00000000000000000000000000000000000000bb";
+    /// TaikoSwap V3 router for chain 167000 (from `defi_registry::uniswap_v3_contracts`).
+    /// The swap step must target this address.
+    const TAIKO_ROUTER: &str = "0x";
+    /// The Go legacy-identity warning surfaced when planning with `--from-address`.
+    const LEGACY_WARNING: &str =
+        "--wallet (OWS) is recommended over --from-address for planning; see docs for details";
+
+    // --- harness ------------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir` and the cache
+    /// disabled (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A TaikoSwap `PlanArgs` with the canonical happy-path values; mutate per
+    /// test. `--from-address` (legacy) identity; exact-input USDC→WETH on taiko.
+    fn taikoswap_args(rpc: &str) -> PlanArgs {
+        PlanArgs {
+            chain: Some("taiko".to_string()),
+            from_asset: Some("USDC".to_string()),
+            to_asset: Some("WETH".to_string()),
+            provider: Some("taikoswap".to_string()),
+            r#type: "exact-input".to_string(),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            amount_out: None,
+            amount_out_decimal: None,
+            recipient: None,
+            slippage_bps: 50,
+            rpc_url: Some(rpc.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    /// A Tempo `PlanArgs` (exact-input pathUSD→USDC.e on the tempo chain) with the
+    /// Tempo-only `--from-address` identity.
+    fn tempo_args(rpc: &str) -> PlanArgs {
+        PlanArgs {
+            chain: Some("tempo".to_string()),
+            from_asset: Some("pathUSD".to_string()),
+            to_asset: Some("USDC.e".to_string()),
+            provider: Some("tempo".to_string()),
+            r#type: "exact-input".to_string(),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            amount_out: None,
+            amount_out_decimal: None,
+            recipient: None,
+            slippage_bps: 50,
+            rpc_url: Some(rpc.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    async fn run_plan(dir: &Path, args: PlanArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, SwapCmd::Plan(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn action_data(env: &Envelope) -> Value {
+        env.data.clone().expect("plan envelope carries `data`")
+    }
+
+    /// True iff no action is persisted under `dir` (error paths must persist
+    /// nothing). A never-created store counts as empty.
+    fn no_actions_persisted(dir: &Path) -> bool {
+        let store = match ActionStore::open(dir.join("actions.db"), dir.join("actions.lock")) {
+            Ok(store) => store,
+            Err(_) => return true,
+        };
+        store
+            .list("", 1000)
+            .map(|actions| actions.is_empty())
+            .unwrap_or(true)
+    }
+
+    fn env_with_home() -> (MapEnv, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    // --- abi helpers (in-test goldens) -------------------------------------
+
+    fn json_function(abi_json: &str, name: &str) -> JsonFunction {
+        let abi: JsonAbi = serde_json::from_str(abi_json).expect("parse abi");
+        abi.function(name)
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("function present")
+    }
+
+    fn selector_hex(abi_json: &str, name: &str) -> String {
+        format!(
+            "0x{}",
+            hex::encode(json_function(abi_json, name).selector().0)
+        )
+    }
+
+    /// The TaikoSwap V3 router address for chain 167000, EIP-55 checksummed
+    /// (the swap step target). Read from the canonical registry so the test does
+    /// not hardcode a possibly-stale literal.
+    fn taiko_router_checksum() -> String {
+        let (_quoter, router) =
+            defi_registry::uniswap_v3_contracts(167000).expect("taiko v3 contracts");
+        defi_evm::address::checksum(router).expect("checksum router")
+    }
+
+    // --- wiremock JSON-RPC: TaikoSwap quoter probes + allowance ------------
+
+    /// A `wiremock` responder reproducing the TaikoSwap provider-suite mock:
+    /// counts `eth_call`s, returns quoter outputs `1000, 2000, 1500, 500` for the
+    /// four fee-tier probes (best = 2nd, fee 500), and on the 5th call (the
+    /// allowance read) returns `allowance`.
+    struct TaikoRpcResponder {
+        allowance: u128,
+        call_count: AtomicUsize,
+        quoter_fn: JsonFunction,
+        allowance_fn: JsonFunction,
+    }
+
+    impl TaikoRpcResponder {
+        fn new(allowance: u128) -> Self {
+            TaikoRpcResponder {
+                allowance,
+                call_count: AtomicUsize::new(0),
+                quoter_fn: json_function(
+                    defi_registry::UNISWAP_V3_QUOTER_V2_ABI,
+                    "quoteExactInputSingle",
+                ),
+                allowance_fn: json_function(defi_registry::ERC20_MINIMAL_ABI, "allowance"),
+            }
+        }
+
+        fn pack_output(func: &JsonFunction, values: &[alloy::dyn_abi::DynSolValue]) -> String {
+            let bytes = func.abi_encode_output(values).expect("pack output");
+            format!("0x{}", hex::encode(bytes))
+        }
+    }
+
+    impl Respond for TaikoRpcResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            use alloy::dyn_abi::DynSolValue;
+            let body: Value = match serde_json::from_slice(&request.body) {
+                Ok(v) => v,
+                Err(_) => return ResponseTemplate::new(400),
+            };
+            let id = body.get("id").cloned().unwrap_or(json!(1));
+            let method_name = body.get("method").and_then(Value::as_str).unwrap_or("");
+            if method_name != "eth_call" {
+                return rpc_error(&id, -32601, "method not supported in test");
+            }
+            let index = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;
+            if index == 5 {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.allowance_fn,
+                        &[DynSolValue::Uint(U256::from(self.allowance), 256)],
+                    ),
+                );
+            }
+            let amount_out: u64 = match index {
+                1 => 1000,
+                2 => 2000,
+                3 => 1500,
+                _ => 500,
+            };
+            rpc_result(
+                &id,
+                &Self::pack_output(
+                    &self.quoter_fn,
+                    &[
+                        DynSolValue::Uint(U256::from(amount_out), 256),
+                        DynSolValue::Uint(U256::ZERO, 160),
+                        DynSolValue::Uint(U256::ZERO, 32),
+                        DynSolValue::Uint(U256::from(70_000u64), 256),
+                    ],
+                ),
+            )
+        }
+    }
+
+    async fn taiko_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(TaikoRpcResponder::new(allowance))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    // --- wiremock JSON-RPC: Tempo currency + quote + allowance -------------
+
+    /// A `wiremock` responder reproducing the Tempo provider-suite mock:
+    /// selector-routed `currency()` (USD for the canonical tokens),
+    /// `quoteSwapExactAmountIn` / `quoteSwapExactAmountOut`, and `allowance`.
+    struct TempoRpcResponder {
+        allowance: u128,
+        quote_in: u128,
+        quote_out: u128,
+        currency_sel: String,
+        quote_in_sel: String,
+        quote_out_sel: String,
+        allowance_sel: String,
+        currency_fn: JsonFunction,
+        quote_in_fn: JsonFunction,
+        quote_out_fn: JsonFunction,
+        allowance_fn: JsonFunction,
+    }
+
+    impl TempoRpcResponder {
+        fn new(allowance: u128) -> Self {
+            let dex_abi = defi_registry::TEMPO_STABLECOIN_DEX_ABI;
+            let erc20_abi = defi_registry::ERC20_MINIMAL_ABI;
+            let tip20_abi = defi_registry::TEMPO_TIP20_METADATA_ABI;
+            TempoRpcResponder {
+                allowance,
+                quote_in: 980_000,
+                quote_out: 1_010_100,
+                currency_sel: raw_selector(tip20_abi, "currency"),
+                quote_in_sel: raw_selector(dex_abi, "quoteSwapExactAmountIn"),
+                quote_out_sel: raw_selector(dex_abi, "quoteSwapExactAmountOut"),
+                allowance_sel: raw_selector(erc20_abi, "allowance"),
+                currency_fn: json_function(tip20_abi, "currency"),
+                quote_in_fn: json_function(dex_abi, "quoteSwapExactAmountIn"),
+                quote_out_fn: json_function(dex_abi, "quoteSwapExactAmountOut"),
+                allowance_fn: json_function(erc20_abi, "allowance"),
+            }
+        }
+
+        fn pack_output(func: &JsonFunction, values: &[alloy::dyn_abi::DynSolValue]) -> String {
+            let bytes = func.abi_encode_output(values).expect("pack output");
+            format!("0x{}", hex::encode(bytes))
+        }
+    }
+
+    fn raw_selector(abi_json: &str, name: &str) -> String {
+        hex::encode(json_function(abi_json, name).selector().0)
+    }
+
+    /// Tempo USD token currency lookup (subset of the provider-suite mock).
+    fn token_currency(token: &str) -> Option<&'static str> {
+        match token.to_ascii_lowercase().as_str() {
+            "0x20c0000000000000000000000000000000000000" => Some("USD"), // pathUSD
+            "0x20c000000000000000000000b9537d11c60e8b50" => Some("USD"), // USDC.e
+            "0x20c00000000000000000000014f22ca97301eb73" => Some("USD"), // USDT0
+            _ => None,
+        }
+    }
+
+    impl Respond for TempoRpcResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            use alloy::dyn_abi::DynSolValue;
+            let body: Value = match serde_json::from_slice(&request.body) {
+                Ok(v) => v,
+                Err(_) => return ResponseTemplate::new(400),
+            };
+            let id = body.get("id").cloned().unwrap_or(json!(1));
+            let method_name = body.get("method").and_then(Value::as_str).unwrap_or("");
+            if method_name != "eth_call" {
+                return rpc_error(&id, -32601, "unsupported method");
+            }
+            let params = match body.get("params").and_then(|p| p.get(0)) {
+                Some(p) => p,
+                None => return rpc_error(&id, -32602, "missing params"),
+            };
+            let to = params
+                .get("to")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let data_hex = params
+                .get("data")
+                .or_else(|| params.get("input"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches("0x")
+                .to_string();
+            let selector = data_hex.get(..8).unwrap_or("");
+
+            if selector == self.currency_sel {
+                return match token_currency(&to) {
+                    Some(c) => rpc_result(
+                        &id,
+                        &Self::pack_output(
+                            &self.currency_fn,
+                            &[DynSolValue::String(c.to_string())],
+                        ),
+                    ),
+                    None => rpc_error(&id, -32000, "execution reverted: UnknownToken"),
+                };
+            }
+            if selector == self.quote_in_sel {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.quote_in_fn,
+                        &[DynSolValue::Uint(U256::from(self.quote_in), 128)],
+                    ),
+                );
+            }
+            if selector == self.quote_out_sel {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.quote_out_fn,
+                        &[DynSolValue::Uint(U256::from(self.quote_out), 128)],
+                    ),
+                );
+            }
+            if selector == self.allowance_sel {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.allowance_fn,
+                        &[DynSolValue::Uint(U256::from(self.allowance), 256)],
+                    ),
+                );
+            }
+            rpc_error(&id, -32601, "unsupported eth_call data")
+        }
+    }
+
+    async fn tempo_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(TempoRpcResponder::new(allowance))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn rpc_result(id: &Value, result: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }))
+    }
+
+    fn rpc_error(id: &Value, code: i64, message: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": code, "message": message},
+        }))
+    }
+
+    // ---- P1: success envelope (TaikoSwap, legacy --from-address) ----------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_emits_success_envelope() {
+        let server = taiko_rpc(0).await; // insufficient allowance -> approval added
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), taikoswap_args(&server.uri()))
+            .await
+            .expect("taikoswap plan should succeed against the mock RPC");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "swap plan");
+        assert!(!env.meta.partial);
+
+        // Execution paths bypass the cache (spec §2.5).
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // One provider status row keyed on the builder display name, status ok.
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "taikoswap");
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // ---- P2: planned action data shape ------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_action_shape() {
+        let server = taiko_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), taikoswap_args(&server.uri()))
+            .await
+            .expect("plan");
+        let data = action_data(&env);
+
+        let action_id = data["action_id"].as_str().expect("action_id");
+        assert!(
+            action_id.starts_with("act_") && action_id.len() == 36,
+            "action_id must be act_ + 32 hex: {action_id}"
+        );
+        assert!(
+            action_id[4..].chars().all(|c| c.is_ascii_hexdigit()),
+            "action_id suffix must be hex: {action_id}"
+        );
+        assert_eq!(data["intent_type"], json!("swap"));
+        assert_eq!(data["provider"], json!("taikoswap"));
+        assert_eq!(data["status"], json!("planned"));
+        assert_eq!(data["chain_id"], json!("eip155:167000"));
+        assert_eq!(
+            data["from_address"],
+            json!(defi_evm::address::checksum(SENDER).unwrap())
+        );
+        assert_eq!(data["input_amount"], json!("1000000"));
+
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 2, "insufficient allowance -> [approval, swap]");
+        assert_eq!(steps[0]["type"], json!("approval"));
+        assert_eq!(steps[1]["type"], json!("swap"));
+        assert_eq!(steps[1]["value"], json!("0"));
+        assert_eq!(steps[1]["chain_id"], json!("eip155:167000"));
+    }
+
+    // ---- P3: swap-step calldata reuses the alloy/ABI golden ---------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_swap_step_calldata_golden() {
+        let server = taiko_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), taikoswap_args(&server.uri()))
+            .await
+            .expect("plan");
+        let data = action_data(&env);
+        let steps = data["steps"].as_array().expect("steps");
+
+        // Approval step: ERC-20 approve selector.
+        assert!(
+            steps[0]["data"].as_str().unwrap().starts_with("0x095ea7b3"),
+            "approval step must be an ERC-20 approve: {}",
+            steps[0]["data"]
+        );
+
+        // Swap step targets the canonical TaikoSwap router and encodes
+        // exactInputSingle (selector from the canonical router ABI golden).
+        assert_eq!(
+            steps[1]["target"].as_str().unwrap().to_lowercase(),
+            taiko_router_checksum().to_lowercase(),
+            "swap step must target the TaikoSwap router"
+        );
+        let want_sel = selector_hex(defi_registry::UNISWAP_V3_ROUTER_ABI, "exactInputSingle");
+        assert!(
+            steps[1]["data"].as_str().unwrap().starts_with(&want_sel),
+            "swap step calldata must be exactInputSingle ({want_sel}): {}",
+            steps[1]["data"]
+        );
+        // Keep TAIKO_ROUTER referenced so the placeholder const documents intent.
+        let _ = TAIKO_ROUTER;
+    }
+
+    // ---- P4: approval skipped when allowance sufficient -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_skips_approval_when_allowance_sufficient() {
+        let server = taiko_rpc(u128::MAX).await; // allowance >= amount
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), taikoswap_args(&server.uri()))
+            .await
+            .expect("plan");
+        let data = action_data(&env);
+        let steps = data["steps"].as_array().expect("steps");
+        assert_eq!(steps.len(), 1, "sufficient allowance -> single swap step");
+        assert_eq!(steps[0]["type"], json!("swap"));
+    }
+
+    // ---- P5: persists action to the store ---------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_persists_action() {
+        let server = taiko_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), taikoswap_args(&server.uri()))
+            .await
+            .expect("plan");
+        let id = action_data(&env)["action_id"].as_str().unwrap().to_string();
+
+        let store = ActionStore::open(
+            dir.path().join("actions.db"),
+            dir.path().join("actions.lock"),
+        )
+        .expect("open store");
+        let persisted = store.get(&id).expect("persisted action retrievable");
+        assert_eq!(persisted.intent_type, "swap");
+        assert_eq!(persisted.input_amount, "1000000");
+        assert_eq!(persisted.provider, "taikoswap");
+    }
+
+    // ---- P6: legacy warning + backend stamping (TaikoSwap) ----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_legacy_warning_and_backend() {
+        let server = taiko_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), taikoswap_args(&server.uri()))
+            .await
+            .expect("plan");
+        let data = action_data(&env);
+        assert_eq!(
+            data["execution_backend"],
+            json!("legacy_local"),
+            "--from-address path stamps the legacy backend"
+        );
+        assert!(
+            env.warnings.iter().any(|w| w == LEGACY_WARNING),
+            "the OWS-recommended legacy warning must surface: {:?}",
+            env.warnings
+        );
+    }
+
+    // ---- P7: decimal amount parity ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_decimal_amount_parity() {
+        let server = taiko_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args(&server.uri());
+        args.amount = None;
+        args.amount_decimal = Some("1".to_string()); // USDC has 6 decimals
+        let env = run_plan(dir.path(), args).await.expect("plan");
+        let data = action_data(&env);
+        assert_eq!(data["input_amount"], json!("1000000"));
+        assert_eq!(data["steps"].as_array().unwrap().len(), 2);
+    }
+
+    // ---- P8: Tempo plan stamps the tempo backend (exact-input) ------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tempo_plan_stamps_tempo_backend() {
+        let server = tempo_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let env = run_plan(dir.path(), tempo_args(&server.uri()))
+            .await
+            .expect("tempo plan should succeed against the mock RPC");
+
+        assert_eq!(env.meta.command, "swap plan");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "tempo");
+        assert_eq!(env.meta.providers[0].status, "ok");
+        // Tempo path surfaces no legacy warning.
+        assert!(
+            !env.warnings.iter().any(|w| w == LEGACY_WARNING),
+            "tempo plan must not surface the legacy warning: {:?}",
+            env.warnings
+        );
+
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], json!("swap"));
+        assert_eq!(data["provider"], json!("tempo"));
+        assert_eq!(
+            data["execution_backend"],
+            json!("tempo"),
+            "tempo plan stamps execution_backend = tempo"
+        );
+        assert_eq!(
+            data["from_address"],
+            json!(defi_evm::address::checksum(SENDER).unwrap()),
+            "handler stamps the checksummed sender on the tempo action"
+        );
+        let steps = data["steps"].as_array().expect("steps");
+        assert_eq!(steps.len(), 1, "tempo emits a single swap step");
+        assert_eq!(steps[0]["type"], json!("swap"));
+    }
+
+    // ---- P9: Tempo exact-output plan --------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tempo_plan_exact_output() {
+        let server = tempo_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = tempo_args(&server.uri());
+        args.r#type = "exact-output".to_string();
+        args.amount = None;
+        args.amount_out = Some("1000000".to_string());
+        let env = run_plan(dir.path(), args)
+            .await
+            .expect("tempo exact-output plan");
+        let data = action_data(&env);
+        assert_eq!(data["execution_backend"], json!("tempo"));
+        let steps = data["steps"].as_array().expect("steps");
+        assert_eq!(steps.len(), 1, "tempo exact-output is a single swap step");
+        assert_eq!(steps[0]["step_id"], json!("tempo-swap-exact-output"));
+    }
+
+    // ---- P10: --provider required -----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_requires_provider() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.provider = None;
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("missing --provider must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- P11: unknown / quote-only provider -> unsupported ----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_unknown_provider_unsupported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.provider = Some("bogus".to_string());
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("unknown provider must fail");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(usage_exit(&err), 13);
+        // Message asserts the SPECIFIC Go BuildSwapAction guard (not the
+        // unimplemented stub, which also returns Unsupported).
+        assert!(
+            err.to_string().contains("unsupported swap provider"),
+            "expected the Go unknown-provider message, got: {err}"
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_quote_only_provider_unsupported() {
+        // 1inch is a registered swap *quote* provider but has no execution
+        // builder; Go BuildSwapAction -> "provider 1inch does not support swap
+        // planning".
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.provider = Some("1inch".to_string());
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("quote-only provider must fail planning");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(usage_exit(&err), 13);
+        // Message asserts the SPECIFIC Go quote-only guard (not the unimplemented
+        // stub, which also returns Unsupported).
+        assert!(
+            err.to_string().contains("does not support swap planning"),
+            "expected the Go quote-only planning message, got: {err}"
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- P12: exact-output capability gate (TaikoSwap) --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_exact_output_on_taikoswap_unsupported() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.r#type = "exact-output".to_string();
+        args.amount = None;
+        args.amount_out = Some("1000000".to_string());
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("exact-output on taikoswap must fail");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(usage_exit(&err), 13);
+        assert!(
+            err.to_string()
+                .contains("exact-output swap planning currently supports only --provider tempo"),
+            "expected the Go exact-output gate message, got: {err}"
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- P13: --type enum validation --------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_invalid_type_is_usage() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.r#type = "limit-order".to_string();
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("invalid --type must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- P14: TaikoSwap identity-constraint errors ------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_rejects_both_identity_inputs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: Some("alice".to_string()),
+            from_address: Some(SENDER.to_string()),
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("both identity inputs must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_rejects_missing_identity_inputs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: None,
+            from_address: None,
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("missing identity must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_rejects_malformed_from_address() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = taikoswap_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: None,
+            from_address: Some("0xnot-an-address".to_string()),
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("malformed --from-address must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- P15: Tempo identity-constraint errors ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tempo_plan_rejects_wallet() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = tempo_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: Some("alice".to_string()),
+            from_address: None,
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("--wallet on tempo must fail");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(usage_exit(&err), 13);
+        assert!(
+            err.to_string()
+                .contains("--wallet planning is not supported on Tempo chains yet"),
+            "expected the Go tempo-wallet rejection, got: {err}"
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tempo_plan_rejects_both_identity_inputs() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = tempo_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: Some("alice".to_string()),
+            from_address: Some(OTHER.to_string()),
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("both identity inputs on tempo must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tempo_plan_rejects_missing_from_address() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = tempo_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: None,
+            from_address: None,
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("missing --from-address on tempo must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("--from-address is required for --provider tempo"),
+            "expected the Go tempo from-address requirement, got: {err}"
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn tempo_plan_rejects_malformed_from_address() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let mut args = tempo_args("http://127.0.0.1:1");
+        args.identity = PlanIdentityFlags {
+            wallet: None,
+            from_address: Some("0xnope".to_string()),
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("malformed --from-address on tempo must fail");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- P16: full-binary exit codes --------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_missing_provider_full_binary_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "plan",
+                "--chain",
+                "taiko",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "WETH",
+                "--amount",
+                "1000000",
+                "--from-address",
+                SENDER,
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 2, "missing --provider must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_missing_identity_full_binary_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "plan",
+                "--provider",
+                "taikoswap",
+                "--chain",
+                "taiko",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "WETH",
+                "--amount",
+                "1000000",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "missing identity input on taikoswap plan must be a usage error (exit 2)"
         );
     }
 }

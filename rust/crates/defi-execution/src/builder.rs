@@ -266,6 +266,25 @@ impl Registry {
         self.swap_builders.insert(key, (display, builder));
     }
 
+    /// Register an execution-capable swap builder with an explicit display name
+    /// (the provider's `Info().Name`), analogous to [`Registry::register_bridge_builder`].
+    ///
+    /// The Go runner keys the captured `ProviderStatus` on `provider.Info().Name`
+    /// (e.g. `"taikoswap"` / `"tempo"`, lowercase), not the title-cased
+    /// [`builder_display_name`]; the app layer registers the concrete provider
+    /// builders through this seam so the returned display name matches Go.
+    pub fn register_swap_builder_named(
+        &mut self,
+        name: &str,
+        display_name: &str,
+        builder: Box<dyn SwapActionBuilder>,
+    ) {
+        let key = normalize_swap_provider(name);
+        self.swap_known.insert(key.clone());
+        self.swap_builders
+            .insert(key, (display_name.to_string(), builder));
+    }
+
     /// Mark a provider as known-but-quote-only (no execution builder).
     pub fn register_known_swap_provider(&mut self, name: &str) {
         self.swap_known.insert(normalize_swap_provider(name));

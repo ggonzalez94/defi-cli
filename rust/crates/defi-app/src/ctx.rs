@@ -327,6 +327,42 @@ impl AppCtx {
         }
     }
 
+    /// Build the action-build routing [`Registry`] populated with the swap
+    /// execution providers (Go `actionbuilder.New(s.swapProviders, ...)`).
+    ///
+    /// The execution-capable swap providers — `taikoswap` and `tempo` — are
+    /// registered as builders keyed on their `Info().Name` (so a captured
+    /// `ProviderStatus` matches Go, lowercase). The remaining registered swap
+    /// quote providers (`1inch`, `uniswap`, `jupiter`, `bungee`, `fibrous`) are
+    /// marked known-but-quote-only so `build_swap_action` routes them to the Go
+    /// `provider X does not support swap planning` error (rather than the
+    /// unknown-provider error). The bridge builders are not populated here (the
+    /// swap-plan path does not need them).
+    ///
+    /// [`Registry`]: defi_execution::builder::Registry
+    pub fn swap_action_registry(&self) -> defi_execution::builder::Registry {
+        use defi_providers::{taikoswap, tempo};
+
+        let mut reg = defi_execution::builder::Registry::new();
+        reg.register_swap_builder_named(
+            "taikoswap",
+            &taikoswap::Client::new().info().name,
+            Box::new(taikoswap::Client::new()),
+        );
+        reg.register_swap_builder_named(
+            "tempo",
+            &tempo::Client::new().info().name,
+            Box::new(tempo::Client::new()),
+        );
+        // Known-but-quote-only swap providers (no execution builder) — Go marks
+        // these as registered swap providers without a `SwapExecutionProvider`
+        // implementation, so planning them is "does not support swap planning".
+        for name in ["1inch", "uniswap", "jupiter", "bungee", "fibrous"] {
+            reg.register_known_swap_provider(name);
+        }
+        reg
+    }
+
     /// Open the sqlite cache store for `command_path`, or `None` when the path
     /// bypasses the cache (metadata/execution) or caching is disabled.
     ///
