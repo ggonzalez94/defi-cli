@@ -5,6 +5,10 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[lib]
+name = "defi_cli"
+path = "src/lib.rs"
+
 [[bin]]
 name = "defi"
 path = "src/main.rs"
@@ -12,3 +16,11 @@ path = "src/main.rs"
 [dependencies]
 defi-app = { workspace = true }
 tokio = { workspace = true }
+
+[dev-dependencies]
+# The thin-binary crate owns the OS-boundary contract: its integration tests
+# drive the assembled `defi` executable (CARGO_BIN_EXE_defi) and assert the
+# stable exit-code map survives the i32 -> process-status cast in `main.rs`.
+defi-errors = { workspace = true }
+serde_json = { workspace = true }
+predicates = { workspace = true }

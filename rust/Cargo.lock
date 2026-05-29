@@ -1559,6 +1559,9 @@ name = "defi-cli"
 version = "0.5.0"
 dependencies = [
  "defi-app",
+ "defi-errors",
+ "predicates",
+ "serde_json",
  "tokio",
 ]
 
