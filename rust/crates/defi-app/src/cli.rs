@@ -647,7 +647,8 @@ mod tests {
             || path.starts_with("lend withdraw ")
             || path.starts_with("lend borrow ")
             || path.starts_with("lend repay ")
-            || matches!(path, "yield deposit plan" | "yield withdraw plan")
+            || path.starts_with("yield deposit ")
+            || path.starts_with("yield withdraw ")
             || matches!(path, "rewards claim plan" | "rewards compound plan")
         {
             return false;
