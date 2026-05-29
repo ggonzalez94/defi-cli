@@ -569,6 +569,17 @@ impl RpcClient {
             .await
     }
 
+    /// `eth_getBalance(addr, "latest")` → the native-token balance in wei
+    /// (go-ethereum `BalanceAt(addr, nil)`).
+    pub async fn balance_at(&self, addr: &Address) -> Result<U256, Error> {
+        self.request(
+            "eth_getBalance",
+            json!([addr.to_hex(), "latest"]),
+            "eth_getBalance",
+        )
+        .await
+    }
+
     /// `eth_maxPriorityFeePerGas` → the suggested tip (`SuggestGasTipCap`).
     ///
     /// A JSON-RPC error result surfaces as `Err`; the caller decides the

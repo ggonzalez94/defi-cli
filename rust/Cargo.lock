@@ -1513,7 +1513,9 @@ checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 name = "defi-app"
 version = "0.5.0"
 dependencies = [
+ "alloy",
  "assert_cmd",
+ "async-trait",
  "chrono",
  "clap",
  "defi-cache",
@@ -1530,10 +1532,13 @@ dependencies = [
  "defi-providers",
  "defi-registry",
  "defi-schema",
+ "hex",
+ "indexmap 2.14.0",
  "insta",
  "predicates",
  "serde",
  "serde_json",
+ "sha2",
  "tempfile",
  "tokio",
  "wiremock",
