@@ -591,8 +591,9 @@ mod tests {
         // so they are no longer stubs.
         //
         // `approvals plan` (WS3 "approvals-plan"), `transfer plan` (WS3
-        // "transfer-plan"), and the four `lend <verb> plan` commands (WS3
-        // "lend-plan") are wired: each routes to a real handler that resolves
+        // "transfer-plan"), the four `lend <verb> plan` commands (WS3
+        // "lend-plan"), and the two `yield <verb> plan` commands (WS3
+        // "yield-plan") are wired: each routes to a real handler that resolves
         // identity / builds + persists the action. With the bare argv used here
         // they return a typed `Usage` error (missing identity), NOT the
         // `Unsupported` not-yet-implemented stub, so they are route-verified by
@@ -603,6 +604,7 @@ mod tests {
                 path,
                 "lend supply plan" | "lend withdraw plan" | "lend borrow plan" | "lend repay plan"
             )
+            || matches!(path, "yield deposit plan" | "yield withdraw plan")
         {
             return false;
         }

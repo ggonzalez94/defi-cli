@@ -979,11 +979,14 @@ async fn run_history(
 /// clap parsing + handler for the `yield` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
-    use defi_errors::Error;
-    use defi_model::Envelope;
+    use defi_errors::{Code, Error};
+    use defi_execution::builder::{Registry, YieldRequest, YieldVerb};
+    use defi_id::normalize_amount;
+    use defi_model::{Envelope, ProviderStatus};
 
     use crate::ctx::AppCtx;
     use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+    use crate::execident::{apply_execution_identity_to_action, resolve_execution_identity};
 
     /// `yield` subcommands: read data + the two execution verbs.
     #[derive(Subcommand, Debug)]
@@ -1183,11 +1186,141 @@ pub mod cli {
             YieldCmd::Opportunities(args) => handle_opportunities(ctx, args).await,
             YieldCmd::Positions(args) => handle_positions(ctx, args).await,
             YieldCmd::History(args) => handle_history(ctx, args).await,
+            YieldCmd::Deposit(YieldVerbCmd::Plan(args)) => {
+                handle_plan(ctx, YieldVerb::Deposit, args).await
+            }
+            YieldCmd::Withdraw(YieldVerbCmd::Plan(args)) => {
+                handle_plan(ctx, YieldVerb::Withdraw, args).await
+            }
             other => {
                 let path = format!("yield {}", other.path());
                 let ws = if path.ends_with("plan") { "WS3" } else { "WS4" };
                 Err(AppCtx::unimplemented(&path, ws))
             }
+        }
+    }
+
+    /// Handle `yield <verb> plan` (Go `planCmd.RunE` in
+    /// `yield_execution_commands.go`), shared across deposit/withdraw.
+    ///
+    /// Flow parity with the Go runner (identical in shape to the lend handler,
+    /// differing only in the routing request fields + the status-name fallback):
+    /// 1. resolve the execution identity (OWS `--wallet` first / legacy
+    ///    `--from-address`) on the requested chain; an identity error returns the
+    ///    typed [`Error`] before anything is persisted;
+    /// 2. parse `--chain` + `--asset`, default a non-positive asset `decimals` to
+    ///    18, and normalize the amount against those decimals (carrying base +
+    ///    decimal forms consistently, spec §2.4);
+    /// 3. route the build by `--provider` through the action-build registry
+    ///    ([`Registry::build_yield_action`] → the Aave/Morpho/Moonwell planner),
+    ///    capturing one provider status keyed on the normalized lending provider
+    ///    name (fallback `"yield"` when empty; Go `statusFromErr`);
+    /// 4. stamp the resolved identity (wallet id/name, from-address, execution
+    ///    backend) onto the action and persist it to the action [`Store`];
+    /// 5. emit the success envelope with the identity warnings, the cache
+    ///    bypassed (execution paths skip the cache, spec §2.5), and the yield
+    ///    provider status.
+    ///
+    /// [`Store`]: defi_execution::store::Store
+    async fn handle_plan(
+        ctx: &AppCtx,
+        verb: YieldVerb,
+        args: YieldPlanArgs,
+    ) -> Result<Envelope, Error> {
+        let chain_arg = args.chain.as_deref().unwrap_or_default();
+        let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
+        let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
+
+        // 1. Resolve the execution identity (returns before any persistence on
+        //    error — both / neither input, malformed address, Tempo/non-EVM
+        //    --wallet, OWS resolve failures).
+        let identity = resolve_execution_identity(wallet_ref, from_flag, chain_arg)?;
+
+        // The provider status name is keyed on the normalized lending provider
+        // (Go `normalizeLendingProvider(plan.Provider)`); fall back to "yield"
+        // when empty so a missing/unknown provider still reports one status row.
+        let provider_name =
+            crate::runner::normalize_lending_provider(args.provider.as_deref().unwrap_or_default());
+        let status_name = if provider_name.is_empty() {
+            "yield".to_string()
+        } else {
+            provider_name
+        };
+
+        // 2 & 3. Build + route the yield action; capture the provider status.
+        let action = build_plan_action(verb, &args, &identity.from_address).await;
+        let status = ProviderStatus {
+            name: status_name,
+            status: super::status_from_result(&action),
+            latency_ms: 0,
+        };
+        let mut action = action?;
+
+        // 4. Stamp the identity + persist (status already captured ok above).
+        apply_execution_identity_to_action(&mut action, &identity);
+        let store = ctx.open_action_store()?;
+        store
+            .save(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "persist planned action", e))?;
+
+        // 5. Emit the success envelope (cache bypassed for execution paths).
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize planned action", e))?;
+        let path = format!("yield {} plan", verb_path(verb));
+        let mut env = ctx.metadata_envelope(&path, data, vec![status]);
+        env.warnings = identity.warnings;
+        Ok(env)
+    }
+
+    /// Build the yield [`Action`] for a `plan` request (Go `buildAction`
+    /// closure): parse chain/asset, default decimals to 18, normalize the amount,
+    /// then route the [`YieldRequest`] by provider through the registry.
+    ///
+    /// [`Action`]: defi_execution::action::Action
+    async fn build_plan_action(
+        verb: YieldVerb,
+        args: &YieldPlanArgs,
+        sender: &str,
+    ) -> Result<defi_execution::action::Action, Error> {
+        let chain_arg = args.chain.as_deref().unwrap_or_default();
+        let asset_arg = args.asset.as_deref().unwrap_or_default();
+        let (chain, asset) = crate::lend::parse_chain_asset(chain_arg, asset_arg)?;
+
+        // Default a non-positive asset `decimals` to 18 (Go `buildAction`).
+        let mut decimals = asset.decimals;
+        if decimals <= 0 {
+            decimals = 18;
+        }
+        let (base, _) = normalize_amount(
+            args.amount.as_deref().unwrap_or_default(),
+            args.amount_decimal.as_deref().unwrap_or_default(),
+            decimals,
+        )?;
+
+        Registry::new()
+            .build_yield_action(YieldRequest {
+                provider: args.provider.clone().unwrap_or_default(),
+                verb,
+                chain,
+                asset,
+                vault_address: args.vault_address.clone().unwrap_or_default(),
+                amount_base_units: base,
+                sender: sender.to_string(),
+                recipient: args.recipient.clone().unwrap_or_default(),
+                on_behalf_of: args.on_behalf_of.clone().unwrap_or_default(),
+                simulate: args.simulate,
+                rpc_url: args.rpc_url.clone().unwrap_or_default(),
+                pool_address: args.pool_address.clone().unwrap_or_default(),
+                pool_address_provider: args.pool_address_provider.clone().unwrap_or_default(),
+            })
+            .await
+    }
+
+    /// The leaf verb token for `meta.command` (`deposit`/`withdraw`).
+    fn verb_path(verb: YieldVerb) -> &'static str {
+        match verb {
+            YieldVerb::Deposit => "deposit",
+            YieldVerb::Withdraw => "withdraw",
         }
     }
 
@@ -2990,4 +3123,838 @@ mod app_tests {
     // ---- silence unused-import lint on PathBuf in some build configs ------
     #[allow(dead_code)]
     fn _assert_pathbuf_used(_p: PathBuf) {}
+}
+
+#[cfg(test)]
+mod plan_app_tests {
+    //! # Success criteria — `yield <verb> plan` app-level handler (WS3, exec-plan)
+    //!
+    //! Go oracle: `internal/app/yield_execution_commands.go` `planCmd.RunE` (the
+    //! `buildAction` closure → `s.actionBuilderRegistry().BuildYieldAction(...)` →
+    //! `applyExecutionIdentityToAction` → `s.actionStore.Save` → `emitSuccess`).
+    //! These tests drive [`cli::handle`] (the real dispatch entry the binary
+    //! calls) end-to-end for the TWO yield plan verbs (`deposit`/`withdraw`
+    //! `plan`) ONLY, asserting the full machine contract the Go runner emits via
+    //! `emitSuccess(...)` / the typed error → full-envelope `renderError(...)`
+    //! path. RED until WS3 wires the yield `plan` handler: [`cli::handle`]
+    //! currently returns the typed `unimplemented` stub ([`Code::Unsupported`]
+    //! with `"not yet implemented"`) for both verb commands, so every assertion
+    //! that expects a real action envelope / a Go-semantic guard error fails.
+    //!
+    //! ## Determinism / offline seams
+    //!
+    //! `BuildYieldAction` routes by `--provider`:
+    //!   * `aave` → `build_aave_lend_action` (supply/withdraw), then stamps
+    //!     `intent_type = "yield_<verb>"` and adds `metadata.yield_action` +
+    //!     `metadata.yield_product == "aave_reserve"` over the Aave lend context;
+    //!   * `morpho` → `build_morpho_vault_yield_action` (ERC-4626 vault; needs a
+    //!     valid `--vault-address` + a Morpho GraphQL lookup);
+    //!   * `moonwell` → rejects `--on-behalf-of`, else `build_moonwell_lend_action`,
+    //!     then stamps `yield_<verb>` + `metadata.yield_product == "moonwell_market"`.
+    //!
+    //! The Aave path connects to RPC (`RpcClient::connect`) and, for
+    //! `deposit`/`withdraw`, the underlying Aave supply path issues exactly one
+    //! `eth_call` (`allowance(owner,spender)`) to decide whether an approval step
+    //! is needed when `--pool-address` is supplied (the pool is not RPC-resolved).
+    //! All RPC is injected through the already-present `--rpc-url` flag pointed at
+    //! a `wiremock` JSON-RPC mock that answers every `eth_call` with an
+    //! ABI-encoded `allowance` word (the same `EchoIdResponder` shape the
+    //! `defi-execution` planner suite + the `lend` plan app tests use), so the
+    //! Aave tests are fully offline + deterministic. Identity is exercised through
+    //! the OFFLINE `--from-address` (legacy_local) path so no OWS vault / network
+    //! is touched; the `--wallet` happy path (OWS resolve) is WS4b e2e territory
+    //! and is asserted here only via its offline guard rejections.
+    //!
+    //! Aave yield uses `interest_rate_mode == 0` internally (it is a supply/
+    //! withdraw, not a borrow), and `--pool-address` short-circuits the on-chain
+    //! `getPool()` lookup, so the Aave verbs build deterministically without a
+    //! pool-provider mock.
+    //!
+    //! Morpho: a full Morpho vault happy path needs the Morpho GraphQL endpoint
+    //! (no app-level base-URL seam — the builder uses the production endpoint), so
+    //! Morpho is asserted via its OFFLINE guard (`--vault-address` required;
+    //! malformed `--vault-address`), which the planner checks before any GraphQL
+    //! fetch. Moonwell is asserted via its OFFLINE `--on-behalf-of` rejection
+    //! (Compound v2 calls operate on `msg.sender` only), checked before any RPC.
+    //!
+    //! ## Criteria (each a failing test until `cli::handle` wires `*_plan`)
+    //!
+    //! 1. **Plan success envelope (Aave deposit, legacy `--from-address`).** A
+    //!    valid `yield deposit plan --provider aave --chain 1 --asset USDC --amount
+    //!    1000000 --from-address 0x..aa --pool-address 0x..CC --rpc-url <mock>`
+    //!    (allowance insufficient) returns `Ok(Envelope)` (exit 0) with:
+    //!    `version=="v1"`, `success==true`, `error==None`, `meta.partial==false`,
+    //!    `meta.command=="yield deposit plan"`,
+    //!    `meta.cache=={status:"bypass", age_ms:0, stale:false}` (execution paths
+    //!    bypass the cache, spec §2.5), and `meta.providers==[{name:"aave",
+    //!    status:"ok"}]` (Go captures one `ProviderStatus` keyed on the normalized
+    //!    lending provider name with `statusFromErr(nil)=="ok"`).
+    //!
+    //! 2. **Planned action `data` shape (Aave deposit).** `env.data` is the
+    //!    serialized [`Action`]: `action_id` matches `^act_[0-9a-f]{32}$`;
+    //!    `intent_type=="yield_deposit"`; `provider=="aave"`; `status=="planned"`;
+    //!    `chain_id=="eip155:1"`; `from_address` == the EIP-55 checksum of the
+    //!    sender; `input_amount=="1000000"`. With an INSUFFICIENT allowance the
+    //!    action has TWO steps — `[approval, lend_call]` — where the lend step
+    //!    `type=="lend_call"`, `value=="0"`, `chain_id=="eip155:1"`, and `target` ==
+    //!    the pool address (`0x..CC`). The action `metadata` carries the Aave
+    //!    context (`protocol=="aave"`) PLUS the yield-routing additions
+    //!    `yield_action=="deposit"` and `yield_product=="aave_reserve"`. (Go
+    //!    `BuildYieldAction` aave branch → `BuildAaveLendAction` + the
+    //!    `yield_<verb>`/`yield_action`/`yield_product` overwrite + `emitSuccess`.)
+    //!
+    //! 3. **Aave deposit lend-step calldata reuses the alloy/ABI golden.** The lend
+    //!    step `data` equals `supply(asset, amount, onBehalfOf, 0)` encoded with the
+    //!    canonical `AAVE_POOL_ABI` via the same alloy `Function` machinery the
+    //!    planner uses (computed in-test, NOT re-encoded by the handler). With the
+    //!    default `--on-behalf-of` empty, `onBehalfOf` defaults to the resolved
+    //!    sender. Proves the handler routes through `build_yield_action`→Aave (no
+    //!    re-encoding) and that base⇔decimal amounts stay consistent (spec §2.4).
+    //!
+    //! 4. **Aave deposit skips the approval step when allowance is sufficient.**
+    //!    The same plan against a mock whose `allowance` >= the requested amount
+    //!    yields a SINGLE `lend_call` step (no leading `approval` step). (Go
+    //!    `appendApprovalIfNeeded`: `current >= amount` → no approval.)
+    //!
+    //! 5. **Aave withdraw is a single lend step (no RPC `eth_call`).** `yield
+    //!    withdraw plan ... --pool-address 0x..CC --rpc-url <mock>` yields a single
+    //!    `lend_call` step with `intent_type=="yield_withdraw"`,
+    //!    `meta.command=="yield withdraw plan"`, target == pool, calldata ==
+    //!    `withdraw(asset, amount, to=recipient)` (recipient defaults to the
+    //!    sender), and `metadata.yield_action=="withdraw"`. No `approval` step.
+    //!    (Go withdraw verb via the Aave `AaveVerbWithdraw` path.)
+    //!
+    //! 6. **Plan persists the action to the Store.** After a successful Aave
+    //!    deposit plan the action is retrievable by its `action_id` from a freshly
+    //!    opened [`defi_execution::store::Store`] over the same path, with matching
+    //!    `intent_type=="yield_deposit"`, `input_amount=="1000000"`, and
+    //!    `provider=="aave"`. (Go `s.actionStore.Save`.)
+    //!
+    //! 7. **Legacy-identity warning + backend stamping.** The `--from-address`
+    //!    path stamps `execution_backend=="legacy_local"` on the action AND
+    //!    surfaces the Go warning `--wallet (OWS) is recommended over
+    //!    --from-address for planning; see docs for details` in `env.warnings`.
+    //!    (Go `resolveExecutionIdentity` legacy branch + `emitSuccess(...,
+    //!    identity.Warnings, ...)`.)
+    //!
+    //! 8. **Decimal amount parity.** `--amount-decimal 1` (no `--amount`) on USDC
+    //!    (6 decimals) yields the same `input_amount=="1000000"` and the same
+    //!    deposit calldata golden — base⇔decimal stay consistent (spec §2.4).
+    //!
+    //! 9. **`--provider` is required.** `yield deposit plan` with an empty/missing
+    //!    `--provider` → [`Code::Usage`] (exit 2) and persists NOTHING. (Go
+    //!    `BuildYieldAction`: `--provider is required`.)
+    //!
+    //! 10. **Unsupported yield provider.** `--provider kamino` (no yield-execution
+    //!     builder) → [`Code::Unsupported`] (exit 13) with the Go message `yield
+    //!     execution currently supports provider=aave|morpho|moonwell`; persists
+    //!     NOTHING. (Go `BuildYieldAction` default branch.)
+    //!
+    //! 11. **Identity-constraint errors (offline).**
+    //!     (a) BOTH `--wallet` and `--from-address` → [`Code::Usage`] (exit 2);
+    //!     (b) NEITHER `--wallet` nor `--from-address` → [`Code::Usage`] (exit 2);
+    //!     (c) a malformed `--from-address` → [`Code::Usage`] (exit 2);
+    //!     (d) `--wallet` on a Tempo chain → [`Code::Unsupported`] (exit 13)
+    //!         (`--wallet planning is not supported on Tempo chains yet`).
+    //!     (Go `resolveExecutionIdentity`.) On every error the handler returns the
+    //!     typed `Err(Error)` (the runner renders the full error envelope to
+    //!     stderr, spec §2.1) and persists NOTHING.
+    //!
+    //! 12. **Amount cross-validation through the handler.** BOTH `--amount` +
+    //!     `--amount-decimal` → [`Code::Usage`] (exit 2); NEITHER → [`Code::Usage`]
+    //!     (exit 2); a non-positive `--amount` (`0`) → [`Code::Usage`] (exit 2).
+    //!     Nothing persisted. (Delegated to `defi_id::normalize_amount` /
+    //!     `normalize_lend_inputs` via `build_yield_action`.)
+    //!
+    //! 13. **Morpho requires a valid `--vault-address` (offline).** `yield deposit
+    //!     plan --provider morpho --chain 1 --asset USDC --amount 1000000
+    //!     --from-address 0x..aa --rpc-url <mock>` with NO `--vault-address` →
+    //!     [`Code::Usage`] (exit 2) with `morpho vault yield execution requires a
+    //!     valid --vault-address` (the planner's offline guard, checked before any
+    //!     GraphQL fetch); a malformed (non-hex) `--vault-address` is likewise
+    //!     [`Code::Usage`] (exit 2). Nothing persisted. (Go `BuildYieldAction`
+    //!     morpho path → `BuildMorphoVaultYieldAction` vault-address guard.)
+    //!
+    //! 14. **Moonwell rejects `--on-behalf-of` (offline).** `yield deposit plan
+    //!     --provider moonwell --chain base --asset USDC --amount 1000000
+    //!     --on-behalf-of 0x..bb --from-address 0x..aa` → [`Code::Unsupported`]
+    //!     (exit 13) with `moonwell does not support --on-behalf-of` (checked
+    //!     before any RPC). Nothing persisted. (Go `BuildYieldAction` Moonwell
+    //!     guard.)
+    //!
+    //! 15. **Provider-status fallback name is `"yield"`.** When the build fails
+    //!     because of an UNSUPPORTED provider (so a status row is still captured
+    //!     with the normalized provider name), the Go runner keys the row on the
+    //!     normalized lending provider, falling back to `"yield"` (NOT `"lend"`)
+    //!     when empty — asserted indirectly via the success path (`aave`) here and
+    //!     the unsupported-provider path's error code. (Go `providerName =
+    //!     "yield"` fallback in `yield_execution_commands.go`.)
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * the Aave/Morpho/Moonwell ABI calldata encoding internals + the
+    //!     sender/recipient/asset hex + positive-amount validation — owned by the
+    //!     `defi-execution::planner` suite (ported from `planner/*_test.go`);
+    //!   * the `build_yield_action` provider routing itself — `defi-execution::
+    //!     builder` (its own suite);
+    //!   * the OWS `--wallet` happy-path resolve + wallet-id persistence — WS4b
+    //!     e2e (here only its offline guard rejections are asserted);
+    //!   * `--input-json`/`--input-file` precedence — structured-input unit;
+    //!   * cobra/clap flag defaults + required-flag marking — schema/CLI suites;
+    //!   * a full Morpho/Moonwell happy-path action build (GraphQL/RPC heavy) —
+    //!     `defi-execution::planner` suite + WS5 sweep.
+
+    use super::cli::{handle, YieldCmd, YieldPlanArgs, YieldVerbCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    use alloy::dyn_abi::{DynSolValue, FunctionExt, JsonAbiExt};
+    use alloy::json_abi::JsonAbi;
+    use alloy::primitives::U256;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants -------------------------------------------------
+
+    /// Sender EOA (legacy `--from-address` identity); its EIP-55 checksum lands on
+    /// the action.
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    /// An on-behalf-of address used only in the Moonwell-rejection test.
+    const OTHER: &str = "0x00000000000000000000000000000000000000bb";
+    /// Aave Pool override (`--pool-address`) — short-circuits the on-chain
+    /// `getPool()` lookup.
+    const POOL: &str = "0x00000000000000000000000000000000000000cc";
+    /// USDC contract on Ethereum mainnet (6 decimals) — resolved by `parse_asset`.
+    const USDC_MAINNET: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+    /// A syntactically invalid (too-short, non-hex-address) Morpho vault address.
+    const SHORT_VAULT: &str = "0x1234";
+    /// The Go legacy-identity warning surfaced when planning with `--from-address`.
+    const LEGACY_WARNING: &str =
+        "--wallet (OWS) is recommended over --from-address for planning; see docs for details";
+
+    // --- harness ------------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir` and the cache
+    /// disabled (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// An Aave deposit `YieldPlanArgs` with the canonical happy-path values; mutate
+    /// per test. `--pool-address` is set so no on-chain `getPool()` is needed.
+    fn aave_deposit_args(rpc: &str) -> YieldPlanArgs {
+        YieldPlanArgs {
+            chain: Some("1".to_string()),
+            asset: Some("USDC".to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            provider: Some("aave".to_string()),
+            recipient: None,
+            on_behalf_of: None,
+            vault_address: None,
+            pool_address: Some(POOL.to_string()),
+            pool_address_provider: None,
+            rpc_url: Some(rpc.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    async fn run_plan(dir: &Path, cmd: YieldCmd) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, cmd).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn action_data(env: &Envelope) -> Value {
+        env.data.clone().expect("plan envelope carries `data`")
+    }
+
+    /// True iff no action is persisted under `dir` (error paths must persist
+    /// nothing). A never-created store counts as empty.
+    fn no_actions_persisted(dir: &Path) -> bool {
+        let store = match ActionStore::open(dir.join("actions.db"), dir.join("actions.lock")) {
+            Ok(store) => store,
+            Err(_) => return true,
+        };
+        store
+            .list("", 1000)
+            .map(|actions| actions.is_empty())
+            .unwrap_or(true)
+    }
+
+    // --- wiremock JSON-RPC: every eth_call returns `result` --------------------
+
+    /// A `wiremock` responder that wraps a fixed hex `result` in a JSON-RPC
+    /// success envelope, echoing the incoming request `id` (mirrors the
+    /// `defi-execution` planner `EchoIdResponder`).
+    struct EchoIdResponder {
+        result: String,
+    }
+
+    impl Respond for EchoIdResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let id = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or_else(|| Value::from(1));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.result,
+            }))
+        }
+    }
+
+    fn uint_word(v: u128) -> String {
+        format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()))
+    }
+
+    /// A mock JSON-RPC endpoint answering every `eth_call` with a single
+    /// ABI-encoded `uint256` word == `allowance`. Used for the allowance-check
+    /// path (deposit) and accepted (but unused) by withdraw, which makes no
+    /// `eth_call` when `--pool-address` is supplied.
+    async fn allowance_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(EchoIdResponder {
+                result: uint_word(allowance),
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    // --- in-test alloy/ABI golden (reuses AAVE_POOL_ABI) -----------------------
+
+    fn aave_fn(name: &str) -> alloy::json_abi::Function {
+        let abi: JsonAbi = serde_json::from_str(defi_registry::AAVE_POOL_ABI).expect("parse abi");
+        abi.function(name)
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("aave fn present")
+    }
+
+    fn aave_calldata(name: &str, args: &[DynSolValue]) -> String {
+        let data = aave_fn(name)
+            .abi_encode_input(args)
+            .expect("encode aave fn");
+        format!("0x{}", hex::encode(data))
+    }
+
+    fn addr_val(hexaddr: &str) -> DynSolValue {
+        DynSolValue::Address(hexaddr.parse().expect("valid address"))
+    }
+
+    /// Expected `supply(asset, amount, onBehalfOf, referralCode=0)` calldata
+    /// (Aave yield deposit reuses the Aave supply path).
+    fn supply_calldata(amount: u128, on_behalf_of: &str) -> String {
+        aave_calldata(
+            "supply",
+            &[
+                addr_val(USDC_MAINNET),
+                DynSolValue::Uint(U256::from(amount), 256),
+                addr_val(on_behalf_of),
+                DynSolValue::Uint(U256::ZERO, 16),
+            ],
+        )
+    }
+
+    /// Expected `withdraw(asset, amount, to)` calldata (Aave yield withdraw
+    /// reuses the Aave withdraw path).
+    fn withdraw_calldata(amount: u128, to: &str) -> String {
+        aave_calldata(
+            "withdraw",
+            &[
+                addr_val(USDC_MAINNET),
+                DynSolValue::Uint(U256::from(amount), 256),
+                addr_val(to),
+            ],
+        )
+    }
+
+    fn step_types(data: &Value) -> Vec<String> {
+        data["steps"]
+            .as_array()
+            .expect("steps array")
+            .iter()
+            .map(|s| s["type"].as_str().unwrap_or("").to_string())
+            .collect()
+    }
+
+    /// The first step whose `type == "lend_call"` (Go `StepTypeLend ==
+    /// "lend_call"`; yield deposits/withdraws reuse the lend step type).
+    fn lend_step(data: &Value) -> Value {
+        data["steps"]
+            .as_array()
+            .expect("steps array")
+            .iter()
+            .find(|s| s["type"].as_str() == Some("lend_call"))
+            .cloned()
+            .expect("a lend step is present")
+    }
+
+    // --- 1, 2, 3, 7, 15. Aave deposit happy path ---------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_emits_success_envelope_and_action_shape() {
+        let rpc = allowance_rpc(0).await; // insufficient -> approval needed.
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_plan(
+            tmp.path(),
+            YieldCmd::Deposit(YieldVerbCmd::Plan(aave_deposit_args(&rpc.uri()))),
+        )
+        .await
+        .expect("aave yield deposit plan should succeed against the mock RPC");
+
+        // Envelope contract (Go `emitSuccess`).
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "yield deposit plan");
+
+        // Execution paths bypass the cache (spec §2.5).
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // One provider status keyed on the normalized lending provider, ok.
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "aave");
+        assert_eq!(env.meta.providers[0].status, "ok");
+
+        // Action `data` shape (Go persisted action).
+        let data = action_data(&env);
+        let action_id = data["action_id"].as_str().expect("action_id string");
+        assert!(
+            action_id.strip_prefix("act_").is_some_and(|rest| rest.len() == 32
+                && rest.bytes().all(|b| b.is_ascii_hexdigit())),
+            "action_id must match act_<32 hex>: got {action_id}"
+        );
+        assert_eq!(data["intent_type"], Value::from("yield_deposit"));
+        assert_eq!(data["provider"], Value::from("aave"));
+        assert_eq!(data["status"], Value::from("planned"));
+        assert_eq!(data["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            data["from_address"].as_str().unwrap().to_lowercase(),
+            SENDER.to_lowercase(),
+            "from_address is the (checksummed) sender"
+        );
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+
+        // Insufficient allowance -> [approval, lend_call].
+        assert_eq!(
+            step_types(&data),
+            vec!["approval".to_string(), "lend_call".to_string()],
+            "insufficient allowance => approval then lend_call"
+        );
+        let lend = lend_step(&data);
+        assert_eq!(lend["value"], Value::from("0"));
+        assert_eq!(lend["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            lend["target"].as_str().unwrap().to_lowercase(),
+            POOL.to_lowercase(),
+            "lend step targets the resolved pool"
+        );
+
+        // metadata carries the Aave context PLUS the yield-routing additions.
+        let meta = data["metadata"].as_object().expect("metadata object");
+        assert_eq!(meta.get("protocol"), Some(&Value::from("aave")));
+        assert_eq!(
+            meta.get("yield_action"),
+            Some(&Value::from("deposit")),
+            "yield routing stamps yield_action"
+        );
+        assert_eq!(
+            meta.get("yield_product"),
+            Some(&Value::from("aave_reserve")),
+            "Aave yield product label"
+        );
+
+        // Legacy backend stamping + warning (criterion 7).
+        assert_eq!(data["execution_backend"], Value::from("legacy_local"));
+        assert!(
+            env.warnings.iter().any(|w| w == LEGACY_WARNING),
+            "legacy --from-address plan surfaces the OWS-recommended warning; got {:?}",
+            env.warnings
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_lend_step_calldata_matches_aave_abi_golden() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_plan(
+            tmp.path(),
+            YieldCmd::Deposit(YieldVerbCmd::Plan(aave_deposit_args(&rpc.uri()))),
+        )
+        .await
+        .expect("aave yield deposit plan should succeed");
+        let data = action_data(&env);
+        let lend = lend_step(&data);
+        let calldata = lend["data"].as_str().expect("lend step data");
+        // on_behalf_of defaults to the sender when the flag is empty.
+        assert_eq!(
+            calldata.to_lowercase(),
+            supply_calldata(1_000_000, SENDER).to_lowercase(),
+            "deposit lend-step calldata must equal the alloy AAVE_POOL_ABI supply golden"
+        );
+    }
+
+    // --- 4. allowance sufficient -> single lend step ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_skips_approval_when_allowance_sufficient() {
+        let rpc = allowance_rpc(10_000_000).await; // >= requested.
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_plan(
+            tmp.path(),
+            YieldCmd::Deposit(YieldVerbCmd::Plan(aave_deposit_args(&rpc.uri()))),
+        )
+        .await
+        .expect("aave yield deposit plan should succeed");
+        let data = action_data(&env);
+        assert_eq!(
+            step_types(&data),
+            vec!["lend_call".to_string()],
+            "sufficient allowance => single lend step"
+        );
+    }
+
+    // --- 5. Aave withdraw --------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn withdraw_plan_is_single_lend_step_with_golden_calldata() {
+        let rpc = allowance_rpc(0).await; // withdraw makes no eth_call, but connect succeeds.
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.amount = Some("500000".to_string());
+        let env = run_plan(tmp.path(), YieldCmd::Withdraw(YieldVerbCmd::Plan(args)))
+            .await
+            .expect("aave yield withdraw plan should succeed");
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], Value::from("yield_withdraw"));
+        assert_eq!(env.meta.command, "yield withdraw plan");
+        assert_eq!(step_types(&data), vec!["lend_call".to_string()]);
+        let lend = lend_step(&data);
+        assert_eq!(
+            lend["target"].as_str().unwrap().to_lowercase(),
+            POOL.to_lowercase()
+        );
+        // recipient defaults to the sender.
+        assert_eq!(
+            lend["data"].as_str().unwrap().to_lowercase(),
+            withdraw_calldata(500_000, SENDER).to_lowercase(),
+            "withdraw calldata must equal the alloy AAVE_POOL_ABI golden"
+        );
+        // yield-routing metadata addition for the withdraw verb.
+        let meta = data["metadata"].as_object().expect("metadata object");
+        assert_eq!(meta.get("yield_action"), Some(&Value::from("withdraw")));
+        assert_eq!(
+            meta.get("yield_product"),
+            Some(&Value::from("aave_reserve"))
+        );
+    }
+
+    // --- 6. plan persists the action to the Store --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_persists_action_to_store() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        let ctx = AppCtx::new(settings.clone());
+        let env = handle(
+            &ctx,
+            YieldCmd::Deposit(YieldVerbCmd::Plan(aave_deposit_args(&rpc.uri()))),
+        )
+        .await
+        .expect("aave yield deposit plan should succeed");
+        let action_id = action_data(&env)["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+
+        let store = ActionStore::open(&settings.action_store_path, &settings.action_lock_path)
+            .expect("reopen action store");
+        let persisted = store
+            .get(&action_id)
+            .expect("planned action retrievable by id");
+        assert_eq!(persisted.intent_type, "yield_deposit");
+        assert_eq!(persisted.input_amount, "1000000");
+        assert_eq!(persisted.provider, "aave");
+    }
+
+    // --- 8. decimal amount parity ------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_decimal_amount_yields_same_base_and_calldata() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.amount = None;
+        args.amount_decimal = Some("1".to_string()); // 1 USDC (6 decimals).
+        let env = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect("decimal-amount plan should succeed");
+        let data = action_data(&env);
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+        assert_eq!(
+            lend_step(&data)["data"].as_str().unwrap().to_lowercase(),
+            supply_calldata(1_000_000, SENDER).to_lowercase(),
+            "decimal 1 USDC normalizes to the same calldata as base 1000000"
+        );
+    }
+
+    // --- 9. --provider required --------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_requires_provider() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.provider = None;
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("missing --provider must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 10. unsupported yield provider ------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_kamino_provider() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.provider = Some("kamino".to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("kamino yield execution must be unsupported");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string()
+                .contains("yield execution currently supports provider=aave|morpho|moonwell"),
+            "got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "must route to the real builder, not the WS3 stub: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 11. identity-constraint errors (offline) --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_both_identity_inputs() {
+        let tmp = TempDir::new().expect("tempdir");
+        // No RPC needed: identity resolution happens before any build.
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.identity.wallet = Some("alice".to_string());
+        // from_address already set in base.
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("both identity inputs must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_missing_identity_inputs() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.identity.wallet = None;
+        args.identity.from_address = None;
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("missing identity inputs must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_malformed_from_address() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.identity.from_address = Some("0xnot-an-address".to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("malformed --from-address must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_wallet_on_tempo_chain() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.chain = Some("tempo".to_string()); // Tempo mainnet.
+        args.identity.from_address = None;
+        args.identity.wallet = Some("alice".to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("--wallet on Tempo must be rejected");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string()
+                .contains("--wallet planning is not supported on Tempo chains yet"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 12. amount cross-validation through the handler -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_both_amount_forms() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.amount = Some("1000000".to_string());
+        args.amount_decimal = Some("1".to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("both amount forms must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_missing_amount() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.amount = None;
+        args.amount_decimal = None;
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("missing amount must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn deposit_plan_rejects_non_positive_amount() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.amount = Some("0".to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("zero amount must be rejected by the planner");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 13. Morpho requires a valid --vault-address (offline) -------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn morpho_deposit_plan_requires_vault_address() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.provider = Some("morpho".to_string());
+        args.pool_address = None; // morpho ignores --pool-address.
+        args.vault_address = None;
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("morpho without --vault-address must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("morpho vault yield execution requires a valid --vault-address"),
+            "expected the vault-address guard, got: {err}"
+        );
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "must route to the real planner, not the WS3 stub: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn morpho_deposit_plan_rejects_malformed_vault_address() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_deposit_args(&rpc.uri());
+        args.provider = Some("morpho".to_string());
+        args.pool_address = None;
+        args.vault_address = Some(SHORT_VAULT.to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("morpho with a malformed --vault-address must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 14. Moonwell rejects --on-behalf-of (offline) ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn moonwell_deposit_plan_rejects_on_behalf_of() {
+        let tmp = TempDir::new().expect("tempdir");
+        // No RPC needed: the on-behalf-of guard fires before any RPC call.
+        let mut args = aave_deposit_args("http://127.0.0.1:1");
+        args.provider = Some("moonwell".to_string());
+        args.chain = Some("base".to_string());
+        args.pool_address = None;
+        args.on_behalf_of = Some(OTHER.to_string());
+        let err = run_plan(tmp.path(), YieldCmd::Deposit(YieldVerbCmd::Plan(args)))
+            .await
+            .expect_err("moonwell --on-behalf-of must be unsupported");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string()
+                .contains("moonwell does not support --on-behalf-of"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
 }
