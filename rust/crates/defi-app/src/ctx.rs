@@ -73,6 +73,17 @@ pub struct AppCtx {
     /// tests for `swap quote` reach a mock server. `None` (production) uses the
     /// public endpoints. Analogous to [`AppCtx::defillama_api_base`].
     pub swap_quote_base: Option<String>,
+    /// Test/offline seam: override the HTTP-API bridge-quote provider base URL
+    /// (applied via each adapter's `set_base_url`, e.g.
+    /// [`defi_providers::across::Client::set_base_url`]) so app-level wiremock
+    /// tests for `bridge quote` reach a mock server. `None` (production) uses the
+    /// public endpoints. Analogous to [`AppCtx::swap_quote_base`].
+    ///
+    /// Note: the `bridge list` / `bridge details` analytics providers are
+    /// DefiLlama-backed and reuse [`AppCtx::defillama_api_base`] (which already
+    /// applies `set_bridge_base_url`); this seam only retargets the cross-chain
+    /// quote providers (Across / LiFi / Bungee).
+    pub bridge_quote_base: Option<String>,
 }
 
 impl AppCtx {
@@ -84,6 +95,7 @@ impl AppCtx {
             defillama_api_base: None,
             defillama_stablecoins_base: None,
             swap_quote_base: None,
+            bridge_quote_base: None,
         }
     }
 
@@ -95,6 +107,20 @@ impl AppCtx {
     /// how [`AppCtx::defillama`] honors [`AppCtx::defillama_api_base`].
     pub fn with_swap_base(mut self, base: &str) -> AppCtx {
         self.swap_quote_base = Some(base.to_string());
+        self
+    }
+
+    /// Retarget the HTTP-API bridge-quote provider clients (Across / LiFi /
+    /// Bungee) at a single mock-server origin (the offline/wiremock seam used by
+    /// app-level `bridge quote` tests).
+    ///
+    /// The `bridge quote` handler (WS2) MUST honor this when constructing its
+    /// bridge quote providers (applying it via each adapter's `set_base_url`),
+    /// analogous to how [`AppCtx::with_swap_base`] feeds the swap providers. The
+    /// `bridge list`/`bridge details` analytics path reuses
+    /// [`AppCtx::with_defillama_base`] instead.
+    pub fn with_bridge_base(mut self, base: &str) -> AppCtx {
+        self.bridge_quote_base = Some(base.to_string());
         self
     }
 
@@ -243,6 +269,60 @@ impl AppCtx {
             }
             "tempo" => Some(Box::new(tempo::Client::new())),
             "taikoswap" => Some(Box::new(taikoswap::Client::new())),
+            _ => None,
+        }
+    }
+
+    /// The set of registered bridge quote provider names (canonical/normalized),
+    /// in the Go registration order (`runner.go` `s.bridgeProviders`).
+    ///
+    /// Mirrors the Go runner's `s.bridgeProviders` keys (`across`, `lifi`,
+    /// `bungee`). Used by the `bridge quote` guard to reject unknown providers
+    /// with [`defi_errors::Code::Unsupported`] (after the empty-`--provider`
+    /// usage guard).
+    pub fn bridge_provider_names(&self) -> &'static [&'static str] {
+        &["across", "lifi", "bungee"]
+    }
+
+    /// Construct the bridge quote provider adapter for a (normalized) provider
+    /// name, applying the offline/wiremock base-URL seam
+    /// ([`AppCtx::bridge_quote_base`]) via each adapter's `set_base_url`. Returns
+    /// `None` for an unregistered provider name (the caller maps that to a typed
+    /// [`defi_errors::Code::Unsupported`] error).
+    ///
+    /// Mirrors the Go runner's `s.bridgeProviders[providerName]` lookup; the
+    /// adapters are constructed lazily here (per invocation) the same way the Go
+    /// runner builds them in `withRuntimeState`.
+    pub fn bridge_provider(&self, name: &str) -> Option<Box<dyn defi_providers::BridgeProvider>> {
+        use defi_providers::{across, bungee, lifi};
+
+        let base = self.bridge_quote_base.as_deref();
+        match name {
+            "across" => {
+                let mut c = across::Client::new(self.http_client());
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "lifi" => {
+                let mut c = lifi::Client::new(self.http_client());
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "bungee" => {
+                let mut c = bungee::Client::new_bridge(
+                    self.http_client(),
+                    &self.settings.bungee_api_key,
+                    &self.settings.bungee_affiliate,
+                );
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
             _ => None,
         }
     }

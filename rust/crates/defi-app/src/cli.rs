@@ -577,20 +577,14 @@ mod tests {
     /// `schema`, `providers list`, `assets resolve`, `chains list`,
     /// `chains gas`, the `protocols`/`stablecoins`/`dexes` market data, the
     /// `lend markets`/`lend rates`/`lend positions` reads, the
-    /// `yield opportunities`/`yield positions`/`yield history` reads, and
-    /// `swap quote`), which we route-check by parse + `command_path` only
-    /// (dispatching them would do real provider/cache I/O, or — for the lend
-    /// reads and `swap quote` — require `--provider`).
+    /// `yield opportunities`/`yield positions`/`yield history` reads,
+    /// `swap quote`, and the `bridge quote`/`bridge list`/`bridge details`
+    /// reads), which we route-check by parse + `command_path` only (dispatching
+    /// them would do real provider/cache I/O, or — for the lend reads,
+    /// `swap quote`, and `bridge quote` — require `--provider`).
     fn is_stub(path: &str) -> bool {
-        matches!(
-            path,
-            "wallet balance"
-                | "chains top"
-                | "chains assets"
-                | "bridge quote"
-                | "bridge list"
-                | "bridge details"
-        ) || path.ends_with(" plan")
+        matches!(path, "wallet balance" | "chains top" | "chains assets")
+            || path.ends_with(" plan")
             || path.ends_with(" submit")
             || path.ends_with(" status")
             || path.starts_with("actions ")
