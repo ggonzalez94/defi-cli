@@ -500,7 +500,9 @@ mod tests {
             ("chains list", vec!["chains", "list"]),
             ("chains gas", vec!["chains", "gas"]),
             ("chains top", vec!["chains", "top"]),
-            ("chains assets", vec!["chains", "assets"]),
+            // `chains assets` requires `--chain` at the clap level (Go cobra
+            // `MarkFlagRequired("chain")`), so the routing argv supplies it.
+            ("chains assets", vec!["chains", "assets", "--chain", "1"]),
             ("protocols top", vec!["protocols", "top"]),
             ("protocols categories", vec!["protocols", "categories"]),
             ("protocols fees", vec!["protocols", "fees"]),
@@ -583,7 +585,10 @@ mod tests {
     /// them would do real provider/cache I/O, or — for the lend reads,
     /// `swap quote`, and `bridge quote` — require `--provider`).
     fn is_stub(path: &str) -> bool {
-        matches!(path, "wallet balance" | "chains top" | "chains assets")
+        // `chains top` / `chains assets` are wired (WS2 unit "chains-extra");
+        // they are now route-verified by parse + command_path above and exercised
+        // end-to-end by their own module tests, so they are no longer stubs.
+        matches!(path, "wallet balance")
             || path.ends_with(" plan")
             || path.ends_with(" submit")
             || path.ends_with(" status")

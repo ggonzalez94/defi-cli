@@ -264,14 +264,14 @@ pub fn parse_optional_chain_asset(chain: &Chain, asset_arg: &str) -> Result<Asse
 
 /// Whether the input looks like an EVM address or a CAIP id (Go
 /// `looksLikeAddressOrCAIP`).
-fn looks_like_address_or_caip(input: &str) -> bool {
+pub(crate) fn looks_like_address_or_caip(input: &str) -> bool {
     let norm = input.trim().to_ascii_lowercase();
     norm.starts_with("eip155:") || (norm.starts_with("0x") && norm.len() == 42)
 }
 
 /// Whether the input looks like a bare token-symbol filter (Go
 /// `looksLikeSymbolFilter`): non-empty, <= 64 chars, no whitespace/`:`/`/`.
-fn looks_like_symbol_filter(input: &str) -> bool {
+pub(crate) fn looks_like_symbol_filter(input: &str) -> bool {
     let norm = input.trim();
     if norm.is_empty() || norm.len() > 64 {
         return false;

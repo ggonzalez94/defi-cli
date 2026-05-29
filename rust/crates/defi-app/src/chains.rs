@@ -36,7 +36,161 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use defi_errors::{Code, Error};
 use defi_evm::rpc::{wei_to_gwei, RpcClient};
 use defi_id::{parse_chain, Chain};
-use defi_model::{GasPrice, SupportedChain};
+use defi_model::{GasPrice, ProviderStatus, SupportedChain};
+use defi_providers::MarketDataProvider;
+use serde_json::Value;
+
+/// The cache TTL for `chains top` / `chains assets` (Go: `5 * time.Minute`).
+pub const CHAINS_TTL_SECS: u64 = 300;
+
+/// The default `--limit` for `chains top` / `chains assets` (Go default 20).
+pub const CHAINS_DEFAULT_LIMIT: i64 = 20;
+
+/// Request payload for `chains top` (Go `map[string]any{"limit":N}`).
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChainsTopRequest {
+    /// `--limit` (number of rows; `<= 0` = all).
+    pub limit: i64,
+}
+
+/// Request payload for `chains assets`.
+///
+/// Mirrors the Go request `map[string]any{"chain","asset","limit"}`, whose
+/// `encoding/json` emits keys ALPHABETICALLY → `{"asset","chain","limit"}`.
+/// Field declaration order is chosen to reproduce that JSON exactly so cache
+/// keys stay byte-stable against the Go binary.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct ChainsAssetsRequest {
+    /// The cache-stable asset filter value (Go `chainAssetFilterCacheValue`).
+    pub asset: String,
+    /// The chain CAIP-2.
+    pub chain: String,
+    /// `--limit` (number of rows; `<= 0` = all).
+    pub limit: i64,
+}
+
+/// A resolved `chains top` / `chains assets` fetch.
+///
+/// Carries the JSON `data` payload (the serialized provider list) and the single
+/// captured market-provider [`ProviderStatus`]. The runner layers envelope
+/// construction + rendering on top.
+#[derive(Debug, Clone)]
+pub struct ChainsOutcome {
+    /// The fetched list, serialized verbatim as a JSON array for `data`.
+    pub data: Value,
+    /// The single market-provider status captured for this fetch.
+    pub provider: ProviderStatus,
+}
+
+/// Capture the single market-provider [`ProviderStatus`] from a fetch result
+/// (Go `model.ProviderStatus{Name, Status: statusFromErr(err)}`). Latency timing
+/// is owned by the runner's cache-flow state machine, so `latency_ms` is left at
+/// zero here (matching the `protocols`/`dexes` command-layer composition).
+fn provider_status<T>(provider: &dyn MarketDataProvider, res: &Result<T, Error>) -> ProviderStatus {
+    ProviderStatus {
+        name: provider.info().name,
+        status: crate::protocols::status_from_result(res),
+        latency_ms: 0,
+    }
+}
+
+/// Serialize a fetched row list into a JSON array `data` payload, preserving
+/// element struct field declaration order (serde default for structs).
+fn rows_to_data<T: serde::Serialize>(rows: &[T]) -> Result<Value, Error> {
+    serde_json::to_value(rows).map_err(|e| Error::wrap(Code::Internal, "serialize chains rows", e))
+}
+
+/// Run `chains top`: top chains by TVL (Go `newChainsCommand` `top` closure).
+///
+/// Calls [`MarketDataProvider::chains_top`] with the supplied `--limit`,
+/// serializes the resulting `Vec<ChainTvl>` verbatim into `data` (element keys
+/// `rank, chain, chain_id, tvl_usd` in struct declaration order), and captures
+/// exactly one market-provider status. A provider error propagates with its
+/// original code (the runner turns it into the full error envelope).
+pub async fn run_top(
+    provider: &dyn MarketDataProvider,
+    limit: i64,
+) -> Result<ChainsOutcome, Error> {
+    let res = provider.chains_top(limit).await;
+    let status = provider_status(provider, &res);
+    let rows = res?;
+    Ok(ChainsOutcome {
+        data: rows_to_data(&rows)?,
+        provider: status,
+    })
+}
+
+/// Run `chains assets`: TVL by asset for a chain (Go `newChainsCommand`
+/// `assets` closure).
+///
+/// Parses the required `--chain` (CAIP-2; an empty/unknown value surfaces the
+/// [`parse_chain`] error → [`Code::Usage`]) and the OPTIONAL `--asset` filter via
+/// [`parse_chain_asset_filter`] (which — unlike the looser `lend`/`positions`
+/// optional-asset filter — rejects an address/CAIP that resolves to no known
+/// token symbol on the chain with [`Code::Usage`]). It then calls
+/// [`MarketDataProvider::chains_assets`] with the parsed `Chain` + `Asset` +
+/// `--limit`, serializes the resulting `Vec<ChainAssetTvl>` verbatim into `data`
+/// (element keys `rank, chain, chain_id, asset, asset_id, tvl_usd`), and captures
+/// one market-provider status. Both guards run BEFORE any provider call.
+pub async fn run_assets(
+    provider: &dyn MarketDataProvider,
+    chain_arg: &str,
+    asset_arg: &str,
+    limit: i64,
+) -> Result<ChainsOutcome, Error> {
+    let chain = parse_chain(chain_arg)?;
+    let asset = parse_chain_asset_filter(&chain, asset_arg)?;
+    let res = provider.chains_assets(chain, asset, limit).await;
+    let status = provider_status(provider, &res);
+    let rows = res?;
+    Ok(ChainsOutcome {
+        data: rows_to_data(&rows)?,
+        provider: status,
+    })
+}
+
+/// Parse the optional `chains assets` `--asset` filter (Go
+/// `parseChainAssetFilter`).
+///
+/// This is intentionally STRICTER than [`crate::lend::parse_optional_chain_asset`]:
+/// when the input parses as an address/CAIP but resolves to NO known token symbol
+/// on the chain, it is rejected with [`Code::Usage`] ("asset filter by
+/// address/CAIP requires a known token symbol on the selected chain") rather than
+/// being forwarded as an unfiltered request. An empty input yields a default
+/// (unfiltered) [`Asset`]; a bare symbol filter falls back to a symbol-only asset.
+pub fn parse_chain_asset_filter(
+    chain: &defi_id::Chain,
+    asset_arg: &str,
+) -> Result<defi_id::Asset, Error> {
+    let asset_arg = asset_arg.trim();
+    if asset_arg.is_empty() {
+        return Ok(defi_id::Asset::default());
+    }
+
+    match defi_id::parse_asset(asset_arg, chain) {
+        Ok(asset) => {
+            if asset.symbol.trim().is_empty() {
+                return Err(Error::new(
+                    Code::Usage,
+                    "asset filter by address/CAIP requires a known token symbol on the selected chain",
+                ));
+            }
+            Ok(asset)
+        }
+        Err(err) => {
+            if crate::lend::looks_like_address_or_caip(asset_arg)
+                || !crate::lend::looks_like_symbol_filter(asset_arg)
+            {
+                return Err(err);
+            }
+            Ok(defi_id::Asset {
+                chain_id: chain.caip2.clone(),
+                symbol: asset_arg.to_ascii_uppercase(),
+                ..defi_id::Asset::default()
+            })
+        }
+    }
+}
 
 /// Build the `chains list` data payload.
 ///
@@ -245,6 +399,7 @@ pub mod cli {
     use defi_errors::Error;
     use defi_model::{CacheStatus, Envelope};
 
+    use super::{ChainsAssetsRequest, ChainsTopRequest, CHAINS_DEFAULT_LIMIT, CHAINS_TTL_SECS};
     use crate::ctx::AppCtx;
 
     /// `chains` subcommands (Go `newChainsCommand`).
@@ -287,31 +442,116 @@ pub mod cli {
     #[derive(Args, Debug, Clone, Default)]
     pub struct TopArgs {
         /// Number of chains to return.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = CHAINS_DEFAULT_LIMIT)]
         pub limit: i64,
     }
 
     /// `chains assets` flags.
+    ///
+    /// `--chain` is REQUIRED (Go cobra `MarkFlagRequired("chain")`): omitting it
+    /// is a clap parse error (exit 2) before any handler runs.
     #[derive(Args, Debug, Clone, Default)]
     pub struct AssetsArgs {
         /// Chain id/name/CAIP-2.
-        #[arg(long)]
+        #[arg(long, required = true)]
         pub chain: Option<String>,
         /// Asset filter (symbol/address/CAIP-19).
         #[arg(long)]
         pub asset: Option<String>,
         /// Number of assets to return.
-        #[arg(long, default_value_t = 20)]
+        #[arg(long, default_value_t = CHAINS_DEFAULT_LIMIT)]
         pub limit: i64,
     }
 
     /// Handle `chains <sub>`.
+    ///
+    /// `list`/`gas` are metadata routes (cache bypassed); `top`/`assets` are
+    /// DefiLlama-backed data routes driven through the runner's cache flow. The
+    /// async provider fetch is deferred into the cache-flow closure (run via
+    /// [`crate::ctx::block_on_fetch`]) so a fresh cache hit short-circuits WITHOUT
+    /// issuing a network call (spec §2.5). `chains assets` is key-gated: the
+    /// DefiLlama adapter rejects a missing `DEFI_DEFILLAMA_API_KEY` before any
+    /// network call.
     pub async fn handle(ctx: &AppCtx, cmd: ChainsCmd) -> Result<Envelope, Error> {
         match cmd {
             ChainsCmd::List => Ok(list_envelope(ctx)),
             ChainsCmd::Gas(args) => gas(ctx, args).await,
-            ChainsCmd::Top(_) => Err(AppCtx::unimplemented("chains top", "WS2")),
-            ChainsCmd::Assets(_) => Err(AppCtx::unimplemented("chains assets", "WS2")),
+            ChainsCmd::Top(args) => top(ctx, args),
+            ChainsCmd::Assets(args) => assets(ctx, args),
+        }
+    }
+
+    /// Run `chains top`: top chains by TVL (DefiLlama, no key, cached).
+    fn top(ctx: &AppCtx, args: TopArgs) -> Result<Envelope, Error> {
+        let ttl = std::time::Duration::from_secs(CHAINS_TTL_SECS);
+        let provider = ctx.defillama();
+        let path = "chains top";
+        let req = ChainsTopRequest { limit: args.limit };
+        let key = crate::protocols::cache_key(path, &req);
+        ctx.run_cached_command(path, &key, ttl, || {
+            finalize(crate::ctx::block_on_fetch(super::run_top(
+                &provider, args.limit,
+            )))
+        })
+    }
+
+    /// Run `chains assets`: TVL by asset for a chain (DefiLlama, key-gated,
+    /// cached).
+    ///
+    /// The `--chain` (CAIP-2) + optional `--asset` filter are parsed up front so
+    /// the cache key matches Go (`{"asset","chain","limit"}` → alphabetical
+    /// `{"asset","chain","limit"}` JSON), and a usage error (bad chain / address
+    /// filter without a known symbol) short-circuits before the cache flow.
+    fn assets(ctx: &AppCtx, args: AssetsArgs) -> Result<Envelope, Error> {
+        let ttl = std::time::Duration::from_secs(CHAINS_TTL_SECS);
+        let provider = ctx.defillama();
+        let path = "chains assets";
+
+        let chain_arg = args.chain.clone().unwrap_or_default();
+        let asset_arg = args.asset.clone().unwrap_or_default();
+        // Parse the same way the fetch will, so the cache key uses the
+        // cache-stable filter value and usage errors surface before any I/O.
+        let chain = super::parse_chain(&chain_arg)?;
+        let asset = super::parse_chain_asset_filter(&chain, &asset_arg)?;
+        let req = ChainsAssetsRequest {
+            asset: crate::lend::chain_asset_filter_cache_value(&asset, &asset_arg),
+            chain: chain.caip2.clone(),
+            limit: args.limit,
+        };
+        let key = crate::protocols::cache_key(path, &req);
+        ctx.run_cached_command(path, &key, ttl, || {
+            finalize(crate::ctx::block_on_fetch(super::run_assets(
+                &provider, &chain_arg, &asset_arg, args.limit,
+            )))
+        })
+    }
+
+    /// Convert a [`super::ChainsOutcome`] result into the cache-flow fetch outcome
+    /// tuple expected by `run_cached_command` (mirrors the `protocols` finalize).
+    #[allow(clippy::type_complexity)]
+    fn finalize(
+        outcome: Result<super::ChainsOutcome, Error>,
+    ) -> Result<
+        crate::runner::FetchOutcome,
+        (Vec<defi_model::ProviderStatus>, Vec<String>, bool, Error),
+    > {
+        match outcome {
+            Ok(o) => Ok(crate::runner::FetchOutcome {
+                data: o.data,
+                providers: vec![o.provider],
+                warnings: Vec::new(),
+                partial: false,
+            }),
+            Err(err) => {
+                let status = defi_model::ProviderStatus {
+                    name: "defillama".to_string(),
+                    status: crate::protocols::status_from_result::<()>(&Err(Error::new(
+                        err.code, "",
+                    ))),
+                    latency_ms: 0,
+                };
+                Err((vec![status], Vec::new(), false, err))
+            }
         }
     }
 
@@ -1030,5 +1270,964 @@ mod tests {
         )
         .await;
         assert_eq!(code, 0, "a healthy single-chain gas query must exit 0");
+    }
+}
+
+#[cfg(test)]
+mod chains_extra_tests {
+    //! # Success criteria — `chains top` / `chains assets` command composition
+    //! (unit "chains-extra", WS2; Go: `internal/app/runner.go::newChainsCommand`
+    //! `top` + `assets`).
+    //!
+    //! This module owns the **command-layer composition** for the two remaining
+    //! `chains` data subcommands. "Correct" means it preserves the stable machine
+    //! contract (design spec §2.1 envelope, §2.3 rendering, §2.4 ids, §2.5 cache
+    //! behavior) and the chains-specific wiring of the Go runner. The DefiLlama
+    //! data fetch (sort/aggregate/rank/limit/filter + key-gating) is NOT
+    //! re-asserted here — it lives in (and is tested by) `defi-providers::defillama`
+    //! (`chains_top_sorts_descending`, `chains_assets_requires_api_key`,
+    //! `chains_assets_aggregates_sorts_and_limits`, `chains_assets_filters_by_asset`).
+    //! The criteria asserted by THIS module's unit tests:
+    //!
+    //!  1. **`chains top` composition.** [`super::run_top`] calls
+    //!     [`defi_providers::MarketDataProvider::chains_top`] with the supplied
+    //!     `--limit`, serializes the returned `Vec<ChainTvl>` verbatim into `data`
+    //!     (a JSON array whose element keys are `rank, chain, chain_id, tvl_usd` in
+    //!     struct DECLARATION order — machine contract §2.3), and captures exactly
+    //!     one provider status named after the market provider (`"defillama"`) with
+    //!     `status="ok"`. (Go `top` closure.)
+    //!  2. **`chains top` limit pass-through.** The `--limit` value is forwarded to
+    //!     the provider unchanged (the command layer does no capping — that is the
+    //!     provider's job). Asserted via a recording fake.
+    //!  3. **`chains assets` composition.** [`super::run_assets`] parses the
+    //!     required `--chain` (CAIP-2), parses the OPTIONAL `--asset` filter, calls
+    //!     [`defi_providers::MarketDataProvider::chains_assets`] with the parsed
+    //!     `Chain` + `Asset` + `--limit`, and serializes the returned
+    //!     `Vec<ChainAssetTvl>` verbatim into `data` (element keys
+    //!     `rank, chain, chain_id, asset, asset_id, tvl_usd` in declaration order).
+    //!     One `"ok"` provider status is captured. (Go `assets` closure.)
+    //!  4. **`chains assets` chain + asset pass-through.** The parsed `Chain`
+    //!     (CAIP-2) and the parsed/filter `Asset` (symbol uppercased) plus the
+    //!     `--limit` reach the provider unchanged. A bare symbol filter (`usdc`)
+    //!     resolves to an `Asset` whose `symbol == "USDC"` on the selected chain.
+    //!  5. **`chains assets` required `--chain` (usage).** An empty `--chain`
+    //!     argument is a [`Code::Usage`] error reported BEFORE any provider call
+    //!     (Go cobra `MarkFlagRequired("chain")` + the `ParseChain` guard). A
+    //!     non-EVM / unknown chain string surfaces the `ParseChain` error
+    //!     ([`Code::Usage`]).
+    //!  6. **`chains assets` empty-asset filter is unfiltered.** With no `--asset`
+    //!     the provider is called with a default (empty-symbol) [`Asset`], i.e. an
+    //!     unfiltered request. (Go `parseChainAssetFilter("")` → zero `id.Asset`.)
+    //!  7. **`chains assets` address/CAIP without a known symbol is a usage
+    //!     error.** A `--asset` that parses to an address/CAIP but resolves to NO
+    //!     known token symbol on the chain is rejected with [`Code::Usage`]
+    //!     ("asset filter by address/CAIP requires a known token symbol"),
+    //!     matching Go `parseChainAssetFilter`. (This is the behavior that
+    //!     distinguishes the `chains assets` filter from the looser
+    //!     `lend`/`positions` optional-asset filter.)
+    //!  8. **Provider-status capture + `statusFromErr` mapping.** A successful
+    //!     fetch yields one provider status with `status="ok"`; a failed fetch
+    //!     surfaces the error (the command fails) and propagates the SAME error
+    //!     code (`auth_error` for the missing-key case, `unavailable` otherwise).
+    //!  9. **Deterministic, Go-parity cache keys.** Each subcommand keys on the Go
+    //!     request map (`top` → `{"limit":N}`; `assets` → `{"asset","chain",
+    //!     "limit"}` with `encoding/json` ALPHABETICAL key order →
+    //!     `{"asset":"...","chain":"...","limit":N}`), through the shared
+    //!     [`crate::protocols::cache_key`] formula
+    //!     `hex(sha256(path | "v2" | json(req)))`. The `assets` request's `asset`
+    //!     component is the cache-stable [`crate::lend::chain_asset_filter_cache_value`]
+    //!     (CAIP-19 / `symbol:<UPPER>` / `raw:<UPPER>` / empty), so two different
+    //!     asset filters produce different keys and the same filter is stable.
+    //! 10. **Default limit + TTL.** Both subcommands default `--limit` to 20 and
+    //!     use the 5-minute (`300`s) TTL (Go `--limit` default 20, `5*time.Minute`).
+    //! 11. **Cache routing.** Both `chains top` and `chains assets` open the cache
+    //!     (they are data routes, not metadata/execution). Asserted via
+    //!     `runner::should_open_cache`.
+    //!
+    //! Skipped here (covered elsewhere or internal detail):
+    //! * the DefiLlama sort/aggregate/rank/limit/filter + key-gating + httptest
+    //!   plumbing — owned/tested by `defi-providers::defillama`;
+    //! * the envelope shape/field-order + render contract — owned/tested by
+    //!   `defi-model::envelope` and `defi-out`; we assert only the `data` payload
+    //!   and the provider/cache `meta` this module produces;
+    //! * the cache-flow state machine (fresh hit / stale fallback / strict
+    //!   partial) — owned/tested by `defi-app::runner`.
+
+    use async_trait::async_trait;
+    use defi_errors::{Code, Error};
+    use defi_id::{parse_chain, Asset, Chain};
+    use defi_model::{self as model, CacheStatus, ChainAssetTvl, ChainTvl, Envelope, ProviderInfo};
+    use defi_providers::{MarketDataProvider, Provider};
+    use serde_json::Value;
+    use std::sync::Mutex;
+
+    // --- recording fake market provider ------------------------------------
+
+    /// What the fake was asked for on its most recent `chains_*` call.
+    #[derive(Debug, Default, Clone, PartialEq, Eq)]
+    struct CallArgs {
+        /// CAIP-2 of the chain passed to `chains_assets` (empty for `chains_top`).
+        chain_caip2: String,
+        /// Uppercased symbol of the asset filter passed to `chains_assets`.
+        asset_symbol: String,
+        /// CAIP-19 asset id passed to `chains_assets` (when resolved).
+        asset_id: String,
+        limit: i64,
+    }
+
+    /// A `MarketDataProvider` returning canned `chains_top` / `chains_assets`
+    /// lists (or a canned error) and recording the args it was called with.
+    /// Mirrors the Go `fakeMarketProvider` used by the runner tests + the
+    /// `FakeMarket` already used by the `protocols`/`dexes` command-layer tests.
+    struct FakeMarket {
+        name: String,
+        top: Vec<ChainTvl>,
+        assets: Vec<ChainAssetTvl>,
+        /// When set, every fetch returns this error instead of the canned list.
+        fail: Option<Code>,
+        last_call: Mutex<CallArgs>,
+    }
+
+    impl FakeMarket {
+        fn new() -> Self {
+            FakeMarket {
+                name: "defillama".to_string(),
+                top: Vec::new(),
+                assets: Vec::new(),
+                fail: None,
+                last_call: Mutex::new(CallArgs::default()),
+            }
+        }
+
+        fn last(&self) -> CallArgs {
+            self.last_call.lock().unwrap().clone()
+        }
+
+        fn err(&self) -> Error {
+            Error::new(self.fail.unwrap(), "provider failed")
+        }
+    }
+
+    impl Provider for FakeMarket {
+        fn info(&self) -> ProviderInfo {
+            ProviderInfo {
+                name: self.name.clone(),
+                provider_type: "market_data".to_string(),
+                requires_key: false,
+                capabilities: vec!["chains.top".to_string(), "chains.assets".to_string()],
+                key_env_var_name: String::new(),
+                capability_auth: Vec::new(),
+            }
+        }
+    }
+
+    #[async_trait]
+    impl MarketDataProvider for FakeMarket {
+        async fn chains_top(&self, limit: i64) -> Result<Vec<ChainTvl>, Error> {
+            *self.last_call.lock().unwrap() = CallArgs {
+                limit,
+                ..CallArgs::default()
+            };
+            if self.fail.is_some() {
+                return Err(self.err());
+            }
+            Ok(self.top.clone())
+        }
+        async fn chains_assets(
+            &self,
+            chain: Chain,
+            asset: Asset,
+            limit: i64,
+        ) -> Result<Vec<ChainAssetTvl>, Error> {
+            *self.last_call.lock().unwrap() = CallArgs {
+                chain_caip2: chain.caip2.clone(),
+                asset_symbol: asset.symbol.to_ascii_uppercase(),
+                asset_id: asset.asset_id.clone(),
+                limit,
+            };
+            if self.fail.is_some() {
+                return Err(self.err());
+            }
+            Ok(self.assets.clone())
+        }
+        async fn protocols_top(
+            &self,
+            _category: &str,
+            _chain: &str,
+            _limit: i64,
+        ) -> Result<Vec<model::ProtocolTvl>, Error> {
+            Ok(Vec::new())
+        }
+        async fn protocols_categories(&self) -> Result<Vec<model::ProtocolCategory>, Error> {
+            Ok(Vec::new())
+        }
+        async fn stablecoins_top(
+            &self,
+            _peg_type: &str,
+            _limit: i64,
+        ) -> Result<Vec<model::Stablecoin>, Error> {
+            Ok(Vec::new())
+        }
+        async fn stablecoin_chains(
+            &self,
+            _limit: i64,
+        ) -> Result<Vec<model::StablecoinChain>, Error> {
+            Ok(Vec::new())
+        }
+        async fn protocols_fees(
+            &self,
+            _category: &str,
+            _chain: &str,
+            _limit: i64,
+        ) -> Result<Vec<model::ProtocolFees>, Error> {
+            Ok(Vec::new())
+        }
+        async fn protocols_revenue(
+            &self,
+            _category: &str,
+            _chain: &str,
+            _limit: i64,
+        ) -> Result<Vec<model::ProtocolRevenue>, Error> {
+            Ok(Vec::new())
+        }
+        async fn dexes_volume(
+            &self,
+            _chain: &str,
+            _limit: i64,
+        ) -> Result<Vec<model::DexVolume>, Error> {
+            Ok(Vec::new())
+        }
+    }
+
+    fn sample_chain_tvl() -> ChainTvl {
+        ChainTvl {
+            rank: 1,
+            chain: "Ethereum".to_string(),
+            chain_id: "eip155:1".to_string(),
+            tvl_usd: 50_000_000.0,
+        }
+    }
+
+    fn sample_chain_asset_tvl() -> ChainAssetTvl {
+        ChainAssetTvl {
+            rank: 1,
+            chain: "Ethereum".to_string(),
+            chain_id: "eip155:1".to_string(),
+            asset: "USDC".to_string(),
+            asset_id: "eip155:1/erc20:0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48".to_string(),
+            tvl_usd: 225.0,
+        }
+    }
+
+    /// First element of the `data` array as an object.
+    fn first_row(data: &Value) -> &serde_json::Map<String, Value> {
+        data.as_array()
+            .expect("data is an array")
+            .first()
+            .expect("at least one row")
+            .as_object()
+            .expect("row is an object")
+    }
+
+    // --- 1. chains top composition ----------------------------------------
+
+    #[tokio::test]
+    async fn run_top_serializes_rows_in_declaration_order_and_captures_ok_status() {
+        let mut p = FakeMarket::new();
+        p.top = vec![sample_chain_tvl()];
+
+        let out = super::run_top(&p, 20).await.expect("run_top success");
+
+        assert_eq!(out.provider.name, "defillama");
+        assert_eq!(out.provider.status, "ok");
+
+        let row = first_row(&out.data);
+        assert_eq!(row["rank"], Value::from(1));
+        assert_eq!(row["chain"], Value::from("Ethereum"));
+        assert_eq!(row["chain_id"], Value::from("eip155:1"));
+        assert!(row.contains_key("tvl_usd"));
+        let keys: Vec<&String> = row.keys().collect();
+        assert_eq!(keys, vec!["rank", "chain", "chain_id", "tvl_usd"]);
+
+        // Rendered into a success envelope, `data` round-trips the rows.
+        let env = Envelope::success(
+            "chains top",
+            out.data.clone(),
+            Vec::new(),
+            CacheStatus::bypass(),
+            vec![out.provider.clone()],
+            false,
+        );
+        assert!(env.success);
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(
+            env.data.as_ref().and_then(Value::as_array).map(Vec::len),
+            Some(1)
+        );
+    }
+
+    // --- 2. chains top limit pass-through ---------------------------------
+
+    #[tokio::test]
+    async fn run_top_forwards_limit_verbatim() {
+        let p = FakeMarket::new();
+        let _ = super::run_top(&p, 7).await.expect("run_top success");
+        assert_eq!(p.last().limit, 7);
+    }
+
+    #[tokio::test]
+    async fn run_top_empty_result_serializes_as_empty_array() {
+        let p = FakeMarket::new(); // no rows
+        let out = super::run_top(&p, 20).await.expect("run_top success");
+        assert_eq!(out.data, Value::Array(Vec::new()));
+        assert_eq!(out.provider.status, "ok");
+    }
+
+    // --- 3. chains assets composition -------------------------------------
+
+    #[tokio::test]
+    async fn run_assets_serializes_rows_in_declaration_order_and_captures_ok_status() {
+        let mut p = FakeMarket::new();
+        p.assets = vec![sample_chain_asset_tvl()];
+
+        let out = super::run_assets(&p, "1", "USDC", 20)
+            .await
+            .expect("run_assets success");
+
+        assert_eq!(out.provider.name, "defillama");
+        assert_eq!(out.provider.status, "ok");
+
+        let row = first_row(&out.data);
+        assert_eq!(row["rank"], Value::from(1));
+        assert_eq!(row["chain"], Value::from("Ethereum"));
+        assert_eq!(row["chain_id"], Value::from("eip155:1"));
+        assert_eq!(row["asset"], Value::from("USDC"));
+        assert!(row.contains_key("asset_id"));
+        assert!(row.contains_key("tvl_usd"));
+        let keys: Vec<&String> = row.keys().collect();
+        assert_eq!(
+            keys,
+            vec!["rank", "chain", "chain_id", "asset", "asset_id", "tvl_usd"]
+        );
+    }
+
+    // --- 4. chains assets chain + asset pass-through ----------------------
+
+    #[tokio::test]
+    async fn run_assets_forwards_parsed_chain_asset_and_limit() {
+        let p = FakeMarket::new();
+        // `1` parses to eip155:1; a bare `usdc` symbol filter uppercases to USDC
+        // and resolves to the canonical USDC asset on Ethereum.
+        let _ = super::run_assets(&p, "1", "usdc", 5)
+            .await
+            .expect("run_assets success");
+        let call = p.last();
+        assert_eq!(call.chain_caip2, "eip155:1");
+        assert_eq!(call.asset_symbol, "USDC");
+        assert_eq!(call.limit, 5);
+    }
+
+    // --- 5. chains assets required --chain (usage) ------------------------
+
+    #[tokio::test]
+    async fn run_assets_empty_chain_is_usage_before_provider_call() {
+        let p = FakeMarket::new();
+        let err = super::run_assets(&p, "", "USDC", 20)
+            .await
+            .expect_err("empty --chain is rejected");
+        assert_eq!(err.code, Code::Usage);
+        // No provider call happened (the chain guard short-circuits).
+        assert_eq!(p.last(), CallArgs::default());
+    }
+
+    #[tokio::test]
+    async fn run_assets_unknown_chain_surfaces_parse_error() {
+        let p = FakeMarket::new();
+        let err = super::run_assets(&p, "boguschainxyz", "", 20)
+            .await
+            .expect_err("unknown chain is rejected");
+        // ParseChain failure is a usage error (Go `ParseChain` → CodeUsage).
+        assert_eq!(err.code, Code::Usage);
+    }
+
+    // --- 6. chains assets empty-asset filter is unfiltered ----------------
+
+    #[tokio::test]
+    async fn run_assets_empty_asset_filter_is_unfiltered() {
+        let p = FakeMarket::new();
+        let _ = super::run_assets(&p, "1", "", 20)
+            .await
+            .expect("run_assets success");
+        let call = p.last();
+        assert_eq!(call.chain_caip2, "eip155:1");
+        // Default (empty) asset symbol => unfiltered request.
+        assert_eq!(call.asset_symbol, "");
+        assert_eq!(call.asset_id, "");
+    }
+
+    // --- 7. chains assets address/CAIP without known symbol is usage ------
+
+    #[tokio::test]
+    async fn run_assets_address_without_known_symbol_is_usage() {
+        let p = FakeMarket::new();
+        // An address that resolves to no known token symbol on Ethereum must be
+        // rejected (Go `parseChainAssetFilter` requires a known symbol for
+        // address/CAIP filters). A clearly-unregistered address is used.
+        let err = super::run_assets(&p, "1", "0x000000000000000000000000000000000000dead", 20)
+            .await
+            .expect_err("address without a known symbol must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        // The guard rejects before any provider call.
+        assert_eq!(p.last(), CallArgs::default());
+    }
+
+    // --- 8. provider-status capture + error propagation -------------------
+
+    #[tokio::test]
+    async fn run_top_propagates_provider_error_with_same_code() {
+        let mut p = FakeMarket::new();
+        p.fail = Some(Code::Unavailable);
+        let err = super::run_top(&p, 20)
+            .await
+            .expect_err("provider failure propagates");
+        assert_eq!(err.code, Code::Unavailable);
+    }
+
+    #[tokio::test]
+    async fn run_assets_propagates_auth_error_with_same_code() {
+        let mut p = FakeMarket::new();
+        p.fail = Some(Code::Auth);
+        let err = super::run_assets(&p, "1", "USDC", 20)
+            .await
+            .expect_err("provider auth failure propagates");
+        assert_eq!(err.code, Code::Auth);
+    }
+
+    // --- 9. deterministic, Go-parity cache keys ---------------------------
+
+    #[test]
+    fn chains_top_cache_request_serializes_as_single_limit_key() {
+        // Go keys `chains top` on `map[string]any{"limit":N}` →
+        // `{"limit":N}`. The Rust request must serialize identically.
+        let req = super::ChainsTopRequest { limit: 20 };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert_eq!(json, r#"{"limit":20}"#);
+    }
+
+    #[test]
+    fn chains_assets_cache_request_serializes_with_alphabetical_keys() {
+        // Go keys `chains assets` on `map[string]any{"chain","asset","limit"}`,
+        // whose `json.Marshal` emits keys ALPHABETICALLY:
+        // `{"asset":"...","chain":"...","limit":N}`.
+        let req = super::ChainsAssetsRequest {
+            asset: "symbol:USDC".to_string(),
+            chain: "eip155:1".to_string(),
+            limit: 20,
+        };
+        let json = serde_json::to_string(&req).expect("serialize");
+        assert_eq!(
+            json,
+            r#"{"asset":"symbol:USDC","chain":"eip155:1","limit":20}"#
+        );
+    }
+
+    #[test]
+    fn chains_top_cache_key_is_deterministic_hex_and_limit_sensitive() {
+        let a = crate::protocols::cache_key("chains top", &super::ChainsTopRequest { limit: 20 });
+        let b = crate::protocols::cache_key("chains top", &super::ChainsTopRequest { limit: 20 });
+        assert_eq!(a, b, "identical inputs => identical key");
+        assert_eq!(a.len(), 64);
+        assert!(a.chars().all(|c| c.is_ascii_hexdigit()));
+        assert_ne!(
+            a,
+            crate::protocols::cache_key("chains top", &super::ChainsTopRequest { limit: 5 }),
+            "limit participates in the key"
+        );
+    }
+
+    #[test]
+    fn chains_assets_cache_key_changes_with_asset_filter() {
+        let base = crate::protocols::cache_key(
+            "chains assets",
+            &super::ChainsAssetsRequest {
+                asset: String::new(),
+                chain: "eip155:1".to_string(),
+                limit: 20,
+            },
+        );
+        let filtered = crate::protocols::cache_key(
+            "chains assets",
+            &super::ChainsAssetsRequest {
+                asset: "symbol:USDC".to_string(),
+                chain: "eip155:1".to_string(),
+                limit: 20,
+            },
+        );
+        assert_ne!(base, filtered, "asset filter participates in the key");
+        // Different chains differ too.
+        let other_chain = crate::protocols::cache_key(
+            "chains assets",
+            &super::ChainsAssetsRequest {
+                asset: String::new(),
+                chain: "eip155:10".to_string(),
+                limit: 20,
+            },
+        );
+        assert_ne!(base, other_chain, "chain participates in the key");
+    }
+
+    #[test]
+    fn chains_assets_request_asset_is_cache_stable_filter_value() {
+        // The `asset` field of the request is the cache-stable filter value
+        // (Go `chainAssetFilterCacheValue`): a bare symbol → `symbol:<UPPER>`.
+        let chain = parse_chain("1").expect("parse chain");
+        let asset = crate::lend::parse_optional_chain_asset(&chain, "usdc").expect("parse usdc");
+        let cache_value = crate::lend::chain_asset_filter_cache_value(&asset, "usdc");
+        // For a resolved symbol with a known asset id, the cache value is the
+        // CAIP-19 id; for a symbol-only filter it is `symbol:USDC`. Either way it
+        // is non-empty and uppercase-stable.
+        assert!(!cache_value.is_empty());
+        assert_eq!(cache_value, cache_value.trim());
+    }
+
+    // --- 10. default limit + TTL ------------------------------------------
+
+    #[test]
+    fn chains_extra_default_limit_and_ttl_match_go() {
+        assert_eq!(super::CHAINS_DEFAULT_LIMIT, 20);
+        assert_eq!(super::CHAINS_TTL_SECS, 300);
+    }
+
+    // --- 11. cache routing ------------------------------------------------
+
+    #[test]
+    fn chains_top_and_assets_open_the_cache() {
+        assert!(
+            crate::runner::should_open_cache("chains top"),
+            "\"chains top\" is a data route and must open the cache"
+        );
+        assert!(
+            crate::runner::should_open_cache("chains assets"),
+            "\"chains assets\" is a data route and must open the cache"
+        );
+    }
+}
+
+#[cfg(test)]
+mod chains_extra_app_tests {
+    //! # Success criteria — app-level `chains top` / `chains assets` (WS2,
+    //! wiremock + `run_with_args` end-to-end).
+    //!
+    //! These tests exercise the **wired command-group handler**
+    //! ([`super::cli::handle`]) and the full `run_with_args` path. `chains top` is
+    //! a no-key DefiLlama read driven against a `wiremock` server via the
+    //! [`AppCtx`] base-URL seam ([`AppCtx::with_defillama_base`]); `chains assets`
+    //! is **key-gated** (DefiLlama), so the offline-deterministic assertions cover
+    //! both the gated success path (with a key + mock) and the no-key auth gate +
+    //! usage gates (which fail BEFORE any network call, so they are safe to drive
+    //! through `run_with_args` without a live API). Asserted:
+    //!
+    //!  A1. **`chains top` wiremock reachability + full envelope.** With the
+    //!      DefiLlama `api_base` retargeted at the mock and `--no-cache`,
+    //!      `chains top` MUST issue `GET /v2/chains` to the mock (RED gap: the
+    //!      handler is `unimplemented!`/stubbed and never contacts it). The
+    //!      resolved [`Envelope`] has `version="v1"`, `success=true`,
+    //!      `error=None`, `data` = the JSON `ChainTvl` array (element keys
+    //!      `rank, chain, chain_id, tvl_usd` in declaration order, sorted
+    //!      descending by TVL by the provider), `meta.command="chains top"`,
+    //!      `partial=false`, one `defillama` provider status `status="ok"`,
+    //!      `meta.cache.status="miss"` (cache disabled).
+    //!  A2. **`chains top` cache write → hit.** With a real temp cache the first
+    //!      call writes (`status="write"`) and a second identical call is a fresh
+    //!      `"hit"` with NO second provider request (mock `expect(1)`).
+    //!  A3. **`chains top` provider error → non-zero exit.** A 503 from DefiLlama
+    //!      surfaces as a typed `Error` whose code maps to a non-zero exit code,
+    //!      originating from the injected mock (deterministic/offline).
+    //!  A4. **`chains assets` key-gated success.** With a DefiLlama API key set and
+    //!      the bridge/chainAssets base retargeted at a mock, `chains assets
+    //!      --chain 1 --asset USDC` MUST issue `GET /<key>/api/chainAssets`,
+    //!      build a success envelope (`meta.command="chains assets"`, one `"ok"`
+    //!      provider status, `data` a `ChainAssetTvl` array with element keys
+    //!      `rank, chain, chain_id, asset, asset_id, tvl_usd`).
+    //!  A5. **`chains assets` key-gating (no key) → exit 10 (auth)** through the
+    //!      full `run_with_args` path. The provider's
+    //!      `require_chain_assets_api_key` rejects BEFORE any network call, so this
+    //!      is offline + deterministic; the FULL error envelope is rendered on
+    //!      stderr and the exit code is 10. (Go oracle: exit 10, message
+    //!      "defillama chain asset tvl requires DEFI_DEFILLAMA_API_KEY".)
+    //!  A6. **`chains assets` required `--chain` → exit 2 (usage)** through
+    //!      `run_with_args` (clap-level required flag or the handler's chain
+    //!      guard). (Go oracle: exit 2, "required flag(s) \"chain\" not set".)
+    //!  A7. **`chains assets` unknown chain → exit 2 (usage)** through
+    //!      `run_with_args` (`ParseChain` failure). (Go oracle: exit 2,
+    //!      "unsupported chain input: ...".)
+    //!  A8. **Flag parsing.** `chains top --limit 7` parses to `limit=7`;
+    //!      `chains top` defaults to `limit=20`. `chains assets --chain 1 --asset
+    //!      USDC --limit 5` parses chain/asset/limit; `chains assets` defaults
+    //!      `--limit` to 20.
+
+    use super::cli::{handle, AssetsArgs, ChainsCmd, TopArgs};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use defi_config::{MapEnv, Settings};
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// JSON settings, caching DISABLED, no provider key (default for app tests).
+    fn no_cache_settings() -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: PathBuf::new(),
+            cache_lock_path: PathBuf::new(),
+            action_store_path: PathBuf::new(),
+            action_lock_path: PathBuf::new(),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// Settings backed by a real temp sqlite cache (for write/hit tests).
+    fn cache_settings(dir: &std::path::Path) -> Settings {
+        let mut s = no_cache_settings();
+        s.cache_enabled = true;
+        s.cache_path = dir.join("cache.db");
+        s.cache_lock_path = dir.join("cache.lock");
+        s
+    }
+
+    /// Settings carrying a DefiLlama API key (for the key-gated assets path).
+    fn keyed_settings() -> Settings {
+        let mut s = no_cache_settings();
+        s.defillama_api_key = "test-key".to_string();
+        s
+    }
+
+    fn env_with_home() -> (MapEnv, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    fn chains_top_body() -> &'static str {
+        r#"[ {"name":"Arbitrum","tvl":2000}, {"name":"Ethereum","tvl":50000} ]"#
+    }
+
+    fn chain_assets_body() -> &'static str {
+        r#"{
+            "Ethereum":{
+                "canonical":{"total":"250.5","breakdown":{"USDC":"100","USDT":"150.5"}},
+                "thirdParty":{"total":"125","breakdown":{"USDC":"125"}}
+            },
+            "timestamp":1752843956
+        }"#
+    }
+
+    fn data_array(env: &Envelope) -> Vec<Value> {
+        env.data
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("data is an array")
+    }
+
+    fn top_args(limit: i64) -> TopArgs {
+        TopArgs { limit }
+    }
+
+    fn assets_args(chain: &str, asset: Option<&str>, limit: i64) -> AssetsArgs {
+        AssetsArgs {
+            chain: Some(chain.to_string()),
+            asset: asset.map(str::to_string),
+            limit,
+        }
+    }
+
+    // --- A1. chains top wiremock + full envelope --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_top_handler_hits_wiremock_and_builds_envelope() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v2/chains"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(chains_top_body(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, ChainsCmd::Top(top_args(20)))
+            .await
+            .expect("chains top should succeed against the mock");
+
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            1,
+            "handler must issue exactly one GET /v2/chains to the injected mock"
+        );
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "chains top");
+        assert!(!env.meta.partial);
+
+        let rows = data_array(&env);
+        assert_eq!(rows.len(), 2);
+        // Sorted descending by TVL by the provider: Ethereum first.
+        assert_eq!(rows[0]["chain"], Value::from("Ethereum"));
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(keys, vec!["rank", "chain", "chain_id", "tvl_usd"]);
+
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "defillama");
+        assert_eq!(env.meta.providers[0].status, "ok");
+        assert_eq!(env.meta.cache.status, "miss");
+    }
+
+    // --- A2. chains top cache write then hit ------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_top_caches_write_then_hit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v2/chains"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(chains_top_body(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(cache_settings(tmp.path())).with_defillama_base(&server.uri());
+
+        let first = handle(&ctx, ChainsCmd::Top(top_args(20)))
+            .await
+            .expect("first chains top");
+        assert_eq!(first.meta.cache.status, "write");
+
+        let second = handle(&ctx, ChainsCmd::Top(top_args(20)))
+            .await
+            .expect("second chains top");
+        assert_eq!(second.meta.cache.status, "hit");
+        assert!(!second.meta.cache.stale);
+
+        drop(server);
+    }
+
+    // --- A3. chains top provider error → non-zero exit --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_top_provider_error_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/v2/chains"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&server)
+            .await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let err = handle(&ctx, ChainsCmd::Top(top_args(20)))
+            .await
+            .expect_err("a 503 from DefiLlama must surface as a typed error");
+
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the 503 error must originate from the injected mock, not the live API"
+        );
+        assert_ne!(
+            defi_errors::exit_code(&Err(defi_errors::Error::new(err.code, ""))),
+            0,
+            "provider error must map to a non-zero exit code, got code {:?}",
+            err.code
+        );
+    }
+
+    // --- A4. chains assets key-gated success ------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_assets_handler_key_gated_success() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/test-key/api/chainAssets"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(chain_assets_body(), "application/json"),
+            )
+            .mount(&server)
+            .await;
+
+        // The chainAssets endpoint is served off the bridge/pro base, which
+        // `with_defillama_base` retargets via `set_bridge_base_url`.
+        let ctx = AppCtx::new(keyed_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, ChainsCmd::Assets(assets_args("1", Some("USDC"), 20)))
+            .await
+            .expect("chains assets should succeed with a key against the mock");
+
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            1,
+            "handler must issue exactly one GET /<key>/api/chainAssets to the mock"
+        );
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "chains assets");
+
+        let rows = data_array(&env);
+        assert_eq!(rows.len(), 1, "USDC filter yields a single aggregated row");
+        assert_eq!(rows[0]["asset"], Value::from("USDC"));
+        // 100 (canonical) + 125 (thirdParty) aggregated. The `tvl_usd` field uses
+        // the Go `encoding/json` float serializer (`go_float`), so a whole-valued
+        // float drops its fraction → JSON integer `225` (Go parity), not `225.0`.
+        assert_eq!(rows[0]["tvl_usd"], Value::from(225));
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            vec!["rank", "chain", "chain_id", "asset", "asset_id", "tvl_usd"]
+        );
+
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "defillama");
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // --- A5. chains assets no key → exit 10 (auth) via run_with_args ------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_assets_no_key_is_auth_exit_10() {
+        // No DEFI_DEFILLAMA_API_KEY in the env: the provider rejects BEFORE any
+        // network call, so this is deterministic + offline. Go oracle: exit 10.
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi", "chains", "assets", "--chain", "1", "--asset", "USDC",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 10,
+            "chains assets without a DefiLlama key must be an auth error (exit 10)"
+        );
+    }
+
+    // --- A6. chains assets required --chain → exit 2 (usage) --------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_assets_missing_chain_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "chains", "assets", "--asset", "USDC"], &env).await;
+        assert_eq!(
+            code, 2,
+            "chains assets without --chain must be a usage error (exit 2)"
+        );
+    }
+
+    // --- A7. chains assets unknown chain → exit 2 (usage) -----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_assets_unknown_chain_is_usage_exit_2() {
+        // Provide a key so the chain guard (not the key gate) is what fails.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env =
+            MapEnv::with_home(tmp.path().to_path_buf()).set("DEFI_DEFILLAMA_API_KEY", "test-key");
+        let code = run_with_args(
+            ["defi", "chains", "assets", "--chain", "boguschainxyz"],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "chains assets with an unknown chain must be a usage error (exit 2)"
+        );
+    }
+
+    // --- A8. flag parsing -------------------------------------------------
+
+    #[test]
+    fn chains_top_flags_parse_with_defaults() {
+        use clap::Parser;
+        let cli =
+            crate::cli::Cli::try_parse_from(["defi", "chains", "top"]).expect("chains top parses");
+        if let crate::cli::TopCommand::Chains {
+            cmd: ChainsCmd::Top(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 20, "chains top --limit defaults to 20");
+        } else {
+            panic!("expected chains top");
+        }
+
+        let cli = crate::cli::Cli::try_parse_from(["defi", "chains", "top", "--limit", "7"])
+            .expect("chains top --limit parses");
+        if let crate::cli::TopCommand::Chains {
+            cmd: ChainsCmd::Top(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 7);
+        } else {
+            panic!("expected chains top");
+        }
+    }
+
+    #[test]
+    fn chains_assets_flags_parse_with_defaults() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi", "chains", "assets", "--chain", "1", "--asset", "USDC", "--limit", "5",
+        ])
+        .expect("chains assets flags parse");
+        if let crate::cli::TopCommand::Chains {
+            cmd: ChainsCmd::Assets(args),
+        } = cli.command
+        {
+            assert_eq!(args.chain.as_deref(), Some("1"));
+            assert_eq!(args.asset.as_deref(), Some("USDC"));
+            assert_eq!(args.limit, 5);
+        } else {
+            panic!("expected chains assets");
+        }
+
+        // --limit defaults to 20 when omitted (chain still supplied).
+        let cli = crate::cli::Cli::try_parse_from(["defi", "chains", "assets", "--chain", "1"])
+            .expect("chains assets default limit parses");
+        if let crate::cli::TopCommand::Chains {
+            cmd: ChainsCmd::Assets(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 20, "chains assets --limit defaults to 20");
+        } else {
+            panic!("expected chains assets");
+        }
+
+        // Missing required --chain is a parse error (Go MarkFlagRequired("chain")).
+        assert!(
+            crate::cli::Cli::try_parse_from(["defi", "chains", "assets", "--asset", "USDC"])
+                .is_err(),
+            "chains assets without --chain must be a clap parse error"
+        );
     }
 }
