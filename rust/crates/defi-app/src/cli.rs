@@ -600,14 +600,16 @@ mod tests {
         // not-yet-implemented stub, so they are route-verified by parse +
         // command_path above and exercised by their own module tests.
         //
-        // `swap plan` (WS3 "swap-plan") is likewise wired: it routes to a real
-        // handler whose first guard rejects the bare argv (empty `--provider`)
-        // with a typed `Usage` error, NOT the `Unsupported` not-yet-implemented
-        // stub, so it is route-verified by parse + command_path above and
-        // exercised end-to-end by its own module tests.
+        // `swap plan` (WS3 "swap-plan") and `bridge plan` (WS3 "bridge-plan") are
+        // likewise wired: each routes to a real handler whose first guard rejects
+        // the bare argv (empty `--provider`) with a typed `Usage` error, NOT the
+        // `Unsupported` not-yet-implemented stub, so they are route-verified by
+        // parse + command_path above and exercised end-to-end by their own module
+        // tests.
         if path == "approvals plan"
             || path == "transfer plan"
             || path == "swap plan"
+            || path == "bridge plan"
             || matches!(
                 path,
                 "lend supply plan" | "lend withdraw plan" | "lend borrow plan" | "lend repay plan"

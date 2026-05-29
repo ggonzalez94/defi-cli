@@ -363,6 +363,47 @@ impl AppCtx {
         reg
     }
 
+    /// Build the action-build routing [`Registry`] populated with the bridge
+    /// execution providers (Go `actionbuilder.New(..., s.bridgeProviders)`).
+    ///
+    /// The execution-capable bridge providers — `across` and `lifi` — are
+    /// registered as builders keyed on their `Info().Name` (lowercase, matching
+    /// the captured Go `ProviderStatus`). `bungee` is a registered bridge *quote*
+    /// provider with no execution builder (Go: it does not implement the
+    /// `BridgeExecutionProvider` interface), so it is marked known-but-quote-only
+    /// — planning it routes to the Go quote-only error rather than the
+    /// unknown-provider error. The offline/wiremock base-URL seam
+    /// ([`AppCtx::bridge_quote_base`]) is applied to the Across/LiFi adapters via
+    /// each adapter's `set_base_url` so app-level wiremock tests reach a mock
+    /// server.
+    ///
+    /// [`Registry`]: defi_execution::builder::Registry
+    pub fn bridge_action_registry(&self) -> defi_execution::builder::Registry {
+        use defi_providers::{across, lifi, Provider};
+
+        let base = self.bridge_quote_base.as_deref();
+        let mut reg = defi_execution::builder::Registry::new();
+
+        let mut across_client = across::Client::new(self.http_client());
+        if let Some(b) = base {
+            across_client.set_base_url(b);
+        }
+        let across_name = across_client.info().name;
+        reg.register_bridge_builder("across", &across_name, Box::new(across_client));
+
+        let mut lifi_client = lifi::Client::new(self.http_client());
+        if let Some(b) = base {
+            lifi_client.set_base_url(b);
+        }
+        let lifi_name = lifi_client.info().name;
+        reg.register_bridge_builder("lifi", &lifi_name, Box::new(lifi_client));
+
+        // Known-but-quote-only bridge provider (registered quote provider with no
+        // `BridgeExecutionProvider` implementation in Go).
+        reg.register_known_bridge_provider("bungee");
+        reg
+    }
+
     /// Open the sqlite cache store for `command_path`, or `None` when the path
     /// bypasses the cache (metadata/execution) or caching is disabled.
     ///
