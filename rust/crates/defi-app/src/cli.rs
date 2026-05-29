@@ -634,6 +634,15 @@ mod tests {
         // submit/status), NOT the `Unsupported` not-yet-implemented stub, so they
         // are route-verified by parse + command_path above and exercised end-to-end
         // by their own module tests.
+        // The rewards execution verbs are likewise fully wired (execution unit
+        // "rewards-plan" + "rewards-submit"): `rewards <verb> plan` resolves
+        // identity / builds + persists the Aave action, and `rewards <verb> submit`
+        // / `rewards <verb> status` operate over the persisted action store. With
+        // the bare argv used here they return a typed `Usage` error (missing
+        // identity for plan; missing `--action-id` for submit/status), NOT the
+        // `Unsupported` not-yet-implemented stub, so they are route-verified by
+        // parse + command_path above and exercised end-to-end by their own module
+        // tests.
         if path == "approvals plan"
             || path == "approvals submit"
             || path == "approvals status"
@@ -649,7 +658,8 @@ mod tests {
             || path.starts_with("lend repay ")
             || path.starts_with("yield deposit ")
             || path.starts_with("yield withdraw ")
-            || matches!(path, "rewards claim plan" | "rewards compound plan")
+            || path.starts_with("rewards claim ")
+            || path.starts_with("rewards compound ")
         {
             return false;
         }

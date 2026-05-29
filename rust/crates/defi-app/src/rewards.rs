@@ -243,6 +243,11 @@ pub mod cli {
     use crate::ctx::AppCtx;
     use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
     use crate::execident::{apply_execution_identity_to_action, resolve_execution_identity};
+    use crate::execsubmit::{
+        execute_resolved, parse_execute_options, presign_validate_action,
+        resolve_action_execution_backend, validate_execution_sender, ExecuteOptionInputs,
+        SubmitExecutionInputs,
+    };
 
     /// `rewards` subcommands: the two execution verbs.
     #[derive(Subcommand, Debug)]
@@ -397,20 +402,16 @@ pub mod cli {
     pub async fn handle(ctx: &AppCtx, cmd: RewardsCmd) -> Result<Envelope, Error> {
         match cmd {
             RewardsCmd::Claim(ClaimVerbCmd::Plan(args)) => handle_claim_plan(ctx, args).await,
-            RewardsCmd::Claim(ClaimVerbCmd::Submit(_)) => {
-                Err(AppCtx::unimplemented("rewards claim submit", "WS4"))
-            }
-            RewardsCmd::Claim(ClaimVerbCmd::Status(_)) => {
-                Err(AppCtx::unimplemented("rewards claim status", "WS4"))
-            }
+            RewardsCmd::Claim(ClaimVerbCmd::Submit(args)) => handle_claim_submit(ctx, args).await,
+            RewardsCmd::Claim(ClaimVerbCmd::Status(args)) => handle_claim_status(ctx, args).await,
             RewardsCmd::Compound(CompoundVerbCmd::Plan(args)) => {
                 handle_compound_plan(ctx, args).await
             }
-            RewardsCmd::Compound(CompoundVerbCmd::Submit(_)) => {
-                Err(AppCtx::unimplemented("rewards compound submit", "WS4"))
+            RewardsCmd::Compound(CompoundVerbCmd::Submit(args)) => {
+                handle_compound_submit(ctx, args).await
             }
-            RewardsCmd::Compound(CompoundVerbCmd::Status(_)) => {
-                Err(AppCtx::unimplemented("rewards compound status", "WS4"))
+            RewardsCmd::Compound(CompoundVerbCmd::Status(args)) => {
+                handle_compound_status(ctx, args).await
             }
         }
     }
@@ -578,6 +579,183 @@ pub mod cli {
         let mut env = ctx.metadata_envelope("rewards compound plan", data, providers);
         env.warnings = identity.warnings;
         Ok(env)
+    }
+
+    /// Handle `rewards claim submit` (Go `submitCmd.RunE` in
+    /// `newRewardsClaimCommand`).
+    ///
+    /// Structurally identical to `approvals submit` (the same shared `execsubmit`
+    /// plumbing: action-id resolve → store load → intent gate → already-completed
+    /// short-circuit → backend/signer resolve → sender match → execute-option
+    /// parse → bounded-approval pre-sign guardrail → broadcast), with the
+    /// `claim_rewards`-only intent gate ([`super::ensure_rewards_claim_intent`]).
+    /// A `claim` step is never an `approval`, so the bounded-approval guardrail is
+    /// a no-op here, but the call mirrors the shared path and the engine's per-step
+    /// policy contract.
+    async fn handle_claim_submit(ctx: &AppCtx, args: SubmitArgs) -> Result<Envelope, Error> {
+        submit_rewards_action(ctx, args, "rewards claim submit", RewardsKind::Claim).await
+    }
+
+    /// Handle `rewards compound submit` (Go `submitCmd.RunE` in
+    /// `newRewardsCompoundCommand`).
+    ///
+    /// Same shared `execsubmit` plumbing as [`handle_claim_submit`] with the
+    /// `compound_rewards`-only intent gate
+    /// ([`super::ensure_rewards_compound_intent`]). Compound is the only multi-step
+    /// rewards action (`[claim, approval, lend_call]`), so the `approval` step IS
+    /// subject to the bounded-approval pre-sign guardrail
+    /// ([`crate::execsubmit::presign_validate_action`]): an inflated approval
+    /// without `--allow-max-approval` surfaces the documented override hint.
+    async fn handle_compound_submit(ctx: &AppCtx, args: SubmitArgs) -> Result<Envelope, Error> {
+        submit_rewards_action(ctx, args, "rewards compound submit", RewardsKind::Compound).await
+    }
+
+    /// Handle `rewards claim status` (Go `statusCmd.RunE` in
+    /// `newRewardsClaimCommand`): a pure read over the persisted action store.
+    async fn handle_claim_status(ctx: &AppCtx, args: StatusArgs) -> Result<Envelope, Error> {
+        status_rewards_action(ctx, args, "rewards claim status", RewardsKind::Claim).await
+    }
+
+    /// Handle `rewards compound status` (Go `statusCmd.RunE` in
+    /// `newRewardsCompoundCommand`): a pure read over the persisted action store.
+    async fn handle_compound_status(ctx: &AppCtx, args: StatusArgs) -> Result<Envelope, Error> {
+        status_rewards_action(ctx, args, "rewards compound status", RewardsKind::Compound).await
+    }
+
+    /// Which rewards verb a submit/status invocation targets (selects the
+    /// persisted-intent gate).
+    #[derive(Clone, Copy)]
+    enum RewardsKind {
+        Claim,
+        Compound,
+    }
+
+    impl RewardsKind {
+        /// Gate the persisted action's intent for this verb (claim → only
+        /// `claim_rewards`; compound → only `compound_rewards`).
+        fn ensure_intent(self, intent_type: &str) -> Result<(), Error> {
+            match self {
+                RewardsKind::Claim => super::ensure_rewards_claim_intent(intent_type),
+                RewardsKind::Compound => super::ensure_rewards_compound_intent(intent_type),
+            }
+        }
+    }
+
+    /// Shared `rewards {claim,compound} submit` flow (Go `submitCmd.RunE`).
+    ///
+    /// Flow parity with the Go runner:
+    /// 1. resolve + validate the `--action-id`;
+    /// 2. load the persisted action (not-found → usage `load action`);
+    /// 3. gate the intent (claim → `claim_rewards`; compound → `compound_rewards`);
+    /// 4. short-circuit an already-`completed` action (success + warning, no
+    ///    re-broadcast);
+    /// 5. resolve the execution backend from the persisted `execution_backend` +
+    ///    the submit signer flags (legacy-local / OWS guards);
+    /// 6. validate the resolved signer against `--from-address` + the planned
+    ///    sender ([`Code::Signer`] on mismatch);
+    /// 7. parse the execute options (`--gas-multiplier > 1`, durations, fee flags,
+    ///    the approval/provider-tx guard flags);
+    /// 8. run the bounded-approval pre-sign guardrail WITH the action context (an
+    ///    inflated `approval` step without `--allow-max-approval` →
+    ///    [`Code::ActionPlan`]; a no-op for a single `claim` step);
+    /// 9. broadcast through the engine (persisting each transition) and emit the
+    ///    terminal-state envelope (cache bypassed for execution paths).
+    async fn submit_rewards_action(
+        ctx: &AppCtx,
+        args: SubmitArgs,
+        command: &str,
+        kind: RewardsKind,
+    ) -> Result<Envelope, Error> {
+        // 1. Resolve + validate the action id.
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+
+        // 2. Load the persisted action (not-found → usage `load action`).
+        let store = ctx.open_action_store()?;
+        let mut action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+
+        // 3. Intent gate (claim-only / compound-only).
+        kind.ensure_intent(&action.intent_type)?;
+
+        // 4. Already-completed short-circuit (no re-broadcast).
+        if action.status == defi_execution::action::ActionStatus::Completed {
+            let data = serde_json::to_value(&action)
+                .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+            let mut env = ctx.metadata_envelope(command, data, Vec::<ProviderStatus>::new());
+            env.warnings = vec!["action already completed".to_string()];
+            return Ok(env);
+        }
+
+        // 5. Resolve the execution backend + signer (legacy-local / OWS guards).
+        let resolved = resolve_action_execution_backend(
+            &action,
+            SubmitExecutionInputs {
+                signer: &args.signer,
+                key_source: &args.key_source,
+                private_key: args.private_key.as_deref().unwrap_or_default(),
+                from_address: args.from_address.as_deref().unwrap_or_default(),
+            },
+        )?;
+
+        // 6. Validate the resolved sender vs --from-address + planned sender.
+        validate_execution_sender(
+            &action,
+            args.from_address.as_deref().unwrap_or_default(),
+            &resolved.sender,
+        )?;
+
+        // 7. Parse the execute options (durations, gas multiplier, fee flags, the
+        //    approval/provider-tx guard flags).
+        let opts = parse_execute_options(&ExecuteOptionInputs {
+            simulate: args.simulate,
+            poll_interval: &args.poll_interval,
+            step_timeout: &args.step_timeout,
+            gas_multiplier: args.gas_multiplier,
+            max_fee_gwei: args.max_fee_gwei.as_deref().unwrap_or_default(),
+            max_priority_fee_gwei: args.max_priority_fee_gwei.as_deref().unwrap_or_default(),
+            allow_max_approval: args.allow_max_approval,
+            unsafe_provider_tx: args.unsafe_provider_tx,
+            fee_token: args.fee_token.as_deref().unwrap_or_default(),
+        })?;
+
+        // 8. Bounded-approval pre-sign guardrail (run with action context so an
+        //    inflated compound `approval` step yields the documented
+        //    `allow-max-approval` hint; a no-op for a single `claim` step).
+        presign_validate_action(&action, &opts)?;
+
+        // 9. Broadcast through the engine (persisting each transition), then emit
+        //    the terminal-state envelope (cache bypassed for execution paths).
+        execute_resolved(&store, &mut action, resolved, opts).await?;
+
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope(command, data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Shared `rewards {claim,compound} status` flow (Go `statusCmd.RunE`).
+    ///
+    /// A pure read over the persisted action store: resolve + validate the
+    /// `--action-id`, load the action (not-found → usage `load action`), gate the
+    /// intent (claim-only / compound-only), and emit the action verbatim (cache
+    /// bypassed for execution paths, spec §2.5).
+    async fn status_rewards_action(
+        ctx: &AppCtx,
+        args: StatusArgs,
+        command: &str,
+        kind: RewardsKind,
+    ) -> Result<Envelope, Error> {
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        kind.ensure_intent(&action.intent_type)?;
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope(command, data, Vec::<ProviderStatus>::new()))
     }
 
     /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
@@ -2481,5 +2659,1536 @@ mod compound_app_tests {
             "got: {err}"
         );
         assert!(no_actions_persisted(tmp.path()));
+    }
+}
+
+#[cfg(test)]
+mod claim_submit_app_tests {
+    //! # Success criteria — `rewards claim submit` app-level handler (WS4,
+    //! exec-submit)
+    //!
+    //! Go oracle: `internal/app/rewards_command.go` `submitCmd.RunE` inside
+    //! `newRewardsClaimCommand` + `internal/app/execution_helpers.go`
+    //! (`resolveActionExecutionBackend` / `validateExecutionSender` /
+    //! `executeActionWithTimeout`) + `internal/app/runner.go`
+    //! (`resolveActionID` / `newExecutionSigner` / `parseExecuteOptions`). These
+    //! tests drive [`cli::handle`] (the real binary dispatch entry point) for
+    //! `rewards claim submit` ONLY, asserting the full machine contract the Go
+    //! runner emits via `emitSuccess(...)` / `renderError(...)`.
+    //!
+    //! ## Determinism / offline strategy (no live chains)
+    //!
+    //! The reused [`defi_execution`] engine
+    //! ([`defi_execution::evm_executor::execute_action`]) is the contract source
+    //! of truth, and these tests reuse it exactly as its own suite does:
+    //!
+    //! * **Pre-broadcast guards** (action-id, store load, intent gate,
+    //!   already-completed short-circuit, backend selection, sender match,
+    //!   execute-option validation) all fire BEFORE any network and are fully
+    //!   deterministic.
+    //! * **Local-signer broadcast/completion** is exercised OFFLINE through the
+    //!   `--private-key` override (the deterministic in-args secp256k1 key whose
+    //!   address is pinned in `defi-evm`): in this build the policed EVM step path
+    //!   runs the pre-sign policy then marks the step `confirmed` and the action
+    //!   `completed` WITHOUT a network call (matching the engine's own
+    //!   `execute_action` tests). The full RPC-backed sign+broadcast
+    //!   (chain-id/gas/nonce/`sendRawTransaction`/receipt) is `wiremock`-RPC
+    //!   integration territory (WS5) and is recorded as a deferral — NOT asserted
+    //!   here.
+    //! * **The single `claim` step is NOT an `approval`/`bridge` step**, so the
+    //!   bounded-approval pre-sign guardrail and the bridge canonical-target
+    //!   guardrail do NOT apply to `rewards claim` (they are owned by
+    //!   `approvals`/`bridge` submit + the `defi-execution::policy` /
+    //!   `verify_bridge_settlement` suites and are intentionally NOT re-asserted
+    //!   here). A claim submit therefore completes offline WITHOUT
+    //!   `--allow-max-approval`.
+    //! * **OWS `--wallet` backend** resolves through the OWS vault/CLI (WS4b e2e),
+    //!   so only its OFFLINE guard rejections are asserted (missing persisted
+    //!   `wallet_id`; legacy signer flags on a wallet-backed action). The OWS
+    //!   happy-path broadcast is a WS4b deferral.
+    //! * **Bridge destination-settlement waits do NOT apply to `rewards`**: a
+    //!   `claim_rewards` action never carries a `bridge_send` step, so no
+    //!   settlement poll is reachable. (That transition is owned by `bridge
+    //!   submit/status` + `defi-execution::verify_bridge_settlement` and is NOT
+    //!   re-asserted here.)
+    //!
+    //! Each criterion below is a FAILING test until `cli::handle` routes
+    //! `Claim(Submit)` to a real handler (today it returns the
+    //! `AppCtx::unimplemented` stub).
+    //!
+    //! Criteria:
+    //!
+    //! 1. **Submit success envelope (legacy local key) + completion.** Given a
+    //!    persisted `claim_rewards` action whose `from_address` matches the
+    //!    deterministic `--private-key` signer, `rewards claim submit` returns
+    //!    `Ok(Envelope)` (exit 0) with: `version == "v1"`, `success == true`,
+    //!    `error == None`, `meta.partial == false`, `meta.command == "rewards
+    //!    claim submit"`, and `meta.cache == {status:"bypass", age_ms:0,
+    //!    stale:false}` (execution paths bypass the cache, spec §2.5). The
+    //!    serialized `data` Action has `status == "completed"` and its single
+    //!    `claim` step has `status == "confirmed"`. (Go `emitSuccess(..., action,
+    //!    nil, cacheMetaBypass(), nil, false)` after `executeActionWithTimeout`.)
+    //!
+    //! 2. **Submit persists the terminal state.** After a successful submit, the
+    //!    action re-loaded from a freshly opened [`defi_execution::store::Store`]
+    //!    has `status == "completed"`. (Go `ExecuteAction` persists each
+    //!    transition through `s.actionStore`.)
+    //!
+    //! 3. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2)
+    //!    (`action id is required (--action-id)`); a malformed id (`"act_xyz"`) →
+    //!    [`Code::Usage`] (exit 2) (`action id must match act_<32 hex chars>`).
+    //!    (Go `resolveActionID`.)
+    //!
+    //! 4. **Load failure for a non-existent action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`).
+    //!
+    //! 5. **Intent gate.** Submitting a persisted NON-`claim_rewards` action
+    //!    (e.g. a `compound_rewards` action) through `rewards claim submit` →
+    //!    [`Code::Usage`] (exit 2) with `action is not a rewards claim intent`.
+    //!    (Go `submitCmd` IntentType guard; mirrors
+    //!    [`super::ensure_rewards_claim_intent`].)
+    //!
+    //! 6. **Already-completed short-circuit.** Submitting an action already in
+    //!    `status == "completed"` returns `Ok(Envelope)` (exit 0) WITHOUT
+    //!    re-broadcast, carrying the warning `action already completed` and the
+    //!    unchanged completed action in `data`. (Go `if action.Status ==
+    //!    ActionStatusCompleted { return s.emitSuccess(..., []string{"action
+    //!    already completed"}, ...) }`.)
+    //!
+    //! 7. **Legacy backend rejects a non-local signer.** A `legacy_local` action
+    //!    submitted with `--signer tempo` → [`Code::Usage`] (exit 2)
+    //!    (`legacy actions only support --signer local`). (Go
+    //!    `resolveActionExecutionBackend` legacy branch.)
+    //!
+    //! 8. **OWS action missing persisted wallet_id.** A wallet-backed
+    //!    (`execution_backend == "ows"`) action with an empty `wallet_id` →
+    //!    [`Code::Usage`] (exit 2) (`wallet-backed action is missing persisted
+    //!    wallet_id`). (Go OWS branch guard — reachable OFFLINE because the guard
+    //!    precedes any OWS resolve.)
+    //!
+    //! 9. **OWS action rejects legacy signer flags.** A wallet-backed action with
+    //!    a persisted `wallet_id` submitted with an explicit legacy signer flag
+    //!    (`--private-key`) → [`Code::Usage`] (exit 2) (`wallet-backed actions do
+    //!    not accept legacy signer flags`). (Go `usesLegacySignerFlags` guard.)
+    //!
+    //! 10. **Sender mismatch (`--from-address`).** A `legacy_local` action whose
+    //!     persisted `from_address` matches the signer, submitted with
+    //!     `--from-address` == a DIFFERENT addr → [`Code::Signer`] (exit 24). (Go
+    //!     `validateExecutionSender`: `signer address does not match
+    //!     --from-address`.)
+    //!
+    //! 11. **Sender mismatch (planned action sender vs signer).** A `legacy_local`
+    //!     action whose persisted `from_address` does NOT match the
+    //!     `--private-key` signer (and no `--from-address`) → [`Code::Signer`]
+    //!     (exit 24). (Go `validateExecutionSender` /
+    //!     `validate_persisted_action_sender`.)
+    //!
+    //! 12. **Execute-option validation.** `--gas-multiplier 1.0` → [`Code::Usage`]
+    //!     (exit 2) (`--gas-multiplier must be > 1`); `--poll-interval "0s"` →
+    //!     [`Code::Usage`] (exit 2); `--step-timeout "nope"` → [`Code::Usage`]
+    //!     (exit 2). (Go `parseExecuteOptions`.)
+    //!
+    //! 13. **Signer init failure (no key).** A `legacy_local` action submitted
+    //!     with `--signer local` and NO resolvable key (`--key-source env` with
+    //!     the env unset, no `--private-key`) → [`Code::Signer`] (exit 24). (Go
+    //!     `newExecutionSigner` → `initialize local signer`.)
+    //!
+    //! 14. **Error paths do not mutate terminal status.** On every rejected submit
+    //!     (criteria 3–13, error cases) the persisted action — when one exists —
+    //!     remains in its pre-submit `status == "planned"` (the handler returns
+    //!     the typed `Err(Error)`; the runner renders the full error envelope to
+    //!     stderr, spec §2.1).
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit / deferred):
+    //!   * the full RPC-backed sign+broadcast — WS5 `wiremock`-RPC integration
+    //!     deferral;
+    //!   * the OWS happy-path resolve + send-hook broadcast — WS4b e2e deferral;
+    //!   * Tempo (type 0x76) submit — Tempo is a separate execution path
+    //!     (`--signer tempo`), byte-parity is WS4a, and `rewards` planning is
+    //!     OWS-first standard-EVM (no Tempo identity branch);
+    //!   * bridge destination-settlement waits — `bridge submit/status` unit +
+    //!     `defi-execution::verify_bridge_settlement` (not reachable for
+    //!     `rewards`);
+    //!   * the bounded-approval ABI decode internals — `defi-execution::policy`
+    //!     RED suite (and not reachable from a single `claim` step);
+    //!   * the EIP-1559 signing byte layout — `defi-evm` signer goldens;
+    //!   * `--input-json`/`--input-file` precedence on submit — structured-input
+    //!     unit (the plan-side merge is already covered in `app_tests`);
+    //!   * clap/cobra flag defaults + schema auth metadata — schema/CLI suites.
+
+    use super::cli::{handle, ClaimPlanArgs, ClaimVerbCmd, RewardsCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, SubmitArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use wiremock::MockServer;
+
+    // --- contract constants ------------------------------------------------
+
+    /// The deterministic secp256k1 test key (`internal/execution/signer`
+    /// `testPrivateKey`); shared with the `defi-evm` / `defi-execution` suites.
+    const TEST_KEY: &str = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1";
+    /// The EIP-55 address `defi-evm` derives for [`TEST_KEY`] (pinned in
+    /// `defi-evm::signer` against the go-ethereum oracle). The persisted action's
+    /// `from_address` must equal this for the local-signer submit to pass the
+    /// sender-match guard.
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+    /// A DIFFERENT canonical address — used to force the sender-mismatch guards.
+    const OTHER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    /// An Aave incentives "asset" (aToken/debtToken source) for planned claims.
+    const ASSET_A: &str = "0x1111111111111111111111111111111111111111";
+    /// The reward token claimed from the incentives controller.
+    const REWARD: &str = "0x3333333333333333333333333333333333333333";
+    /// The incentives controller (`--controller-address` override) —
+    /// short-circuits the on-chain `getAddress(INCENTIVES_CONTROLLER)` lookup.
+    const CONTROLLER: &str = "0x4444444444444444444444444444444444444444";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir`, cache disabled.
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `SubmitArgs` carrying the clap flag DEFAULTS (the `#[derive(Default)]`
+    /// zero values would NOT match the parsed defaults, so they are stamped
+    /// here): `signer=local`, `key_source=auto`, `gas_multiplier=1.2`,
+    /// `poll_interval=2s`, `step_timeout=2m`, `simulate=true`, plus the
+    /// deterministic `--private-key`. Callers mutate per test.
+    fn base_submit_args(action_id: &str) -> SubmitArgs {
+        SubmitArgs {
+            action_id: Some(action_id.to_string()),
+            from_address: None,
+            allow_max_approval: false,
+            unsafe_provider_tx: false,
+            signer: "local".to_string(),
+            key_source: "auto".to_string(),
+            private_key: Some(TEST_KEY.to_string()),
+            fee_token: None,
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+            simulate: true,
+            poll_interval: "2s".to_string(),
+            step_timeout: "2m".to_string(),
+            input: InputFlags::default(),
+        }
+    }
+
+    /// A non-dialed RPC sentinel for the planned step (the policed EVM step path
+    /// does not reach the network in this build; this keeps the action
+    /// well-formed). The controller override avoids any plan-time eth_call.
+    const DEAD_RPC: &str = "http://127.0.0.1:0";
+
+    /// Plan + persist a canonical `claim_rewards` action against `dir`, returning
+    /// its `action_id`. `from_addr` becomes the action's `from_address`. Plans
+    /// through the real `cli::handle` plan path so the persisted shape is
+    /// identical to production. `--controller-address` is set so no plan-time
+    /// eth_call is needed (a parseable wiremock URI is still required by connect).
+    async fn plan_claim(dir: &Path, from_addr: &str) -> String {
+        // A wiremock server only to provide a parseable, connectable URI for the
+        // plan path (no eth_call is made with the controller override).
+        let rpc = MockServer::start().await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = ClaimPlanArgs {
+            chain: Some("1".to_string()),
+            assets: vec![ASSET_A.to_string()],
+            reward_token: Some(REWARD.to_string()),
+            amount: Some("1000000".to_string()),
+            recipient: None,
+            controller_address: Some(CONTROLLER.to_string()),
+            pool_address_provider: None,
+            provider: Some("aave".to_string()),
+            rpc_url: Some(rpc.uri()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(from_addr.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, RewardsCmd::Claim(ClaimVerbCmd::Plan(args)))
+            .await
+            .expect("plan a claim_rewards action for the submit fixture");
+        let action_id = env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+        // Re-point the persisted step rpc_url at a non-dialed sentinel so the
+        // offline policed-EVM submit path is robust to the wiremock server
+        // shutting down.
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open store");
+        let mut action = store.get(&action_id).expect("load");
+        for step in &mut action.steps {
+            step.rpc_url = DEAD_RPC.to_string();
+        }
+        store.save(&action).expect("persist sentinel rpc_url");
+        action_id
+    }
+
+    /// Persist `action` directly (used for fixtures the plan path cannot build,
+    /// e.g. a `compound_rewards`-intent or an OWS-backed action).
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    /// Re-load a persisted action's `status` string from a freshly opened store.
+    fn persisted_status(dir: &Path, action_id: &str) -> String {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let action = store.get(action_id).expect("action retrievable");
+        serde_json::to_value(action.status)
+            .expect("status serializes")
+            .as_str()
+            .expect("status is a string")
+            .to_string()
+    }
+
+    async fn run_submit(dir: &Path, args: SubmitArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, RewardsCmd::Claim(ClaimVerbCmd::Submit(args))).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn signer_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("submit envelope carries `data`")
+    }
+
+    // --- 1, 2. submit success + completion + persistence -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_local_completes_and_emits_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+
+        // No --allow-max-approval needed: the single `claim` step is not an
+        // approval step, so the bounded-approval guardrail does not apply.
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("legacy-local claim submit should complete offline");
+
+        // Envelope contract.
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "rewards claim submit");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // Completed action in data, single confirmed claim step.
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 1, "claim is a single-step action");
+        assert_eq!(steps[0]["type"], Value::from("claim"));
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+
+        // Persisted terminal state (criterion 2).
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- 3. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_submit_args("");
+        args.action_id = Some(String::new());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_xyz");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 4. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_0123456789abcdef0123456789abcdef");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 5. intent gate ----------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_claim_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A persisted COMPOUND-intent action submitted through claim submit.
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "compound_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let args = base_submit_args(&action.action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-claim intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action is not a rewards claim intent"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+    }
+
+    // --- 6. already-completed short-circuit --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_already_completed_short_circuits_with_warning() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            action.status = ActionStatus::Completed;
+            store.save(&action).expect("persist completed");
+        }
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("already-completed submit returns success without re-broadcast");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "rewards claim submit");
+        assert!(
+            env.warnings.iter().any(|w| w == "action already completed"),
+            "expected `action already completed` warning, got {:?}",
+            env.warnings
+        );
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    // --- 7. legacy backend rejects a non-local signer ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_action_rejects_tempo_signer() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = None;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("legacy action with --signer tempo rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("legacy actions only support --signer local"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 8, 9. OWS backend offline guards ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_missing_wallet_id_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "claim_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = String::new();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        // No legacy signer flags (those would trip a different guard first).
+        args.private_key = None;
+        args.signer = "local".to_string();
+        args.key_source = "auto".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS action without wallet_id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed action is missing persisted wallet_id"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_rejects_legacy_signer_flags() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "claim_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = "wallet-123".to_string();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        args.private_key = Some(TEST_KEY.to_string()); // explicit legacy flag
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS action with legacy signer flags rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed actions do not accept legacy signer flags"),
+            "got: {err}"
+        );
+    }
+
+    // --- 10, 11. sender mismatch -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_from_address_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Action sender matches the signer, but --from-address is a DIFFERENT addr.
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.from_address = Some(OTHER_ADDR.to_string());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("--from-address mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        // Signer maps to exit 24 (spec §2.2).
+        assert_eq!(signer_exit(&err), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_planned_sender_signer_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Planned action sender is OTHER_ADDR but the local signer is SIGNER_ADDR;
+        // no --from-address supplied.
+        let action_id = plan_claim(tmp.path(), OTHER_ADDR).await;
+        let args = base_submit_args(&action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("planned-sender/signer mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(signer_exit(&err), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 12. execute-option validation -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_gas_multiplier_not_greater_than_one() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.gas_multiplier = 1.0;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("gas-multiplier <= 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("gas-multiplier"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_positive_poll_interval() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.poll_interval = "0s".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-positive poll-interval rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_unparseable_step_timeout() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.step_timeout = "nope".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unparseable step-timeout rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 13. signer init failure (no key) ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_signer_init_failure_is_signer_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        // Force an unresolvable key: source=env (isolates the env hex var) with no
+        // --private-key override. DEFI_PRIVATE_KEY is not set in this test.
+        args.private_key = None;
+        args.key_source = "env".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("signer init with no key must fail");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(signer_exit(&err), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+}
+
+#[cfg(test)]
+mod compound_submit_app_tests {
+    //! # Success criteria — `rewards compound submit` app-level handler (WS4,
+    //! exec-submit)
+    //!
+    //! Go oracle: `internal/app/rewards_command.go` `submitCmd.RunE` inside
+    //! `newRewardsCompoundCommand`. These tests drive [`cli::handle`] for
+    //! `rewards compound submit` ONLY. Compound is the only MULTI-step rewards
+    //! action: `[claim, approval, lend_call]` (the `approval` step is dropped when
+    //! the on-chain allowance already covers the supply). Unlike `claim`, the
+    //! `approval` step IS subject to the bounded-approval pre-sign guardrail, so
+    //! the inflated-approval rejection + `--allow-max-approval` opt-in ARE
+    //! asserted here.
+    //!
+    //! Same offline determinism strategy as
+    //! [`super::claim_submit_app_tests`]: the policed EVM step path runs the
+    //! pre-sign policy then marks each step `confirmed` and the action `completed`
+    //! WITHOUT a network call. The full RPC-backed broadcast is a WS5 deferral;
+    //! the OWS happy path is a WS4b deferral; bridge settlement waits do NOT apply
+    //! (a `compound_rewards` action carries no `bridge_send` step).
+    //!
+    //! Criteria (each FAILING until `cli::handle` routes `Compound(Submit)` to a
+    //! real handler — today the stub returns `AppCtx::unimplemented`):
+    //!
+    //! 1. **Submit success envelope (legacy local key) + completion.** A persisted
+    //!    `compound_rewards` action (allowance sufficient → `[claim, lend_call]`)
+    //!    whose `from_address` matches the deterministic signer returns
+    //!    `Ok(Envelope)` (exit 0) with `meta.command == "rewards compound
+    //!    submit"`, `meta.cache == {status:"bypass", age_ms:0, stale:false}`,
+    //!    `data.status == "completed"`, and EVERY step `status == "confirmed"`.
+    //!
+    //! 2. **Submit persists the terminal state.** The re-loaded action has
+    //!    `status == "completed"`.
+    //!
+    //! 3. **Bounded-approval guardrail (pre-sign).** A persisted compound whose
+    //!    `approval` step calldata approves MORE than the planned `input_amount`,
+    //!    submitted WITHOUT `--allow-max-approval`, → [`Code::ActionPlan`]
+    //!    (exit 20) with an error mentioning `allow-max-approval`. The same action
+    //!    with `--allow-max-approval` is accepted (exit 0, completed). (AGENTS.md
+    //!    bounded-approval pre-sign check; `defi_execution::policy`
+    //!    `validate_approval_policy`.)
+    //!
+    //! 4. **Intent gate.** Submitting a persisted NON-`compound_rewards` action
+    //!    (e.g. a `claim_rewards` action) through `rewards compound submit` →
+    //!    [`Code::Usage`] (exit 2) with `action is not a rewards compound intent`.
+    //!    (Mirrors [`super::ensure_rewards_compound_intent`].)
+    //!
+    //! 5. **Action-id validation + unknown-action load failure.** `--action-id ""`
+    //!    / a malformed id / a well-formed unknown id → [`Code::Usage`] (exit 2).
+    //!
+    //! 6. **Already-completed short-circuit.** An action already `completed`
+    //!    returns success WITHOUT re-broadcast + the `action already completed`
+    //!    warning.
+    //!
+    //! 7. **Backend / sender / option guards** (parity with claim submit, asserted
+    //!    on the compound path): legacy `--signer tempo` rejection;
+    //!    `--from-address` mismatch → [`Code::Signer`] (exit 24); `--gas-multiplier
+    //!    1.0` → [`Code::Usage`] (exit 2).
+    //!
+    //! 8. **Error paths do not mutate terminal status.** Every rejected submit
+    //!    leaves a persisted action in `status == "planned"`.
+    //!
+    //! SKIPPED: identical deferrals to [`super::claim_submit_app_tests`] (full
+    //!   RPC broadcast WS5; OWS happy path WS4b; Tempo WS4a; bridge settlement;
+    //!   EIP-1559 byte layout; structured-input precedence; flag defaults). The
+    //!   OWS/wallet offline guards are already asserted on the claim path (the
+    //!   `resolve_action_execution_backend` helper is group-independent) and are
+    //!   not duplicated here.
+
+    use super::cli::{handle, CompoundPlanArgs, CompoundVerbCmd, RewardsCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, SubmitArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants ------------------------------------------------
+
+    const TEST_KEY: &str = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1";
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+    const OTHER_ADDR: &str = "0x2222222222222222222222222222222222222222";
+    const ASSET_A: &str = "0x1111111111111111111111111111111111111111";
+    const REWARD: &str = "0x3333333333333333333333333333333333333333";
+    const CONTROLLER: &str = "0x4444444444444444444444444444444444444444";
+    /// Aave pool (`--pool-address` override) — short-circuits the `getPool()`
+    /// lookup, so the only plan-time eth_call is the allowance check.
+    const POOL: &str = "0x00000000000000000000000000000000000000cc";
+    const DEAD_RPC: &str = "http://127.0.0.1:0";
+
+    // --- harness -----------------------------------------------------------
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    fn base_submit_args(action_id: &str) -> SubmitArgs {
+        SubmitArgs {
+            action_id: Some(action_id.to_string()),
+            from_address: None,
+            allow_max_approval: false,
+            unsafe_provider_tx: false,
+            signer: "local".to_string(),
+            key_source: "auto".to_string(),
+            private_key: Some(TEST_KEY.to_string()),
+            fee_token: None,
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+            simulate: true,
+            poll_interval: "2s".to_string(),
+            step_timeout: "2m".to_string(),
+            input: InputFlags::default(),
+        }
+    }
+
+    // --- wiremock JSON-RPC: every eth_call returns a fixed uint word --------
+
+    struct EchoIdResponder {
+        result: String,
+    }
+
+    impl Respond for EchoIdResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let id = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or_else(|| Value::from(1));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.result,
+            }))
+        }
+    }
+
+    fn uint_word(v: u128) -> String {
+        use alloy::primitives::U256;
+        format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()))
+    }
+
+    /// A mock JSON-RPC endpoint answering every `eth_call` with `allowance` (the
+    /// compound supply approval check). `--controller-address` + `--pool-address`
+    /// short-circuit the address-returning lookups.
+    async fn allowance_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(EchoIdResponder {
+                result: uint_word(allowance),
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Plan + persist a canonical `compound_rewards` action against `dir`,
+    /// returning its `action_id`. `allowance` controls whether the persisted plan
+    /// carries an `approval` step (insufficient → yes). After planning, the
+    /// persisted step `rpc_url`s are re-pointed at a non-dialed sentinel so the
+    /// offline policed-EVM submit path is robust to the wiremock shutdown.
+    async fn plan_compound(dir: &Path, from_addr: &str, allowance: u128) -> String {
+        let rpc = allowance_rpc(allowance).await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = CompoundPlanArgs {
+            chain: Some("1".to_string()),
+            assets: vec![ASSET_A.to_string()],
+            reward_token: Some(REWARD.to_string()),
+            amount: Some("1000000".to_string()),
+            recipient: None,
+            on_behalf_of: None,
+            controller_address: Some(CONTROLLER.to_string()),
+            pool_address: Some(POOL.to_string()),
+            pool_address_provider: None,
+            provider: Some("aave".to_string()),
+            rpc_url: Some(rpc.uri()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(from_addr.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, RewardsCmd::Compound(CompoundVerbCmd::Plan(args)))
+            .await
+            .expect("plan a compound_rewards action for the submit fixture");
+        let action_id = env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open store");
+        let mut action = store.get(&action_id).expect("load");
+        for step in &mut action.steps {
+            step.rpc_url = DEAD_RPC.to_string();
+        }
+        store.save(&action).expect("persist sentinel rpc_url");
+        action_id
+    }
+
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    fn persisted_status(dir: &Path, action_id: &str) -> String {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let action = store.get(action_id).expect("action retrievable");
+        serde_json::to_value(action.status)
+            .expect("status serializes")
+            .as_str()
+            .expect("status is a string")
+            .to_string()
+    }
+
+    async fn run_submit(dir: &Path, args: SubmitArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, RewardsCmd::Compound(CompoundVerbCmd::Submit(args))).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("submit envelope carries `data`")
+    }
+
+    // --- 1, 2. submit success + completion + persistence -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_local_completes_and_emits_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Sufficient allowance => [claim, lend_call] (no approval step), so no
+        // bounded-approval opt-in is needed for the happy path.
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 10_000_000).await;
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("legacy-local compound submit should complete offline");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "rewards compound submit");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert!(!steps.is_empty(), "compound has at least claim + supply");
+        for step in steps {
+            assert_eq!(
+                step["status"],
+                Value::from("confirmed"),
+                "every compound step confirmed offline"
+            );
+        }
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- 3. bounded-approval pre-sign guardrail ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_inflated_approval_without_allow_max() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Insufficient allowance => the plan carries an `approval` step.
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 0).await;
+        // Inflate the persisted approval step's amount ABOVE the planned
+        // input_amount (max uint256), simulating an over-approval the bounded
+        // check must reject without --allow-max-approval.
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            let approval = action
+                .steps
+                .iter_mut()
+                .find(|s| {
+                    serde_json::to_value(s.step_type)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|x| x.to_string()))
+                        .as_deref()
+                        == Some("approval")
+                })
+                .expect("plan carries an approval step with insufficient allowance");
+            // approve(reward, 0xffff...ffff) — max uint256, > input_amount.
+            approval.data = format!(
+                "0x095ea7b3000000000000000000000000{}{}",
+                REWARD.trim_start_matches("0x").to_lowercase(),
+                "f".repeat(64)
+            );
+            store.save(&action).expect("persist inflated approval");
+        }
+
+        let err = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect_err("inflated approval rejected without --allow-max-approval");
+        assert_eq!(err.code, Code::ActionPlan);
+        // ActionPlan maps to exit 20 (spec §2.2).
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 20);
+        assert!(
+            err.to_string().contains("allow-max-approval"),
+            "expected the bounded-approval override hint, got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_inflated_approval_accepted_with_allow_max() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 0).await;
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            let approval = action
+                .steps
+                .iter_mut()
+                .find(|s| {
+                    serde_json::to_value(s.step_type)
+                        .ok()
+                        .and_then(|v| v.as_str().map(|x| x.to_string()))
+                        .as_deref()
+                        == Some("approval")
+                })
+                .expect("plan carries an approval step");
+            approval.data = format!(
+                "0x095ea7b3000000000000000000000000{}{}",
+                REWARD.trim_start_matches("0x").to_lowercase(),
+                "f".repeat(64)
+            );
+            store.save(&action).expect("persist inflated approval");
+        }
+
+        let mut args = base_submit_args(&action_id);
+        args.allow_max_approval = true;
+        let env = run_submit(tmp.path(), args)
+            .await
+            .expect("inflated approval accepted with --allow-max-approval");
+        assert!(env.success);
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    // --- 4. intent gate ----------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_compound_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "claim_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let args = base_submit_args(&action.action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-compound intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action is not a rewards compound intent"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+    }
+
+    // --- 5. action-id validation + unknown-action load failure -------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_submit_args("");
+        args.action_id = Some(String::new());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_nope");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_0123456789abcdef0123456789abcdef");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 6. already-completed short-circuit --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_already_completed_short_circuits_with_warning() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 10_000_000).await;
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            action.status = ActionStatus::Completed;
+            store.save(&action).expect("persist completed");
+        }
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("already-completed submit returns success without re-broadcast");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "rewards compound submit");
+        assert!(
+            env.warnings.iter().any(|w| w == "action already completed"),
+            "expected `action already completed` warning, got {:?}",
+            env.warnings
+        );
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    // --- 7. backend / sender / option guards (compound path) ---------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_action_rejects_tempo_signer() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 10_000_000).await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = None;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("legacy action with --signer tempo rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("legacy actions only support --signer local"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_from_address_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 10_000_000).await;
+        let mut args = base_submit_args(&action_id);
+        args.from_address = Some(OTHER_ADDR.to_string());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("--from-address mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_gas_multiplier_not_greater_than_one() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 10_000_000).await;
+        let mut args = base_submit_args(&action_id);
+        args.gas_multiplier = 1.0;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("gas-multiplier <= 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("gas-multiplier"), "got: {err}");
+    }
+}
+
+#[cfg(test)]
+mod status_app_tests {
+    //! # Success criteria — `rewards {claim,compound} status` app-level handlers
+    //! (WS4, exec-status)
+    //!
+    //! Go oracle: `internal/app/rewards_command.go` `statusCmd.RunE` inside
+    //! `newRewardsClaimCommand` / `newRewardsCompoundCommand`. These tests drive
+    //! [`cli::handle`] for `rewards claim status` and `rewards compound status`.
+    //! Both are pure READS over the persisted action store (no signing, no
+    //! network), so they are fully offline + deterministic. (Bridge
+    //! destination-settlement polling — the only network-backed status transition
+    //! — does NOT apply to `rewards`: claim/compound actions never carry a
+    //! `bridge_send` step. That wait is owned by `bridge status` +
+    //! `defi-execution::verify_bridge_settlement` and is NOT re-asserted here.)
+    //!
+    //! Criteria (each FAILING until `cli::handle` implements rewards status):
+    //!
+    //! 1. **Claim status success envelope reflects the persisted action.** Given a
+    //!    persisted `claim_rewards` action in `status == "planned"`, `rewards claim
+    //!    status --action-id <id>` returns `Ok(Envelope)` (exit 0) with `version
+    //!    == "v1"`, `success == true`, `error == None`, `meta.command == "rewards
+    //!    claim status"`, `meta.cache == {status:"bypass", age_ms:0, stale:false}`
+    //!    (execution paths bypass the cache, spec §2.5), and `data` is the
+    //!    serialized Action with `action_id` == the requested id, `intent_type ==
+    //!    "claim_rewards"`, and `status == "planned"`.
+    //!
+    //! 2. **Claim status reflects lifecycle transitions.** After the persisted
+    //!    action is advanced to `completed` / `running`, `rewards claim status`
+    //!    returns `data.status == "completed"` / `"running"` verbatim (status is a
+    //!    read of the persisted lifecycle, not a re-execution).
+    //!
+    //! 3. **Compound status success envelope.** Given a persisted
+    //!    `compound_rewards` action, `rewards compound status` returns `Ok` with
+    //!    `meta.command == "rewards compound status"`, `data.intent_type ==
+    //!    "compound_rewards"`, and the persisted `status`.
+    //!
+    //! 4. **Action-id validation.** `--action-id ""` / a malformed id → for BOTH
+    //!    claim and compound status → [`Code::Usage`] (exit 2). (Go
+    //!    `resolveActionID`.)
+    //!
+    //! 5. **Load failure for an unknown action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`).
+    //!
+    //! 6. **Intent gate (cross-sibling).** `rewards claim status` on a persisted
+    //!    `compound_rewards` action → [`Code::Usage`] (exit 2) with `action is not
+    //!    a rewards claim intent`; `rewards compound status` on a `claim_rewards`
+    //!    action → [`Code::Usage`] (exit 2) with `action is not a rewards compound
+    //!    intent`. (Go `statusCmd` IntentType guards.)
+    //!
+    //! NON-APPLICABLE boundaries (documented, not tested here — by design):
+    //!   * **Estimate fields** (EIP-1559 native gas for EVM / fee-token for Tempo)
+    //!     are emitted by the `actions estimate` command, NOT by any `rewards`
+    //!     handler. A `claim_rewards` / `compound_rewards` action is estimable as
+    //!     ordinary native-gas (no Tempo branch — rewards is Aave-only standard
+    //!     EVM), but that surface + arithmetic is owned by the `actions` unit and
+    //!     `defi-execution::estimate` (its `single_step_estimate_arithmetic_parity`
+    //!     and `estimate_json_preserves_declaration_order_and_omits_evm_fee_meta`
+    //!     tests). It is intentionally NOT re-asserted through a `rewards` handler.
+    //!   * **Bridge destination-settlement waits** are the only network-backed
+    //!     status transition, and they do NOT apply to `rewards`: claim/compound
+    //!     actions never carry a `bridge_send` step, so no settlement poll is
+    //!     reachable. That wait is owned by `bridge submit/status` +
+    //!     `defi-execution::verify_bridge_settlement`.
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * the action JSON shape internals — `defi-execution::action` golden;
+    //!   * cache-bypass routing for rewards status — runner cache-flow concern,
+    //!     asserted here only via `meta.cache.status`.
+
+    use super::cli::{handle, ClaimPlanArgs, ClaimVerbCmd, CompoundVerbCmd, RewardsCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, StatusArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use wiremock::MockServer;
+
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    const ASSET_A: &str = "0x1111111111111111111111111111111111111111";
+    const REWARD: &str = "0x3333333333333333333333333333333333333333";
+    const CONTROLLER: &str = "0x4444444444444444444444444444444444444444";
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// Plan + persist a canonical `claim_rewards` action, returning its
+    /// `action_id`. The persisted step `rpc_url` is left pointing at `step_rpc`
+    /// (used by the estimate test to dial the wiremock RPC); pass an unused
+    /// wiremock URI for status-only tests.
+    async fn plan_claim(dir: &Path, step_rpc: &str) -> String {
+        let rpc = MockServer::start().await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = ClaimPlanArgs {
+            chain: Some("1".to_string()),
+            assets: vec![ASSET_A.to_string()],
+            reward_token: Some(REWARD.to_string()),
+            amount: Some("1000000".to_string()),
+            recipient: None,
+            controller_address: Some(CONTROLLER.to_string()),
+            pool_address_provider: None,
+            provider: Some("aave".to_string()),
+            rpc_url: Some(rpc.uri()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, RewardsCmd::Claim(ClaimVerbCmd::Plan(args)))
+            .await
+            .expect("plan a claim_rewards action for the status fixture");
+        let action_id = env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+        // Re-point the persisted step rpc_url at the requested endpoint.
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open store");
+        let mut action = store.get(&action_id).expect("load");
+        for step in &mut action.steps {
+            step.rpc_url = step_rpc.to_string();
+        }
+        store.save(&action).expect("persist step rpc_url");
+        action_id
+    }
+
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    fn set_status(dir: &Path, action_id: &str, status: ActionStatus) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open store");
+        let mut action = store.get(action_id).expect("load");
+        action.status = status;
+        store.save(&action).expect("persist status");
+    }
+
+    async fn run_claim_status(dir: &Path, action_id: &str) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(
+            &ctx,
+            RewardsCmd::Claim(ClaimVerbCmd::Status(StatusArgs {
+                action_id: Some(action_id.to_string()),
+            })),
+        )
+        .await
+    }
+
+    async fn run_compound_status(dir: &Path, action_id: &str) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(
+            &ctx,
+            RewardsCmd::Compound(CompoundVerbCmd::Status(StatusArgs {
+                action_id: Some(action_id.to_string()),
+            })),
+        )
+        .await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("status envelope carries `data`")
+    }
+
+    // --- 1. claim status success envelope ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_status_planned_emits_success_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), "http://127.0.0.1:0").await;
+        let env = run_claim_status(tmp.path(), &action_id)
+            .await
+            .expect("status on a planned claim should succeed");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "rewards claim status");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        let data = data_of(&env);
+        assert_eq!(data["action_id"], Value::from(action_id.as_str()));
+        assert_eq!(data["intent_type"], Value::from("claim_rewards"));
+        assert_eq!(data["status"], Value::from("planned"));
+    }
+
+    // --- 2. claim status reflects lifecycle transitions --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_status_reflects_completed_transition() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), "http://127.0.0.1:0").await;
+        set_status(tmp.path(), &action_id, ActionStatus::Completed);
+        let env = run_claim_status(tmp.path(), &action_id)
+            .await
+            .expect("status ok");
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_status_reflects_running_transition() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_claim(tmp.path(), "http://127.0.0.1:0").await;
+        set_status(tmp.path(), &action_id, ActionStatus::Running);
+        let env = run_claim_status(tmp.path(), &action_id)
+            .await
+            .expect("status ok");
+        assert_eq!(data_of(&env)["status"], Value::from("running"));
+    }
+
+    // --- 3. compound status success envelope -------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_status_emits_success_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A directly-persisted compound action (status read needs no build).
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "compound_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.provider = "aave".to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let env = run_compound_status(tmp.path(), &action.action_id)
+            .await
+            .expect("status on a compound action should succeed");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "rewards compound status");
+        assert_eq!(env.meta.cache.status, "bypass");
+        let data = data_of(&env);
+        assert_eq!(data["intent_type"], Value::from("compound_rewards"));
+        assert_eq!(data["status"], Value::from("planned"));
+    }
+
+    // --- 4. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_status_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_claim_status(tmp.path(), "")
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_status_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_compound_status(tmp.path(), "act_not_hex")
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 5. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_status_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_claim_status(tmp.path(), "act_0123456789abcdef0123456789abcdef")
+            .await
+            .expect_err("unknown action surfaces a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 6. intent gates (cross-sibling) -----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_status_rejects_compound_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "compound_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_claim_status(tmp.path(), &action.action_id)
+            .await
+            .expect_err("compound action rejected by claim status");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action is not a rewards claim intent"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_status_rejects_claim_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "claim_rewards",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_compound_status(tmp.path(), &action.action_id)
+            .await
+            .expect_err("claim action rejected by compound status");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action is not a rewards compound intent"),
+            "got: {err}"
+        );
     }
 }
