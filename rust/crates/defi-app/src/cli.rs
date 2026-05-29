@@ -643,6 +643,14 @@ mod tests {
         // `Unsupported` not-yet-implemented stub, so they are route-verified by
         // parse + command_path above and exercised end-to-end by their own module
         // tests.
+        // `swap submit` / `swap status` (execution unit "swap-submit") are wired:
+        // the dual-backend swap submit routes a standard-EVM (TaikoSwap) action
+        // through the shared `execsubmit` plumbing and a Tempo (type 0x76) action
+        // through the separate `--signer tempo` path, and `swap status` reads the
+        // persisted action verbatim. With the bare argv used here they return a
+        // typed `Usage` error (missing `--action-id`), NOT the `Unsupported`
+        // not-yet-implemented stub, so they are route-verified by parse +
+        // command_path above and exercised end-to-end by their own module tests.
         if path == "approvals plan"
             || path == "approvals submit"
             || path == "approvals status"
@@ -650,6 +658,8 @@ mod tests {
             || path == "transfer submit"
             || path == "transfer status"
             || path == "swap plan"
+            || path == "swap submit"
+            || path == "swap status"
             || path == "bridge plan"
             || path.starts_with("actions ")
             || path.starts_with("lend supply ")

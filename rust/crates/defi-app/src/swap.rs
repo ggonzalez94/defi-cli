@@ -658,9 +658,227 @@ pub mod cli {
         match cmd {
             SwapCmd::Quote(args) => handle_quote(ctx, args).await,
             SwapCmd::Plan(args) => handle_plan(ctx, args).await,
-            SwapCmd::Submit(_) => Err(AppCtx::unimplemented("swap submit", "WS4")),
-            SwapCmd::Status(_) => Err(AppCtx::unimplemented("swap status", "WS4")),
+            SwapCmd::Submit(args) => handle_submit(ctx, args).await,
+            SwapCmd::Status(args) => handle_status(ctx, args).await,
         }
+    }
+
+    /// Handle `swap submit` (Go `submitCmd.RunE`, `runner.go` ~L1458-1510).
+    ///
+    /// `swap submit` is the **dual-backend** execution submit: a planned swap
+    /// action is either a standard-EVM (TaikoSwap) `legacy_local` / `ows` action
+    /// OR a Tempo (type 0x76) `execution_backend == "tempo"` action. Flow parity
+    /// with the Go runner:
+    /// 1. resolve + validate `--action-id` ([`crate::actions::resolve_action_id`]);
+    /// 2. load the persisted action (not-found → usage `load action`);
+    /// 3. gate the intent (`swap`-only — [`super::ensure_swap_intent`]);
+    /// 4. short-circuit an already-`completed` action (success + warning, no
+    ///    re-broadcast);
+    /// 5. resolve the execution backend + signer. The Tempo backend is a SEPARATE
+    ///    execution path ([`resolve_tempo_swap_signer`]: the `--private-key` guard
+    ///    then the `tempo wallet -j whoami` shell-out); every other backend uses
+    ///    the shared standard-EVM plumbing
+    ///    ([`crate::execsubmit::resolve_action_execution_backend`]: legacy-local /
+    ///    OWS guards);
+    /// 6. validate the resolved signer vs `--from-address` + the planned sender;
+    /// 7. parse the execute options (`--gas-multiplier > 1`, durations, fee flags,
+    ///    the `--allow-max-approval` / `--unsafe-provider-tx` guardrail opt-ins —
+    ///    swap submit carries these, like `approvals submit`);
+    /// 8. run the bounded-approval pre-sign guardrail with the action context;
+    /// 9. broadcast through the engine, persisting each transition, and emit the
+    ///    terminal-state envelope (cache bypassed for execution paths, spec §2.5).
+    ///
+    /// On every guard/build error the typed [`Error`] is returned (the runner
+    /// renders the full error envelope to stderr) and the persisted action is left
+    /// in its pre-submit state.
+    async fn handle_submit(ctx: &AppCtx, args: SubmitArgs) -> Result<Envelope, Error> {
+        use defi_execution::action::ExecutionBackend;
+
+        // 1. Resolve + validate the action id.
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+
+        // 2. Load the persisted action (not-found → usage `load action`).
+        let store = ctx.open_action_store()?;
+        let mut action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+
+        // 3. Intent gate (swap-only).
+        super::ensure_swap_intent(&action.intent_type)?;
+
+        // 4. Already-completed short-circuit (no re-broadcast).
+        if action.status == defi_execution::action::ActionStatus::Completed {
+            let data = serde_json::to_value(&action)
+                .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+            let mut env = ctx.metadata_envelope("swap submit", data, Vec::<ProviderStatus>::new());
+            env.warnings = vec!["action already completed".to_string()];
+            return Ok(env);
+        }
+
+        // 5. Resolve the execution backend + signer. The Tempo backend is a
+        //    separate execution path (Go `resolveActionExecutionBackend`'s
+        //    `ExecutionBackendTempo` branch → `newExecutionSigner("tempo", ...)`);
+        //    everything else uses the shared standard-EVM plumbing.
+        if action.execution_backend == Some(ExecutionBackend::Tempo) {
+            return submit_tempo_action(ctx, args, action).await;
+        }
+
+        let resolved = crate::execsubmit::resolve_action_execution_backend(
+            &action,
+            crate::execsubmit::SubmitExecutionInputs {
+                signer: &args.signer,
+                key_source: &args.key_source,
+                private_key: args.private_key.as_deref().unwrap_or_default(),
+                from_address: args.from_address.as_deref().unwrap_or_default(),
+            },
+        )?;
+
+        // 6. Validate the resolved sender vs --from-address + planned sender.
+        crate::execsubmit::validate_execution_sender(
+            &action,
+            args.from_address.as_deref().unwrap_or_default(),
+            &resolved.sender,
+        )?;
+
+        // 7. Parse the execute options (durations, gas multiplier, fee flags,
+        //    approval/provider-tx guardrail opt-ins).
+        let opts =
+            crate::execsubmit::parse_execute_options(&crate::execsubmit::ExecuteOptionInputs {
+                simulate: args.simulate,
+                poll_interval: &args.poll_interval,
+                step_timeout: &args.step_timeout,
+                gas_multiplier: args.gas_multiplier,
+                max_fee_gwei: args.max_fee_gwei.as_deref().unwrap_or_default(),
+                max_priority_fee_gwei: args.max_priority_fee_gwei.as_deref().unwrap_or_default(),
+                allow_max_approval: args.allow_max_approval,
+                unsafe_provider_tx: args.unsafe_provider_tx,
+                fee_token: args.fee_token.as_deref().unwrap_or_default(),
+            })?;
+
+        // 8. Bounded-approval pre-sign guardrail (with action context).
+        crate::execsubmit::presign_validate_action(&action, &opts)?;
+
+        // 9. Broadcast through the engine (persisting each transition), then emit
+        //    the terminal-state envelope (cache bypassed for execution paths).
+        crate::execsubmit::execute_resolved(&store, &mut action, resolved, opts).await?;
+
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("swap submit", data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Submit a Tempo (type 0x76) swap action — the separate Tempo execution path
+    /// (Go `resolveActionExecutionBackend`'s `ExecutionBackendTempo` branch).
+    ///
+    /// The Tempo signer is discovered via the `tempo` CLI (`newExecutionSigner`
+    /// hardcodes `"tempo"` for a Tempo-backed action, ignoring `--signer`):
+    /// 1. `--private-key` is rejected (`tempo cannot be combined with
+    ///    --private-key`), surfaced BEFORE any shell-out (Go
+    ///    `newExecutionSigner("tempo", ...)` private-key guard);
+    /// 2. the `tempo wallet -j whoami` shell-out resolves the smart-wallet signer
+    ///    ([`resolve_tempo_swap_signer`]); offline (no `tempo` CLI / not logged
+    ///    in) this is a [`Code::Signer`] error and NOTHING is broadcast.
+    ///
+    /// The full Tempo 0x76 sign+broadcast (batched approve+swap in one tx, settled
+    /// back to the sender) requires a configured `tempo` CLI + live RPC and is
+    /// pinned for byte-parity against a `tempo-go` oracle in a later workstream
+    /// (WS4a); reaching that path returns a documented typed error rather than the
+    /// generic not-yet-implemented stub.
+    async fn submit_tempo_action(
+        _ctx: &AppCtx,
+        args: SubmitArgs,
+        action: defi_execution::action::Action,
+    ) -> Result<Envelope, Error> {
+        // 1 + 2. Resolve the Tempo signer (private-key guard, then shell-out).
+        //    Offline (no `tempo` CLI / not logged in) this is the Signer error the
+        //    submit surfaces; nothing is broadcast.
+        let (signer, _warnings) =
+            resolve_tempo_swap_signer(args.private_key.as_deref().unwrap_or_default())?;
+
+        // Validate the resolved smart-wallet sender vs --from-address + the
+        // planned sender (Go `validateExecutionSender` with the Tempo
+        // `effectiveSenderAddress` = wallet address).
+        let sender = defi_evm::address::checksum(&signer.wallet_address().to_string())?;
+        crate::execsubmit::validate_execution_sender(
+            &action,
+            args.from_address.as_deref().unwrap_or_default(),
+            &sender,
+        )?;
+
+        // The full Tempo 0x76 sign+broadcast (batched approve+swap in one tx) is a
+        // WS4a byte-parity deferral. Reaching here means the `tempo` CLI resolved a
+        // ready signer; surface a documented typed error (NOT the generic stub).
+        Err(Error::new(
+            Code::Unsupported,
+            "tempo (type 0x76) swap broadcast pending byte-parity verification (completion plan WS4a)",
+        ))
+    }
+
+    /// Resolve the Tempo smart-wallet signer for a Tempo-backed submit, parity
+    /// with Go `newExecutionSigner("tempo", keySource, privateKey)`.
+    ///
+    /// - A non-empty `private_key` is a [`Code::Usage`] error (`--signer tempo
+    ///   cannot be combined with --private-key; tempo wallet manages keys
+    ///   automatically`), surfaced BEFORE any shell-out.
+    /// - Otherwise the `tempo` CLI is invoked (`tempo wallet -j whoami`) and the
+    ///   JSON is parsed into a [`TempoWalletSigner`]
+    ///   ([`defi_execution::signer::tempo_signer_from_whoami`]); a missing `tempo`
+    ///   binary, a failed shell-out, a not-ready / expired wallet, or malformed
+    ///   output is a [`Code::Signer`] error (Go wraps with `tempo wallet`).
+    fn resolve_tempo_swap_signer(
+        private_key: &str,
+    ) -> Result<(defi_execution::signer::TempoWalletSigner, Vec<String>), Error> {
+        use defi_execution::signer::tempo_signer_from_whoami;
+
+        if !private_key.trim().is_empty() {
+            return Err(Error::new(
+                Code::Usage,
+                "--signer tempo cannot be combined with --private-key; tempo wallet manages keys automatically",
+            ));
+        }
+
+        let output = std::process::Command::new("tempo")
+            .args(["wallet", "-j", "whoami"])
+            .output()
+            .map_err(|e| {
+                Error::wrap(
+                    Code::Signer,
+                    "tempo wallet: tempo CLI is required for --signer tempo (install: curl -fsSL https://tempo.xyz/install | sh)",
+                    e,
+                )
+            })?;
+        if !output.status.success() {
+            return Err(Error::new(
+                Code::Signer,
+                "tempo wallet: failed to query tempo wallet (run 'tempo wallet login')",
+            ));
+        }
+        let json = String::from_utf8_lossy(&output.stdout);
+        tempo_signer_from_whoami(&json).map_err(|e| {
+            let code = e.code;
+            Error::wrap(code, "tempo wallet", e)
+        })
+    }
+
+    /// Handle `swap status` (Go `statusCmd.RunE`, `runner.go` ~L1529-1548).
+    ///
+    /// A pure read over the persisted action store: resolve + validate the
+    /// `--action-id`, load the action (not-found → usage `load action`), gate the
+    /// intent (`swap`-only), and emit the action verbatim (cache bypassed,
+    /// spec §2.5). Backend-agnostic — `swap status` never signs, so it works for
+    /// both standard-EVM and Tempo-backed swap actions.
+    async fn handle_status(ctx: &AppCtx, args: StatusArgs) -> Result<Envelope, Error> {
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        super::ensure_swap_intent(&action.intent_type)?;
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("swap status", data, Vec::<ProviderStatus>::new()))
     }
 
     /// Handle `swap plan` (Go `planCmd.RunE`, `runner.go` ~L1343-1431).
@@ -3418,6 +3636,1420 @@ mod plan_app_tests {
         assert_eq!(
             code, 2,
             "missing identity input on taikoswap plan must be a usage error (exit 2)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod submit_app_tests {
+    //! # Success criteria — `swap submit` app-level handler (WS4, exec-submit)
+    //!
+    //! Go oracle: `internal/app/runner.go` `newSwapCommand` `submitCmd.RunE`
+    //! (lines ~1458-1510) + `internal/app/execution_helpers.go`
+    //! (`resolveActionExecutionBackend` / `validateExecutionSender` /
+    //! `executeActionWithTimeout`) + `internal/app/runner.go`
+    //! (`resolveActionID` / `newExecutionSigner` / `parseExecuteOptions` /
+    //! `effectiveSenderAddress`). These tests drive [`cli::handle`] (the real
+    //! binary dispatch entry point the `defi` CLI calls) for `swap submit` ONLY,
+    //! asserting the full machine contract the Go runner emits via
+    //! `emitSuccess(...)` / `renderError(...)`.
+    //!
+    //! `swap submit` is the **dual-backend** execution path. Unlike `transfer`
+    //! (standard-EVM only) it covers BOTH execution backends that `swap plan`
+    //! produces:
+    //!   * **standard EVM (TaikoSwap)** — a `legacy_local` (`--from-address`) or
+    //!     `ows` (`--wallet`) action; shares the `transfer`/`approvals` submit
+    //!     plumbing ([`crate::execsubmit`]): action-id resolve → store load →
+    //!     intent gate → already-completed short-circuit → backend/signer resolve
+    //!     → sender match → execute-option parse → bounded-approval pre-sign
+    //!     guardrail → broadcast. Carries the `--allow-max-approval` /
+    //!     `--unsafe-provider-tx` guardrail flags ([`crate::execflags::SubmitArgs`],
+    //!     like `approvals submit` and unlike `transfer submit`).
+    //!   * **Tempo (type 0x76)** — an `execution_backend == "tempo"` action
+    //!     submitted with `--signer tempo`; a SEPARATE execution path
+    //!     (`TempoStepExecutor`, batched approve+swap in one tx). The Tempo signer
+    //!     is discovered via `tempo wallet -j whoami` (`newExecutionSigner("tempo",
+    //!     ...)` → `NewTempoSignerFromCLI`), which is NOT injectable through
+    //!     [`AppCtx`] yet — so only the OFFLINE Tempo guard rejections are asserted
+    //!     here; the full Tempo 0x76 sign+broadcast is WS4a (byte-parity vs a
+    //!     `tempo-go` oracle) and is recorded as a deferral.
+    //!
+    //! The intent gate is `swap`-only ([`super::ensure_swap_intent`]:
+    //! `action is not a swap intent`), NOT `transfer`/`approve`.
+    //!
+    //! ## Determinism / offline strategy (no live chains)
+    //!
+    //! Submit fixtures are built by PLANNING a real TaikoSwap / Tempo swap action
+    //! through `cli::handle` against the offline `wiremock` JSON-RPC mocks
+    //! (`taiko_rpc` / `tempo_rpc`, reproduced here from the plan suite), so the
+    //! persisted action shape is identical to production. The reused
+    //! [`defi_execution`] engine is the contract source of truth and the tests
+    //! exercise it exactly as the `approvals submit` app suite does:
+    //!
+    //! * **Pre-broadcast guards** (action-id, store load, intent gate,
+    //!   already-completed short-circuit, backend selection, sender match,
+    //!   execute-option validation, bounded-approval pre-sign) all fire BEFORE any
+    //!   network and are fully deterministic.
+    //! * **Local-signer broadcast/completion** is exercised OFFLINE through the
+    //!   `--private-key` override (the deterministic in-args secp256k1 key whose
+    //!   address is pinned in `defi-evm`): the policed EVM swap step path transitions
+    //!   the action to `completed` without a network call (matching the engine's own
+    //!   `execute_action` tests + the `approvals`/`transfer` submit suites). The
+    //!   submit fixture uses the SUFFICIENT-allowance plan (a single `swap` step,
+    //!   no leading `approval`), so the bounded-approval bound is irrelevant; a
+    //!   separate criterion exercises the `[approval, swap]` plan and the
+    //!   `--allow-max-approval` bound. The full RPC-backed sign+broadcast
+    //!   (chain-id/gas/nonce/`sendRawTransaction`/receipt) is `wiremock`-RPC
+    //!   integration (WS5) and is a recorded deferral.
+    //! * **OWS `--wallet` backend** resolves through the OWS vault/CLI (WS4b e2e),
+    //!   so only its OFFLINE guard rejections are asserted (missing persisted
+    //!   `wallet_id`; legacy signer flags on a wallet-backed action). The OWS
+    //!   happy-path broadcast is a WS4b deferral.
+    //! * **Tempo `--signer tempo`** discovers the signer via a `tempo` CLI shell-out
+    //!   that is not stubbed here; only the offline Tempo guards are asserted (a
+    //!   `legacy_local` action rejecting `--signer tempo`; the Tempo-backend action
+    //!   reaching the Tempo signer path rather than the standard-EVM path). The
+    //!   Tempo 0x76 sign+broadcast byte-parity is WS4a.
+    //! * **Bridge destination-settlement waits** do NOT apply to `swap` (a swap
+    //!   action never carries a `bridge_send` step); that transition is owned by the
+    //!   `bridge submit/status` unit + the `defi-execution` `verify_bridge_settlement`
+    //!   suite and is intentionally NOT re-asserted here.
+    //!
+    //! Each criterion below is a FAILING test until `cli::handle` implements
+    //! `swap submit` (today it returns the `AppCtx::unimplemented("swap submit",
+    //! "WS4")` stub — a [`Code::Unsupported`] / exit 13 error, so a usage/signer
+    //! assertion or a success expectation fails against the stub).
+    //!
+    //! Criteria:
+    //!
+    //! 1. **Submit success envelope (legacy local key, TaikoSwap) + completion.**
+    //!    Given a planned TaikoSwap `swap` action whose `from_address` matches the
+    //!    deterministic `--private-key` signer (planned with SUFFICIENT allowance =>
+    //!    a single `swap` step), a submit returns `Ok(Envelope)` (exit 0) with:
+    //!    `version == "v1"`, `success == true`, `error == None`, `meta.partial ==
+    //!    false`, `meta.command == "swap submit"`, and `meta.cache ==
+    //!    {status:"bypass", age_ms:0, stale:false}` (execution paths bypass the
+    //!    cache, spec §2.5). The serialized `data` Action has `status == "completed"`
+    //!    and its single step has `status == "confirmed"`. (Go `emitSuccess(...,
+    //!    action, nil, cacheMetaBypass(), nil, false)` after
+    //!    `executeActionWithTimeout`.)
+    //!
+    //! 2. **Submit persists the terminal state.** After a successful submit, the
+    //!    action re-loaded from a freshly opened [`defi_execution::store::Store`]
+    //!    has `status == "completed"`. (Go `ExecuteAction` persists each transition
+    //!    through `s.actionStore`.)
+    //!
+    //! 3. **Bounded-approval pre-sign guardrail (`[approval, swap]` plan).** A
+    //!    TaikoSwap action planned with INSUFFICIENT allowance carries a leading
+    //!    ERC-20 `approval` step whose amount equals the planned `input_amount`
+    //!    (a bounded approval). A submit with NO `--allow-max-approval` therefore
+    //!    PASSES the bound and completes to `status == "completed"` with both steps
+    //!    `confirmed`. (Go `parseExecuteOptions(... allowMaxApproval=false ...)` →
+    //!    `validate_step_policy` bounded-approval check; the TaikoSwap approve is
+    //!    `amount_in`, never inflated — AGENTS.md "Execution pre-sign checks enforce
+    //!    bounded ERC-20 approvals by default".)
+    //!
+    //! 4. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2)
+    //!    (`action id is required (--action-id)`); a malformed id (`"act_xyz"`) →
+    //!    [`Code::Usage`] (exit 2) (`action id must match act_<32 hex chars>`).
+    //!    (Go `resolveActionID`.)
+    //!
+    //! 5. **Load failure for a non-existent action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`).
+    //!
+    //! 6. **Intent gate (`swap`-only).** Submitting a persisted NON-`swap` action
+    //!    (e.g. a `bridge` intent) through `swap submit` → [`Code::Usage`] (exit 2)
+    //!    with `action is not a swap intent`. (Go `submitCmd` `IntentType != "swap"`
+    //!    guard; mirrors [`super::ensure_swap_intent`].)
+    //!
+    //! 7. **Already-completed short-circuit.** Submitting an action already in
+    //!    `status == "completed"` returns `Ok(Envelope)` (exit 0) WITHOUT
+    //!    re-broadcast, carrying the warning `action already completed` and the
+    //!    unchanged completed action in `data`. (Go `if action.Status ==
+    //!    ActionStatusCompleted { return s.emitSuccess(..., []string{"action already
+    //!    completed"}, ...) }`.)
+    //!
+    //! 8. **Legacy backend rejects a non-local signer.** A `legacy_local`
+    //!    (TaikoSwap) action submitted with `--signer tempo` → [`Code::Usage`]
+    //!    (exit 2) (`legacy actions only support --signer local; tempo submit
+    //!    requires execution_backend=tempo`). (Go `resolveActionExecutionBackend`
+    //!    legacy branch.)
+    //!
+    //! 9. **OWS action missing persisted wallet_id.** A wallet-backed
+    //!    (`execution_backend == "ows"`) swap action with an empty `wallet_id` →
+    //!    submit is rejected with [`Code::Usage`] (exit 2) (`wallet-backed action is
+    //!    missing persisted wallet_id`). (Go OWS branch guard — reachable OFFLINE
+    //!    because the guard precedes any OWS resolve.)
+    //!
+    //! 10. **OWS action rejects legacy signer flags.** A wallet-backed swap action
+    //!     with a persisted `wallet_id` submitted with an explicit legacy signer
+    //!     flag (`--private-key`) → [`Code::Usage`] (exit 2) (`wallet-backed actions
+    //!     do not accept legacy signer flags`). (Go `usesLegacySignerFlags` guard.)
+    //!
+    //! 11. **Sender mismatch (`--from-address`).** A `legacy_local` TaikoSwap action
+    //!     whose persisted `from_address` is address A, submitted with
+    //!     `--from-address == address B` (≠ the resolved signer) → [`Code::Signer`]
+    //!     (exit 24). (Go `validateExecutionSender`: `signer address does not match
+    //!     --from-address`.)
+    //!
+    //! 12. **Sender mismatch (planned action sender vs signer).** A `legacy_local`
+    //!     TaikoSwap action whose persisted `from_address` does NOT match the
+    //!     `--private-key` signer address (and no `--from-address` supplied) → a
+    //!     [`Code::Signer`] (exit 24) error. (Go `validateExecutionSender`: backend
+    //!     sender ≠ planned sender.)
+    //!
+    //! 13. **Execute-option validation.** `--gas-multiplier 1.0` → [`Code::Usage`]
+    //!     (exit 2) (`--gas-multiplier must be > 1`); `--poll-interval "0s"` →
+    //!     [`Code::Usage`] (exit 2); `--step-timeout "nope"` → [`Code::Usage`]
+    //!     (exit 2). (Go `parseExecuteOptions`.)
+    //!
+    //! 14. **Signer init failure (no key).** A `legacy_local` TaikoSwap action
+    //!     submitted with `--signer local` and NO resolvable key (`--key-source env`
+    //!     with the env unset, no `--private-key`) → [`Code::Signer`] (exit 24).
+    //!     (Go `newExecutionSigner` → `initialize local signer`.)
+    //!
+    //! 15. **Tempo-backend action takes the Tempo signer path (offline guard).** A
+    //!     persisted `execution_backend == "tempo"` swap action submitted with
+    //!     `--signer local` is NOT executed via the standard-EVM local path: it must
+    //!     route to the Tempo execution path. Offline (no `tempo` CLI), the handler
+    //!     surfaces a typed error rather than completing — asserted as a NON-success
+    //!     (`expect_err`) with code in {[`Code::Signer`], [`Code::Unsupported`],
+    //!     [`Code::Usage`], [`Code::Unavailable`]} and the persisted status left at
+    //!     `planned`. (Go `resolveActionExecutionBackend` `ExecutionBackendTempo`
+    //!     branch → `newExecutionSigner("tempo", ...)` → `NewTempoSignerFromCLI`.)
+    //!     The Tempo 0x76 sign+broadcast happy path is a WS4a deferral.
+    //!
+    //! 16. **Tempo signer rejects `--private-key`.** A Tempo-backend swap action
+    //!     submitted with `--signer tempo` AND `--private-key` set → [`Code::Usage`]
+    //!     (exit 2) (`--signer tempo cannot be combined with --private-key; tempo
+    //!     wallet manages keys automatically`), surfaced BEFORE any `tempo` CLI
+    //!     shell-out. (Go `newExecutionSigner("tempo", ...)` private-key guard.)
+    //!
+    //! 17. **Error paths do not mutate terminal status.** On every rejected submit
+    //!     (criteria 4–16, error cases) the persisted action — when one exists —
+    //!     remains in its pre-submit `status == "planned"` (the handler returns the
+    //!     typed `Err(Error)`; the runner renders the full error envelope to stderr,
+    //!     spec §2.1).
+    //!
+    //! 18. **Full-binary exit codes.** Through `run_with_args` (the real binary path
+    //!     with no env): `swap submit` with a malformed `--action-id` → exit 2; a
+    //!     well-formed unknown `--action-id` → exit 2. (Confirms the wired dispatch
+    //!     + clap surface, not just the in-process handler.)
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit / deferred):
+    //!   * the full RPC-backed sign+broadcast (chain-id/gas/fee/nonce/
+    //!     `sendRawTransaction`/receipt) — WS5 `wiremock`-RPC integration deferral;
+    //!   * the OWS happy-path resolve + send-hook broadcast — WS4b e2e deferral;
+    //!   * the Tempo (type 0x76) sign+broadcast byte layout — WS4a (`tempo-go`
+    //!     oracle) deferral;
+    //!   * the EIP-1559 signing byte layout — `defi-evm` signer goldens;
+    //!   * the TaikoSwap/Tempo plan build internals (best-fee selection, slippage,
+    //!     USD-pair gating, ABI encoding) — `defi-providers::{taikoswap,tempo}` +
+    //!     the sibling `plan_app_tests`;
+    //!   * the bounded-approval policy internals (inflated-approval rejection /
+    //!     `--allow-max-approval` opt-in mechanics) — `defi-execution::policy` +
+    //!     the `approvals submit` app suite (here only that a BOUNDED swap approval
+    //!     passes by default is asserted);
+    //!   * `actions estimate` fee fields (EIP-1559 native gas for EVM / fee-token
+    //!     for Tempo) — owned by the `actions` unit (`actions estimate`);
+    //!   * `--input-json`/`--input-file` precedence on submit — structured-input
+    //!     unit (the plan-side merge is covered in `plan_app_tests`);
+    //!   * the pure pre-provider helpers + `ensure_swap_intent` — the sibling
+    //!     `tests` module;
+    //!   * cobra/clap flag defaults + schema auth metadata — schema/CLI suites.
+
+    use super::cli::{handle, PlanArgs, SwapCmd};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, SubmitArgs};
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::{json, Value};
+    use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    use alloy::dyn_abi::{FunctionExt, JsonAbiExt};
+    use alloy::json_abi::{Function as JsonFunction, JsonAbi};
+    use alloy::primitives::U256;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants ------------------------------------------------
+
+    /// The deterministic secp256k1 test key (`internal/execution/signer`
+    /// `testPrivateKey`); shared with the `defi-evm` / `defi-execution` suites.
+    const TEST_KEY: &str = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1";
+    /// The EIP-55 address `defi-evm` derives for [`TEST_KEY`] (pinned against the
+    /// go-ethereum oracle). A planned action's `from_address` must equal this for
+    /// the local-signer submit to pass the sender-match guard.
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+    /// A DIFFERENT canonical address — used to force the sender-mismatch guards.
+    const OTHER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    /// Tempo `--from-address` sender (its EIP-55 checksum lands on the action).
+    const TEMPO_SENDER: &str = "0x00000000000000000000000000000000000000aa";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir`, cache disabled
+    /// (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `SwapCmd::Submit` `SubmitArgs` carrying the clap flag DEFAULTS (the
+    /// `#[derive(Default)]` zero values would NOT match the parsed defaults, so
+    /// they are stamped here): `signer=local`, `key_source=auto`,
+    /// `gas_multiplier=1.2`, `poll_interval=2s`, `step_timeout=2m`,
+    /// `simulate=true`, both guardrail opt-ins `false`. The `--private-key` is
+    /// pre-set to the deterministic test key so the offline local-signer path
+    /// resolves. Callers mutate the returned value per test.
+    pub(super) fn base_submit_args(action_id: &str) -> SubmitArgs {
+        SubmitArgs {
+            action_id: Some(action_id.to_string()),
+            from_address: None,
+            allow_max_approval: false,
+            unsafe_provider_tx: false,
+            signer: "local".to_string(),
+            key_source: "auto".to_string(),
+            private_key: Some(TEST_KEY.to_string()),
+            fee_token: None,
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+            simulate: true,
+            poll_interval: "2s".to_string(),
+            step_timeout: "2m".to_string(),
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Plan + persist a canonical TaikoSwap `swap` action against `dir`, returning
+    /// its `action_id`. `from_addr` becomes the action's `from_address`;
+    /// `allowance` controls whether a leading `approval` step is added (sufficient
+    /// `u128::MAX` → single swap step; `0` → `[approval, swap]`). Plans through the
+    /// real `cli::handle` plan path so the persisted shape is identical to
+    /// production.
+    pub(super) async fn plan_taikoswap(dir: &Path, from_addr: &str, allowance: u128) -> String {
+        let server = taiko_rpc(allowance).await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = PlanArgs {
+            chain: Some("taiko".to_string()),
+            from_asset: Some("USDC".to_string()),
+            to_asset: Some("WETH".to_string()),
+            provider: Some("taikoswap".to_string()),
+            r#type: "exact-input".to_string(),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            amount_out: None,
+            amount_out_decimal: None,
+            recipient: None,
+            slippage_bps: 50,
+            rpc_url: Some(server.uri()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(from_addr.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, SwapCmd::Plan(args))
+            .await
+            .expect("plan a taikoswap swap action for the submit fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    /// Plan + persist a canonical Tempo `swap` action against `dir`, returning its
+    /// `action_id`. Tempo plans stamp `execution_backend == "tempo"` and the
+    /// checksummed `--from-address` sender. Plans through `cli::handle` so the
+    /// persisted shape is identical to production.
+    pub(super) async fn plan_tempo(dir: &Path) -> String {
+        let server = tempo_rpc(0).await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = PlanArgs {
+            chain: Some("tempo".to_string()),
+            from_asset: Some("pathUSD".to_string()),
+            to_asset: Some("USDC.e".to_string()),
+            provider: Some("tempo".to_string()),
+            r#type: "exact-input".to_string(),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            amount_out: None,
+            amount_out_decimal: None,
+            recipient: None,
+            slippage_bps: 50,
+            rpc_url: Some(server.uri()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(TEMPO_SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, SwapCmd::Plan(args))
+            .await
+            .expect("plan a tempo swap action for the submit fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    /// Persist `action` directly (used for fixtures the plan path cannot build,
+    /// e.g. a `bridge`-intent or an OWS-backed action).
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    /// Re-load a persisted action's `status` string from a freshly opened store.
+    fn persisted_status(dir: &Path, action_id: &str) -> String {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let action = store.get(action_id).expect("action retrievable");
+        serde_json::to_value(action.status)
+            .expect("status serializes")
+            .as_str()
+            .expect("status is a string")
+            .to_string()
+    }
+
+    async fn run_submit(dir: &Path, args: SubmitArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, SwapCmd::Submit(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("submit envelope carries `data`")
+    }
+
+    fn env_with_home() -> (MapEnv, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    // --- wiremock JSON-RPC mocks (reproduced from `plan_app_tests`) ---------
+
+    fn json_function(abi_json: &str, name: &str) -> JsonFunction {
+        let abi: JsonAbi = serde_json::from_str(abi_json).expect("parse abi");
+        abi.function(name)
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("function present")
+    }
+
+    fn raw_selector(abi_json: &str, name: &str) -> String {
+        hex::encode(json_function(abi_json, name).selector().0)
+    }
+
+    fn rpc_result(id: &Value, result: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }))
+    }
+
+    fn rpc_error(id: &Value, code: i64, message: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "error": {"code": code, "message": message},
+        }))
+    }
+
+    /// TaikoSwap quoter-probe + allowance responder (best tier = 2nd, fee 500;
+    /// 5th `eth_call` is the allowance read).
+    struct TaikoRpcResponder {
+        allowance: u128,
+        call_count: AtomicUsize,
+        quoter_fn: JsonFunction,
+        allowance_fn: JsonFunction,
+    }
+
+    impl TaikoRpcResponder {
+        fn new(allowance: u128) -> Self {
+            TaikoRpcResponder {
+                allowance,
+                call_count: AtomicUsize::new(0),
+                quoter_fn: json_function(
+                    defi_registry::UNISWAP_V3_QUOTER_V2_ABI,
+                    "quoteExactInputSingle",
+                ),
+                allowance_fn: json_function(defi_registry::ERC20_MINIMAL_ABI, "allowance"),
+            }
+        }
+
+        fn pack_output(func: &JsonFunction, values: &[alloy::dyn_abi::DynSolValue]) -> String {
+            let bytes = func.abi_encode_output(values).expect("pack output");
+            format!("0x{}", hex::encode(bytes))
+        }
+    }
+
+    impl Respond for TaikoRpcResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            use alloy::dyn_abi::DynSolValue;
+            let body: Value = match serde_json::from_slice(&request.body) {
+                Ok(v) => v,
+                Err(_) => return ResponseTemplate::new(400),
+            };
+            let id = body.get("id").cloned().unwrap_or(json!(1));
+            let method_name = body.get("method").and_then(Value::as_str).unwrap_or("");
+            if method_name != "eth_call" {
+                return rpc_error(&id, -32601, "method not supported in test");
+            }
+            let index = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;
+            if index == 5 {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.allowance_fn,
+                        &[DynSolValue::Uint(U256::from(self.allowance), 256)],
+                    ),
+                );
+            }
+            let amount_out: u64 = match index {
+                1 => 1000,
+                2 => 2000,
+                3 => 1500,
+                _ => 500,
+            };
+            rpc_result(
+                &id,
+                &Self::pack_output(
+                    &self.quoter_fn,
+                    &[
+                        DynSolValue::Uint(U256::from(amount_out), 256),
+                        DynSolValue::Uint(U256::ZERO, 160),
+                        DynSolValue::Uint(U256::ZERO, 32),
+                        DynSolValue::Uint(U256::from(70_000u64), 256),
+                    ],
+                ),
+            )
+        }
+    }
+
+    async fn taiko_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(TaikoRpcResponder::new(allowance))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Tempo currency + quote + allowance responder (selector-routed).
+    struct TempoRpcResponder {
+        allowance: u128,
+        quote_in: u128,
+        quote_out: u128,
+        currency_sel: String,
+        quote_in_sel: String,
+        quote_out_sel: String,
+        allowance_sel: String,
+        currency_fn: JsonFunction,
+        quote_in_fn: JsonFunction,
+        quote_out_fn: JsonFunction,
+        allowance_fn: JsonFunction,
+    }
+
+    impl TempoRpcResponder {
+        fn new(allowance: u128) -> Self {
+            let dex_abi = defi_registry::TEMPO_STABLECOIN_DEX_ABI;
+            let erc20_abi = defi_registry::ERC20_MINIMAL_ABI;
+            let tip20_abi = defi_registry::TEMPO_TIP20_METADATA_ABI;
+            TempoRpcResponder {
+                allowance,
+                quote_in: 980_000,
+                quote_out: 1_010_100,
+                currency_sel: raw_selector(tip20_abi, "currency"),
+                quote_in_sel: raw_selector(dex_abi, "quoteSwapExactAmountIn"),
+                quote_out_sel: raw_selector(dex_abi, "quoteSwapExactAmountOut"),
+                allowance_sel: raw_selector(erc20_abi, "allowance"),
+                currency_fn: json_function(tip20_abi, "currency"),
+                quote_in_fn: json_function(dex_abi, "quoteSwapExactAmountIn"),
+                quote_out_fn: json_function(dex_abi, "quoteSwapExactAmountOut"),
+                allowance_fn: json_function(erc20_abi, "allowance"),
+            }
+        }
+
+        fn pack_output(func: &JsonFunction, values: &[alloy::dyn_abi::DynSolValue]) -> String {
+            let bytes = func.abi_encode_output(values).expect("pack output");
+            format!("0x{}", hex::encode(bytes))
+        }
+    }
+
+    fn token_currency(token: &str) -> Option<&'static str> {
+        match token.to_ascii_lowercase().as_str() {
+            "0x20c0000000000000000000000000000000000000" => Some("USD"), // pathUSD
+            "0x20c000000000000000000000b9537d11c60e8b50" => Some("USD"), // USDC.e
+            "0x20c00000000000000000000014f22ca97301eb73" => Some("USD"), // USDT0
+            _ => None,
+        }
+    }
+
+    impl Respond for TempoRpcResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            use alloy::dyn_abi::DynSolValue;
+            let body: Value = match serde_json::from_slice(&request.body) {
+                Ok(v) => v,
+                Err(_) => return ResponseTemplate::new(400),
+            };
+            let id = body.get("id").cloned().unwrap_or(json!(1));
+            let method_name = body.get("method").and_then(Value::as_str).unwrap_or("");
+            if method_name != "eth_call" {
+                return rpc_error(&id, -32601, "unsupported method");
+            }
+            let params = match body.get("params").and_then(|p| p.get(0)) {
+                Some(p) => p,
+                None => return rpc_error(&id, -32602, "missing params"),
+            };
+            let to = params
+                .get("to")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            let data_hex = params
+                .get("data")
+                .or_else(|| params.get("input"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches("0x")
+                .to_string();
+            let selector = data_hex.get(..8).unwrap_or("");
+
+            if selector == self.currency_sel {
+                return match token_currency(&to) {
+                    Some(c) => rpc_result(
+                        &id,
+                        &Self::pack_output(
+                            &self.currency_fn,
+                            &[DynSolValue::String(c.to_string())],
+                        ),
+                    ),
+                    None => rpc_error(&id, -32000, "execution reverted: UnknownToken"),
+                };
+            }
+            if selector == self.quote_in_sel {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.quote_in_fn,
+                        &[DynSolValue::Uint(U256::from(self.quote_in), 128)],
+                    ),
+                );
+            }
+            if selector == self.quote_out_sel {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.quote_out_fn,
+                        &[DynSolValue::Uint(U256::from(self.quote_out), 128)],
+                    ),
+                );
+            }
+            if selector == self.allowance_sel {
+                return rpc_result(
+                    &id,
+                    &Self::pack_output(
+                        &self.allowance_fn,
+                        &[DynSolValue::Uint(U256::from(self.allowance), 256)],
+                    ),
+                );
+            }
+            rpc_error(&id, -32601, "unsupported eth_call data")
+        }
+    }
+
+    async fn tempo_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(TempoRpcResponder::new(allowance))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    // --- 1, 2. submit success + completion + persistence (TaikoSwap) -------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_taikoswap_legacy_local_completes_and_emits_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Sufficient allowance => single swap step (no leading approval).
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("legacy-local taikoswap swap submit should complete offline");
+
+        // Envelope contract.
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "swap submit");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // Completed action in data, single confirmed swap step.
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 1, "sufficient allowance -> single swap step");
+        assert_eq!(steps[0]["type"], Value::from("swap"));
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+
+        // Persisted terminal state (criterion 2).
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- 3. bounded-approval pre-sign guardrail ([approval, swap]) ----------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_taikoswap_bounded_approval_completes_without_override() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Insufficient allowance => [approval, swap]; the approval amount equals
+        // input_amount (a BOUNDED approval), so no --allow-max-approval is needed.
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, 0).await;
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("bounded approval should pass the pre-sign guardrail by default");
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 2, "insufficient allowance -> [approval, swap]");
+        assert_eq!(steps[0]["type"], Value::from("approval"));
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+        assert_eq!(steps[1]["type"], Value::from("swap"));
+        assert_eq!(steps[1]["status"], Value::from("confirmed"));
+    }
+
+    // --- 4. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_submit_args("");
+        args.action_id = Some(String::new());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_xyz");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 5. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_0123456789abcdef0123456789abcdef");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 6. intent gate (swap-only) ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_swap_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A persisted BRIDGE-intent action submitted through swap submit.
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let args = base_submit_args(&action.action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-swap intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("action is not a swap intent"),
+            "got: {err}"
+        );
+        // Status untouched.
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+    }
+
+    // --- 7. already-completed short-circuit --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_already_completed_short_circuits_with_warning() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        // Force the persisted action to completed without re-broadcasting.
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            action.status = ActionStatus::Completed;
+            store.save(&action).expect("persist completed");
+        }
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("already-completed submit returns success without re-broadcast");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "swap submit");
+        assert!(
+            env.warnings.iter().any(|w| w == "action already completed"),
+            "expected `action already completed` warning, got {:?}",
+            env.warnings
+        );
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+    }
+
+    // --- 8. legacy backend rejects a non-local signer ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_action_rejects_tempo_signer() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = None; // a tempo signer + private key is a different error
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("legacy action with --signer tempo rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("legacy actions only support --signer local"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 9, 10. OWS backend offline guards ---------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_missing_wallet_id_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "swap",
+            "eip155:167000",
+            Default::default(),
+        );
+        action.provider = "taikoswap".to_string();
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = String::new();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        // No legacy signer flags (those would trip a different guard first).
+        args.private_key = None;
+        args.signer = "local".to_string();
+        args.key_source = "auto".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS swap action without wallet_id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed action is missing persisted wallet_id"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_rejects_legacy_signer_flags() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "swap",
+            "eip155:167000",
+            Default::default(),
+        );
+        action.provider = "taikoswap".to_string();
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = "wallet-123".to_string();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        args.private_key = Some(TEST_KEY.to_string()); // explicit legacy flag
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS swap action with legacy signer flags rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed actions do not accept legacy signer flags"),
+            "got: {err}"
+        );
+    }
+
+    // --- 11, 12. sender mismatch -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_from_address_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Action sender matches the signer, but --from-address is a DIFFERENT addr.
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let mut args = base_submit_args(&action_id);
+        args.from_address = Some(OTHER_ADDR.to_string());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("--from-address mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        // Signer maps to exit 24 (spec §2.2).
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_planned_sender_signer_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Planned action sender is OTHER_ADDR but the local signer is SIGNER_ADDR;
+        // no --from-address supplied.
+        let action_id = plan_taikoswap(tmp.path(), OTHER_ADDR, u128::MAX).await;
+        let args = base_submit_args(&action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("planned-sender/signer mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 13. execute-option validation -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_gas_multiplier_not_greater_than_one() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let mut args = base_submit_args(&action_id);
+        args.gas_multiplier = 1.0;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("gas-multiplier <= 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("gas-multiplier"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_positive_poll_interval() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let mut args = base_submit_args(&action_id);
+        args.poll_interval = "0s".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-positive poll-interval rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_unparseable_step_timeout() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let mut args = base_submit_args(&action_id);
+        args.step_timeout = "nope".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unparseable step-timeout rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 14. signer init failure (no key) ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_signer_init_failure_is_signer_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let mut args = base_submit_args(&action_id);
+        // Force an unresolvable key: source=env with no --private-key override.
+        args.private_key = None;
+        args.key_source = "env".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("signer init with no key must fail");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 15. Tempo-backend action takes the Tempo signer path --------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_tempo_backend_routes_to_tempo_path_offline() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A real Tempo-backed swap action (execution_backend == "tempo").
+        let action_id = plan_tempo(tmp.path()).await;
+        // Sanity: the planned action is Tempo-backed.
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let action = store.get(&action_id).expect("load tempo action");
+            assert_eq!(
+                action.execution_backend,
+                Some(ExecutionBackend::Tempo),
+                "tempo plan must stamp the tempo execution backend"
+            );
+        }
+
+        // Submit with --signer local (the default). The Tempo backend must NOT be
+        // executed via the standard-EVM local path; offline (no `tempo` CLI) it
+        // surfaces a typed error rather than completing. The Tempo 0x76
+        // sign+broadcast happy path is a WS4a deferral.
+        let mut args = base_submit_args(&action_id);
+        args.private_key = None;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("tempo submit must not complete via the standard-EVM path offline");
+        // Must be a real Tempo signer/backend error, NOT the generic WS4
+        // unimplemented stub (guards against a false pass while the handler is
+        // still a stub: the stub message is `... not yet implemented in Rust port
+        // (see completion plan WS4)`). A Tempo-aware handler surfaces either a
+        // signer error (the `tempo wallet -j whoami` shell-out fails offline) or a
+        // documented Tempo-submit deferral — anything but the generic stub.
+        assert!(
+            !err.to_string().contains("not yet implemented"),
+            "swap submit must route the tempo backend, not return the generic WS4 stub: {err}"
+        );
+        assert!(
+            matches!(
+                err.code,
+                Code::Signer | Code::Usage | Code::Unavailable | Code::Unsupported
+            ),
+            "tempo submit offline error should be a typed signer/tempo error, got: {err} ({:?})",
+            err.code
+        );
+        // Nothing broadcast => the action remains planned.
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 16. Tempo signer rejects --private-key ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_tempo_signer_rejects_private_key() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_tempo(tmp.path()).await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = Some(TEST_KEY.to_string());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("--signer tempo + --private-key rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("tempo cannot be combined with --private-key"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 18. full-binary exit codes ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_full_binary_malformed_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "swap", "submit", "--action-id", "act_xyz"], &env).await;
+        assert_eq!(
+            code, 2,
+            "malformed --action-id must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_full_binary_unknown_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "submit",
+                "--action-id",
+                "act_0123456789abcdef0123456789abcdef",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "well-formed unknown --action-id must be a usage (load) error (exit 2)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod status_app_tests {
+    //! # Success criteria — `swap status` app-level handler (WS4, exec-status)
+    //!
+    //! Go oracle: `internal/app/runner.go` `newSwapCommand` `statusCmd.RunE`
+    //! (lines ~1529-1548). `swap status` is a pure READ over the persisted action
+    //! store: resolve + validate the `--action-id`, load the action (not-found →
+    //! usage `load action`), gate the intent (`swap`-only), and emit the action
+    //! verbatim (cache bypassed, spec §2.5). There is NO broadcast, NO signer, and
+    //! NO bridge destination-settlement wait (a swap action never carries a
+    //! `bridge_send` step — settlement is owned by the `bridge status` unit). These
+    //! tests drive [`cli::handle`] for `swap status` ONLY.
+    //!
+    //! Each criterion is a FAILING test until `cli::handle` implements `swap
+    //! status` (today it returns the `AppCtx::unimplemented("swap status", "WS4")`
+    //! stub — a [`Code::Unsupported`] / exit 13 error).
+    //!
+    //! Criteria:
+    //!
+    //! 1. **Status success envelope + verbatim action.** Given a planned TaikoSwap
+    //!    `swap` action, `swap status --action-id <id>` returns `Ok(Envelope)`
+    //!    (exit 0) with `version == "v1"`, `success == true`, `error == None`,
+    //!    `meta.partial == false`, `meta.command == "swap status"`, and `meta.cache
+    //!    == {status:"bypass", age_ms:0, stale:false}`. The `data` Action echoes the
+    //!    persisted `action_id`, `intent_type == "swap"`, `provider == "taikoswap"`,
+    //!    and `status == "planned"`. `meta.providers` is empty (status does no
+    //!    provider routing). (Go `emitSuccess(..., action, nil, cacheMetaBypass(),
+    //!    nil, false)`.)
+    //!
+    //! 2. **Status reflects a completed action.** After a successful `swap submit`,
+    //!    `swap status` over the same id reports `status == "completed"` and the
+    //!    step `status == "confirmed"`. (Go reads the persisted action verbatim.)
+    //!
+    //! 3. **Status works for a Tempo-backend action.** `swap status` over a planned
+    //!    Tempo swap action echoes `execution_backend == "tempo"`, `provider ==
+    //!    "tempo"`, `intent_type == "swap"` (status is backend-agnostic; it never
+    //!    signs).
+    //!
+    //! 4. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2)
+    //!    (`action id is required (--action-id)`); `--action-id "act_xyz"` →
+    //!    [`Code::Usage`] (exit 2) (`action id must match act_<32 hex chars>`).
+    //!    (Go `resolveActionID`.)
+    //!
+    //! 5. **Load failure for an unknown action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go `clierr.Wrap(CodeUsage,
+    //!    "load action", err)`).
+    //!
+    //! 6. **Intent gate (`swap`-only).** `swap status` over a persisted NON-`swap`
+    //!    action (e.g. a `bridge` intent) → [`Code::Usage`] (exit 2) with `action
+    //!    is not a swap intent`. (Go `statusCmd` `IntentType != "swap"` guard.)
+    //!
+    //! 7. **Full-binary exit codes.** Through `run_with_args`: `swap status` with a
+    //!    malformed `--action-id` → exit 2; a well-formed unknown id → exit 2.
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit): the action serialization field
+    //! order (`defi-out` golden tests); the broadcast/sign path (`swap submit`);
+    //! bridge destination-settlement (`bridge status` + `defi-execution::
+    //! verify_bridge_settlement`); `actions show` over the same store (the `actions`
+    //! unit).
+
+    use super::cli::{handle, SwapCmd};
+    use super::submit_app_tests; // reuse plan/submit fixtures + harness
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use crate::execflags::StatusArgs;
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    fn status_args(action_id: &str) -> StatusArgs {
+        StatusArgs {
+            action_id: Some(action_id.to_string()),
+        }
+    }
+
+    async fn run_status(dir: &Path, args: StatusArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, SwapCmd::Status(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("status envelope carries `data`")
+    }
+
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    fn env_with_home() -> (MapEnv, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    /// Plan a canonical TaikoSwap swap action for status fixtures (sufficient
+    /// allowance => single swap step), reusing the submit-suite plan helper. The
+    /// settings/store layout is shared, so the action is retrievable by the same
+    /// `dir`.
+    async fn plan_taikoswap(dir: &Path) -> String {
+        submit_app_tests::plan_taikoswap(dir, SIGNER_ADDR, u128::MAX).await
+    }
+
+    // --- 1. status success envelope + verbatim action ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_emits_success_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_taikoswap(tmp.path()).await;
+
+        let env = run_status(tmp.path(), status_args(&action_id))
+            .await
+            .expect("swap status should succeed for a planned swap action");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "swap status");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+        assert!(
+            env.meta.providers.is_empty(),
+            "status does no provider routing"
+        );
+
+        let data = data_of(&env);
+        assert_eq!(data["action_id"], Value::from(action_id.as_str()));
+        assert_eq!(data["intent_type"], Value::from("swap"));
+        assert_eq!(data["provider"], Value::from("taikoswap"));
+        assert_eq!(data["status"], Value::from("planned"));
+    }
+
+    // --- 2. status reflects a completed action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reflects_completed_action() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = submit_app_tests::plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+
+        // Submit through the real handler so status reads the post-broadcast state.
+        let ctx = AppCtx::new(exec_settings(tmp.path()));
+        let submit_args = submit_app_tests::base_submit_args(&action_id);
+        handle(&ctx, SwapCmd::Submit(submit_args))
+            .await
+            .expect("swap submit should complete offline");
+
+        let env = run_status(tmp.path(), status_args(&action_id))
+            .await
+            .expect("status after submit");
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+    }
+
+    // --- 3. status works for a Tempo-backend action ------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_works_for_tempo_backend_action() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = submit_app_tests::plan_tempo(tmp.path()).await;
+
+        let env = run_status(tmp.path(), status_args(&action_id))
+            .await
+            .expect("status for a tempo swap action (backend-agnostic, no signing)");
+        let data = data_of(&env);
+        assert_eq!(data["execution_backend"], Value::from("tempo"));
+        assert_eq!(data["provider"], Value::from("tempo"));
+        assert_eq!(data["intent_type"], Value::from("swap"));
+    }
+
+    // --- 4. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), status_args(""))
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), status_args("act_xyz"))
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 5. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(
+            tmp.path(),
+            status_args("act_0123456789abcdef0123456789abcdef"),
+        )
+        .await
+        .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 6. intent gate (swap-only) ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_non_swap_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_status(tmp.path(), status_args(&action.action_id))
+            .await
+            .expect_err("non-swap intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("action is not a swap intent"),
+            "got: {err}"
+        );
+    }
+
+    // --- 7. full-binary exit codes -----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_full_binary_malformed_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "swap", "status", "--action-id", "act_xyz"], &env).await;
+        assert_eq!(
+            code, 2,
+            "malformed --action-id must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_full_binary_unknown_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "status",
+                "--action-id",
+                "act_0123456789abcdef0123456789abcdef",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "well-formed unknown --action-id must be a usage (load) error (exit 2)"
         );
     }
 }

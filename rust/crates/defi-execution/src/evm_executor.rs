@@ -640,12 +640,19 @@ async fn execute_evm_step(
             // Pre-sign policy is enforced before any sign/broadcast, WITH the
             // action context so bounded ERC-20 approval bounds can be checked
             // against `action.input_amount` (Go `validateStepPolicy(action, ...)`).
+            //
+            // Go derives the chain id from the live RPC (`client.ChainID(ctx)`);
+            // the offline policed path has no RPC dial, so the persisted step
+            // chain id is used instead (the canonical-target swap/bridge policy
+            // checks need it). Approval/transfer policies ignore the chain id, so
+            // a missing/unparseable value (→ 0) is harmless for those steps.
             let data = decode_hex(&step.data)
                 .map_err(|e| Error::wrap(Code::Usage, "decode step calldata", to_cause(e)))?;
+            let chain_id = parse_evm_chain_id(step.chain_id.trim()).unwrap_or(0);
             validate_step_policy(
                 Some(action),
                 step,
-                0,
+                chain_id,
                 &data,
                 &PolicyOptions {
                     allow_max_approval: opts.allow_max_approval,
