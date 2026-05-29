@@ -452,6 +452,12 @@ pub mod cli {
     ///
     /// [`Store`]: defi_execution::store::Store
     async fn handle_claim_plan(ctx: &AppCtx, args: ClaimPlanArgs) -> Result<Envelope, Error> {
+        // 0. Merge structured input (`--input-json` / `--input-file`) onto the
+        //    parsed flags before any guard (Go PreRunE `applyStructuredFlagInput`
+        //    over `claimArgs`). Explicit flags win; unknown key / null → usage.
+        let mut args = args;
+        merge_claim_plan_input(&mut args)?;
+
         let chain_arg = args.chain.as_deref().unwrap_or_default();
         let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
         let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
@@ -515,6 +521,12 @@ pub mod cli {
     /// recipient-mismatch rejections, the pool resolution + allowance-gated
     /// `[claim, approval, supply]` step assembly, and the `on_behalf_of` default.
     async fn handle_compound_plan(ctx: &AppCtx, args: CompoundPlanArgs) -> Result<Envelope, Error> {
+        // 0. Merge structured input (`--input-json` / `--input-file`) onto the
+        //    parsed flags before any guard (Go PreRunE `applyStructuredFlagInput`
+        //    over `compoundArgs`). Explicit flags win; unknown key / null → usage.
+        let mut args = args;
+        merge_compound_plan_input(&mut args)?;
+
         let chain_arg = args.chain.as_deref().unwrap_or_default();
         let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
         let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
@@ -566,6 +578,166 @@ pub mod cli {
         let mut env = ctx.metadata_envelope("rewards compound plan", data, providers);
         env.warnings = identity.warnings;
         Ok(env)
+    }
+
+    /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
+    /// `rewards claim plan` flags (Go PreRunE `applyStructuredFlagInput` over
+    /// `claimArgs`). Explicitly-set flags are never overridden; an unknown key /
+    /// null value is a usage error keyed on the full command path.
+    fn merge_claim_plan_input(args: &mut ClaimPlanArgs) -> Result<(), Error> {
+        use crate::execflags::{
+            apply_structured_input, decode_bool_field, decode_string_field,
+            decode_string_slice_field,
+        };
+
+        let mut explicit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        if args.provider.is_some() {
+            explicit.insert("provider");
+        }
+        if args.chain.is_some() {
+            explicit.insert("chain");
+        }
+        if args.identity.wallet.is_some() {
+            explicit.insert("wallet");
+        }
+        if args.identity.from_address.is_some() {
+            explicit.insert("from-address");
+        }
+        if args.recipient.is_some() {
+            explicit.insert("recipient");
+        }
+        if !args.assets.is_empty() {
+            explicit.insert("assets");
+        }
+        if args.reward_token.is_some() {
+            explicit.insert("reward-token");
+        }
+        if args.amount.is_some() {
+            explicit.insert("amount");
+        }
+        if args.controller_address.is_some() {
+            explicit.insert("controller-address");
+        }
+        if args.pool_address_provider.is_some() {
+            explicit.insert("pool-address-provider");
+        }
+        if !args.simulate {
+            explicit.insert("simulate");
+        }
+
+        apply_structured_input(
+            &args.input,
+            &explicit,
+            "rewards claim plan",
+            |key, canonical, raw| {
+                match canonical {
+                    "provider" => args.provider = Some(decode_string_field(key, raw)?),
+                    "chain" => args.chain = Some(decode_string_field(key, raw)?),
+                    "wallet" => args.identity.wallet = Some(decode_string_field(key, raw)?),
+                    "from-address" => {
+                        args.identity.from_address = Some(decode_string_field(key, raw)?)
+                    }
+                    "recipient" => args.recipient = Some(decode_string_field(key, raw)?),
+                    "assets" => args.assets = decode_string_slice_field(key, raw)?,
+                    "reward-token" => args.reward_token = Some(decode_string_field(key, raw)?),
+                    "amount" => args.amount = Some(decode_string_field(key, raw)?),
+                    "controller-address" => {
+                        args.controller_address = Some(decode_string_field(key, raw)?)
+                    }
+                    "pool-address-provider" => {
+                        args.pool_address_provider = Some(decode_string_field(key, raw)?)
+                    }
+                    "simulate" => args.simulate = decode_bool_field(key, raw)?,
+                    "rpc-url" => args.rpc_url = Some(decode_string_field(key, raw)?),
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            },
+        )
+    }
+
+    /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
+    /// `rewards compound plan` flags (Go PreRunE `applyStructuredFlagInput` over
+    /// `compoundArgs`). Explicitly-set flags are never overridden; an unknown key
+    /// / null value is a usage error keyed on the full command path.
+    fn merge_compound_plan_input(args: &mut CompoundPlanArgs) -> Result<(), Error> {
+        use crate::execflags::{
+            apply_structured_input, decode_bool_field, decode_string_field,
+            decode_string_slice_field,
+        };
+
+        let mut explicit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        if args.provider.is_some() {
+            explicit.insert("provider");
+        }
+        if args.chain.is_some() {
+            explicit.insert("chain");
+        }
+        if args.identity.wallet.is_some() {
+            explicit.insert("wallet");
+        }
+        if args.identity.from_address.is_some() {
+            explicit.insert("from-address");
+        }
+        if args.recipient.is_some() {
+            explicit.insert("recipient");
+        }
+        if args.on_behalf_of.is_some() {
+            explicit.insert("on-behalf-of");
+        }
+        if !args.assets.is_empty() {
+            explicit.insert("assets");
+        }
+        if args.reward_token.is_some() {
+            explicit.insert("reward-token");
+        }
+        if args.amount.is_some() {
+            explicit.insert("amount");
+        }
+        if args.controller_address.is_some() {
+            explicit.insert("controller-address");
+        }
+        if args.pool_address.is_some() {
+            explicit.insert("pool-address");
+        }
+        if args.pool_address_provider.is_some() {
+            explicit.insert("pool-address-provider");
+        }
+        if !args.simulate {
+            explicit.insert("simulate");
+        }
+
+        apply_structured_input(
+            &args.input,
+            &explicit,
+            "rewards compound plan",
+            |key, canonical, raw| {
+                match canonical {
+                    "provider" => args.provider = Some(decode_string_field(key, raw)?),
+                    "chain" => args.chain = Some(decode_string_field(key, raw)?),
+                    "wallet" => args.identity.wallet = Some(decode_string_field(key, raw)?),
+                    "from-address" => {
+                        args.identity.from_address = Some(decode_string_field(key, raw)?)
+                    }
+                    "recipient" => args.recipient = Some(decode_string_field(key, raw)?),
+                    "on-behalf-of" => args.on_behalf_of = Some(decode_string_field(key, raw)?),
+                    "assets" => args.assets = decode_string_slice_field(key, raw)?,
+                    "reward-token" => args.reward_token = Some(decode_string_field(key, raw)?),
+                    "amount" => args.amount = Some(decode_string_field(key, raw)?),
+                    "controller-address" => {
+                        args.controller_address = Some(decode_string_field(key, raw)?)
+                    }
+                    "pool-address" => args.pool_address = Some(decode_string_field(key, raw)?),
+                    "pool-address-provider" => {
+                        args.pool_address_provider = Some(decode_string_field(key, raw)?)
+                    }
+                    "simulate" => args.simulate = decode_bool_field(key, raw)?,
+                    "rpc-url" => args.rpc_url = Some(decode_string_field(key, raw)?),
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            },
+        )
     }
 }
 
@@ -1559,6 +1731,65 @@ mod app_tests {
         assert!(no_actions_persisted(tmp.path()));
     }
 
+    // --- structured input (`--input-json` / `--input-file`) ----------------
+    //
+    // Go: `configureStructuredInput[claimArgs]` wires the PreRunE merge onto
+    // `rewards claim plan`. JSON fills flags (incl. the `assets` string array);
+    // explicit flags override JSON; unknown keys / null are usage errors that
+    // persist nothing.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_resolves_all_flags_from_input_json() {
+        let rpc = MockServer::start().await; // controller provided -> no eth_call.
+        let tmp = TempDir::new().expect("tempdir");
+        let args = ClaimPlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"provider":"aave","chain":"1","assets":["{ASSET_A}"],"reward_token":"{REWARD}","amount":"1000000","from_address":"{SENDER}","controller_address":"{CONTROLLER}","rpc_url":"{rpc}"}}"#,
+                    rpc = rpc.uri()
+                )),
+                input_file: None,
+            },
+            ..ClaimPlanArgs::default()
+        };
+        let env = run_claim(tmp.path(), args)
+            .await
+            .expect("input-json should fill all flags (incl. the assets array)");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "rewards claim plan");
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], Value::from("claim_rewards"));
+        assert_eq!(data["provider"], Value::from("aave"));
+        // The claim step calldata reuses the assets/amount/reward from the JSON.
+        let calldata = data["steps"][0]["data"].as_str().expect("claim step data");
+        assert_eq!(
+            calldata.to_lowercase(),
+            claim_calldata(&[ASSET_A], U256::from(1_000_000u64), SENDER, REWARD).to_lowercase()
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_input_json_unknown_field_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = ClaimPlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":"aave","bogus":"x"}"#.to_string()),
+                input_file: None,
+            },
+            ..ClaimPlanArgs::default()
+        };
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("unknown structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert_eq!(
+            err.message,
+            "structured input field \"bogus\" is not supported by rewards claim plan"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
     // --- 9. claim identity-constraint errors (offline) ---------------------
 
     #[tokio::test(flavor = "multi_thread")]
@@ -2178,6 +2409,58 @@ mod compound_app_tests {
         assert_eq!(err.code, Code::Usage);
         assert_eq!(usage_exit(&err), 2);
         assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- structured input (`--input-json` / `--input-file`) ----------------
+    //
+    // Go: `configureStructuredInput[compoundArgs]` wires the PreRunE merge onto
+    // `rewards compound plan`. An unknown key is a usage error keyed on the full
+    // command path; persists nothing.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_input_json_unknown_field_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = CompoundPlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":"aave","bogus":"x"}"#.to_string()),
+                input_file: None,
+            },
+            ..CompoundPlanArgs::default()
+        };
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("unknown structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert_eq!(
+            err.message,
+            "structured input field \"bogus\" is not supported by rewards compound plan"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_resolves_all_flags_from_input_json() {
+        let rpc = allowance_rpc(0).await; // insufficient -> approval needed.
+        let tmp = TempDir::new().expect("tempdir");
+        let args = CompoundPlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"provider":"aave","chain":"1","assets":["{ASSET_A}"],"reward_token":"{REWARD}","amount":"1000000","from_address":"{SENDER}","controller_address":"{CONTROLLER}","pool_address":"{POOL}","rpc_url":"{rpc}"}}"#,
+                    rpc = rpc.uri()
+                )),
+                input_file: None,
+            },
+            ..CompoundPlanArgs::default()
+        };
+        let env = run_compound(tmp.path(), args)
+            .await
+            .expect("input-json should fill all flags and the plan should succeed");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "rewards compound plan");
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], Value::from("compound_rewards"));
+        assert_eq!(data["provider"], Value::from("aave"));
     }
 
     // --- 11. compound requires at least one asset --------------------------

@@ -860,76 +860,32 @@ pub mod cli {
         explicit: &std::collections::HashSet<&str>,
         values: &mut PlanValues,
     ) -> Result<(), Error> {
-        use defi_errors::Code;
-
-        let payload = read_structured_input(input)?;
-        let payload = match payload {
-            Some(p) if !p.trim().is_empty() => p,
-            _ => return Ok(()),
+        use crate::execflags::{
+            apply_structured_input, decode_bool_field, decode_i64_field, decode_string_field,
         };
 
-        let parsed: serde_json::Value = serde_json::from_str(&payload)
-            .map_err(|e| Error::wrap(Code::Usage, "parse structured input", e))?;
-        let obj = parsed
-            .as_object()
-            .ok_or_else(|| Error::new(Code::Usage, "structured input must be a JSON object"))?;
-
-        let as_string = |v: &serde_json::Value| -> Option<String> {
-            match v {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Number(n) => Some(n.to_string()),
-                serde_json::Value::Bool(b) => Some(b.to_string()),
-                _ => None,
-            }
-        };
-
-        for (key, raw) in obj {
-            let canonical = key.replace('_', "-");
-            if explicit.contains(canonical.as_str()) {
-                continue;
-            }
-            if raw.is_null() {
-                return Err(Error::new(
-                    Code::Usage,
-                    format!("structured input field {key:?} cannot be null"),
-                ));
-            }
-            match canonical.as_str() {
-                "provider" => values.provider = as_string(raw).unwrap_or_default(),
-                "from" => values.from = as_string(raw).unwrap_or_default(),
-                "to" => values.to = as_string(raw).unwrap_or_default(),
-                "asset" => values.asset = as_string(raw).unwrap_or_default(),
-                "to-asset" => values.to_asset = as_string(raw).unwrap_or_default(),
-                "amount" => values.amount = as_string(raw).unwrap_or_default(),
-                "amount-decimal" => values.amount_decimal = as_string(raw).unwrap_or_default(),
+        apply_structured_input(input, explicit, "bridge plan", |key, canonical, raw| {
+            match canonical {
+                "provider" => values.provider = decode_string_field(key, raw)?,
+                "from" => values.from = decode_string_field(key, raw)?,
+                "to" => values.to = decode_string_field(key, raw)?,
+                "asset" => values.asset = decode_string_field(key, raw)?,
+                "to-asset" => values.to_asset = decode_string_field(key, raw)?,
+                "amount" => values.amount = decode_string_field(key, raw)?,
+                "amount-decimal" => values.amount_decimal = decode_string_field(key, raw)?,
                 "from-amount-for-gas" => {
-                    values.from_amount_for_gas = as_string(raw).unwrap_or_default()
+                    values.from_amount_for_gas = decode_string_field(key, raw)?
                 }
-                "wallet" => values.wallet = as_string(raw).unwrap_or_default(),
-                "from-address" => values.from_address = as_string(raw).unwrap_or_default(),
-                "recipient" => values.recipient = as_string(raw).unwrap_or_default(),
-                "slippage-bps" => {
-                    if let serde_json::Value::Number(n) = raw {
-                        if let Some(i) = n.as_i64() {
-                            values.slippage_bps = i;
-                        }
-                    }
-                }
-                "simulate" => {
-                    if let serde_json::Value::Bool(b) = raw {
-                        values.simulate = *b;
-                    }
-                }
-                "rpc-url" => values.rpc_url = as_string(raw).unwrap_or_default(),
-                _ => {
-                    return Err(Error::new(
-                        Code::Usage,
-                        format!("structured input field {key:?} is not supported by bridge plan"),
-                    ));
-                }
+                "wallet" => values.wallet = decode_string_field(key, raw)?,
+                "from-address" => values.from_address = decode_string_field(key, raw)?,
+                "recipient" => values.recipient = decode_string_field(key, raw)?,
+                "slippage-bps" => values.slippage_bps = decode_i64_field(key, raw)?,
+                "simulate" => values.simulate = decode_bool_field(key, raw)?,
+                "rpc-url" => values.rpc_url = decode_string_field(key, raw)?,
+                _ => return Ok(false),
             }
-        }
-        Ok(())
+            Ok(true)
+        })
     }
 
     /// Merge structured input (`--input-json` / `--input-file`) onto the resolved
@@ -944,95 +900,24 @@ pub mod cli {
         explicit: &std::collections::HashSet<&str>,
         values: &mut QuoteValues,
     ) -> Result<(), Error> {
-        use defi_errors::Code;
+        use crate::execflags::{apply_structured_input, decode_string_field};
 
-        let payload = read_structured_input(input)?;
-        let payload = match payload {
-            Some(p) if !p.trim().is_empty() => p,
-            _ => return Ok(()),
-        };
-
-        let parsed: serde_json::Value = serde_json::from_str(&payload)
-            .map_err(|e| Error::wrap(Code::Usage, "parse structured input", e))?;
-        let obj = parsed
-            .as_object()
-            .ok_or_else(|| Error::new(Code::Usage, "structured input must be a JSON object"))?;
-
-        let as_string = |v: &serde_json::Value| -> Option<String> {
-            match v {
-                serde_json::Value::String(s) => Some(s.clone()),
-                serde_json::Value::Number(n) => Some(n.to_string()),
-                serde_json::Value::Bool(b) => Some(b.to_string()),
-                _ => None,
-            }
-        };
-
-        for (key, raw) in obj {
-            let canonical = key.replace('_', "-");
-            if explicit.contains(canonical.as_str()) {
-                continue;
-            }
-            if raw.is_null() {
-                return Err(Error::new(
-                    Code::Usage,
-                    format!("structured input field {key:?} cannot be null"),
-                ));
-            }
-            match canonical.as_str() {
-                "provider" => values.provider = as_string(raw).unwrap_or_default(),
-                "from" => values.from = as_string(raw).unwrap_or_default(),
-                "to" => values.to = as_string(raw).unwrap_or_default(),
-                "asset" => values.asset = as_string(raw).unwrap_or_default(),
-                "to-asset" => values.to_asset = as_string(raw).unwrap_or_default(),
-                "amount" => values.amount = as_string(raw).unwrap_or_default(),
-                "amount-decimal" => values.amount_decimal = as_string(raw).unwrap_or_default(),
+        apply_structured_input(input, explicit, "bridge quote", |key, canonical, raw| {
+            match canonical {
+                "provider" => values.provider = decode_string_field(key, raw)?,
+                "from" => values.from = decode_string_field(key, raw)?,
+                "to" => values.to = decode_string_field(key, raw)?,
+                "asset" => values.asset = decode_string_field(key, raw)?,
+                "to-asset" => values.to_asset = decode_string_field(key, raw)?,
+                "amount" => values.amount = decode_string_field(key, raw)?,
+                "amount-decimal" => values.amount_decimal = decode_string_field(key, raw)?,
                 "from-amount-for-gas" => {
-                    values.from_amount_for_gas = as_string(raw).unwrap_or_default()
+                    values.from_amount_for_gas = decode_string_field(key, raw)?
                 }
-                _ => {
-                    return Err(Error::new(
-                        Code::Usage,
-                        format!("structured input field {key:?} is not supported by bridge quote"),
-                    ));
-                }
+                _ => return Ok(false),
             }
-        }
-        Ok(())
-    }
-
-    /// Resolve the structured-input payload string from `--input-json` /
-    /// `--input-file` (`-` = stdin), enforcing mutual exclusivity (Go
-    /// `readStructuredInput`).
-    fn read_structured_input(
-        input: &crate::execflags::InputFlags,
-    ) -> Result<Option<String>, Error> {
-        use defi_errors::Code;
-
-        let json = input.input_json.as_deref().unwrap_or("").trim().to_string();
-        let file = input.input_file.as_deref().unwrap_or("").trim().to_string();
-        if !json.is_empty() && !file.is_empty() {
-            return Err(Error::new(
-                Code::Usage,
-                "use only one of --input-json or --input-file",
-            ));
-        }
-        if !json.is_empty() {
-            return Ok(Some(json));
-        }
-        if file.is_empty() {
-            return Ok(None);
-        }
-        if file == "-" {
-            use std::io::Read;
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(|e| Error::wrap(Code::Usage, "read structured input from stdin", e))?;
-            return Ok(Some(buf));
-        }
-        let buf = std::fs::read_to_string(&file)
-            .map_err(|e| Error::wrap(Code::Usage, "read structured input file", e))?;
-        Ok(Some(buf))
+            Ok(true)
+        })
     }
 }
 
@@ -2714,6 +2599,58 @@ mod plan_tests {
             .expect("explicit --provider across must override the JSON provider");
         assert!(env.success);
         assert_eq!(action_data(&env)["provider"], json!("across"));
+    }
+
+    /// A JSON number supplied for a string flag (`amount`) is a usage decode
+    /// error, matching Go `decodeRawFlagValue` (`json.Unmarshal(number → string)`
+    /// fails). Locks the strict-decode parity (no silent number→string coercion).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_input_json_number_for_string_flag_is_usage_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"provider":"across","from":"1","to":"10","asset":"USDC","amount":1000000,"from_address":"{SENDER}"}}"#
+                )),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("a JSON number for the string amount flag must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert!(
+            err.message
+                .starts_with("decode structured input field \"amount\""),
+            "got {:?}",
+            err.message
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    /// An unrecognized structured-input key is a usage error keyed on the
+    /// command path; persists nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_input_json_unknown_field_is_usage_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":"across","bogus":"x"}"#.to_string()),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("unknown structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert_eq!(
+            err.message,
+            "structured input field \"bogus\" is not supported by bridge plan"
+        );
+        assert!(no_actions_persisted(dir.path()));
     }
 
     // --- P9: --provider required (spec §2.5), persists nothing -------------

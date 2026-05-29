@@ -701,6 +701,12 @@ pub mod cli {
         verb: LendVerb,
         args: LendPlanArgs,
     ) -> Result<Envelope, Error> {
+        // 0. Merge structured input (`--input-json` / `--input-file`) onto the
+        //    parsed flags before any guard (Go PreRunE `applyStructuredFlagInput`
+        //    over `lendArgs`). Explicit flags win; unknown key / null → usage.
+        let mut args = args;
+        merge_plan_input(verb, &mut args)?;
+
         let chain_arg = args.chain.as_deref().unwrap_or_default();
         let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
         let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
@@ -789,6 +795,87 @@ pub mod cli {
                 pool_address_provider: args.pool_address_provider.clone().unwrap_or_default(),
             })
             .await
+    }
+
+    /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
+    /// `lend <verb> plan` flags (Go PreRunE `applyStructuredFlagInput` over
+    /// `lendArgs`). Explicitly-set flags are never overridden; an unknown key /
+    /// null value is a usage error keyed on the full command path.
+    fn merge_plan_input(verb: LendVerb, args: &mut LendPlanArgs) -> Result<(), Error> {
+        use crate::execflags::{
+            apply_structured_input, decode_bool_field, decode_i64_field, decode_string_field,
+        };
+
+        let mut explicit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        if args.provider.is_some() {
+            explicit.insert("provider");
+        }
+        if args.chain.is_some() {
+            explicit.insert("chain");
+        }
+        if args.asset.is_some() {
+            explicit.insert("asset");
+        }
+        if args.market_id.is_some() {
+            explicit.insert("market-id");
+        }
+        if args.amount.is_some() {
+            explicit.insert("amount");
+        }
+        if args.amount_decimal.is_some() {
+            explicit.insert("amount-decimal");
+        }
+        if args.identity.wallet.is_some() {
+            explicit.insert("wallet");
+        }
+        if args.identity.from_address.is_some() {
+            explicit.insert("from-address");
+        }
+        if args.recipient.is_some() {
+            explicit.insert("recipient");
+        }
+        if args.on_behalf_of.is_some() {
+            explicit.insert("on-behalf-of");
+        }
+        if args.pool_address.is_some() {
+            explicit.insert("pool-address");
+        }
+        if args.pool_address_provider.is_some() {
+            explicit.insert("pool-address-provider");
+        }
+        // `interest-rate-mode`/`simulate` default to 2/true; treat a non-default
+        // value as explicitly set so JSON does not override an operator choice.
+        if args.interest_rate_mode != 2 {
+            explicit.insert("interest-rate-mode");
+        }
+        if !args.simulate {
+            explicit.insert("simulate");
+        }
+
+        let command = format!("lend {} plan", verb_path(verb));
+        apply_structured_input(&args.input, &explicit, &command, |key, canonical, raw| {
+            match canonical {
+                "provider" => args.provider = Some(decode_string_field(key, raw)?),
+                "chain" => args.chain = Some(decode_string_field(key, raw)?),
+                "asset" => args.asset = Some(decode_string_field(key, raw)?),
+                "market-id" => args.market_id = Some(decode_string_field(key, raw)?),
+                "amount" => args.amount = Some(decode_string_field(key, raw)?),
+                "amount-decimal" => args.amount_decimal = Some(decode_string_field(key, raw)?),
+                "wallet" => args.identity.wallet = Some(decode_string_field(key, raw)?),
+                "from-address" => args.identity.from_address = Some(decode_string_field(key, raw)?),
+                "recipient" => args.recipient = Some(decode_string_field(key, raw)?),
+                "on-behalf-of" => args.on_behalf_of = Some(decode_string_field(key, raw)?),
+                "interest-rate-mode" => args.interest_rate_mode = decode_i64_field(key, raw)?,
+                "simulate" => args.simulate = decode_bool_field(key, raw)?,
+                "rpc-url" => args.rpc_url = Some(decode_string_field(key, raw)?),
+                "pool-address" => args.pool_address = Some(decode_string_field(key, raw)?),
+                "pool-address-provider" => {
+                    args.pool_address_provider = Some(decode_string_field(key, raw)?)
+                }
+                _ => return Ok(false),
+            }
+            Ok(true)
+        })
     }
 
     /// The leaf verb token for `meta.command` (`supply`/`withdraw`/`borrow`/
@@ -2635,6 +2722,169 @@ mod plan_app_tests {
             supply_calldata(1_000_000, SENDER).to_lowercase(),
             "supply lend-step calldata must equal the alloy AAVE_POOL_ABI golden"
         );
+    }
+
+    // --- structured input (`--input-json` / `--input-file`) ----------------
+    //
+    // Go: `configureStructuredInput[lendArgs]` wires the PreRunE
+    // `applyStructuredFlagInput` merge onto `lend <verb> plan`. These lock the
+    // parity: JSON fills the flags, explicit flags override JSON, unknown keys
+    // and null values are usage errors that persist NOTHING.
+
+    /// JSON-only `lend supply plan` resolves every flag from `--input-json`
+    /// (provider/chain/asset/amount/from-address/pool-address) and builds the
+    /// same action a fully-flagged invocation would (Go merges before the
+    /// identity/build guards run).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supply_plan_resolves_all_flags_from_input_json() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        // No explicit flags: everything arrives via structured input.
+        let args = LendPlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"provider":"aave","chain":"1","asset":"USDC","amount":"1000000","from_address":"{SENDER}","pool_address":"{POOL}","rpc_url":"{rpc}"}}"#,
+                    rpc = rpc.uri()
+                )),
+                input_file: None,
+            },
+            ..LendPlanArgs::default()
+        };
+        let env = run_plan(tmp.path(), LendCmd::Supply(LendVerbCmd::Plan(args)))
+            .await
+            .expect("input-json should fill all flags and the plan should succeed");
+
+        assert!(env.success);
+        assert_eq!(env.meta.command, "lend supply plan");
+        assert_eq!(env.meta.providers[0].name, "aave");
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], Value::from("lend_supply"));
+        assert_eq!(data["provider"], Value::from("aave"));
+        assert_eq!(data["chain_id"], Value::from("eip155:1"));
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+        assert_eq!(
+            data["from_address"].as_str().unwrap().to_lowercase(),
+            SENDER.to_lowercase()
+        );
+    }
+
+    /// An explicit flag is never overridden by a conflicting structured-input
+    /// value (Go `changedFlagNames` skip). The explicit `--amount 2000000` wins
+    /// over the JSON `amount:1000000`.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supply_plan_explicit_flag_overrides_input_json() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = aave_supply_args(&rpc.uri());
+        args.amount = Some("2000000".to_string()); // explicit -> wins.
+        args.input = InputFlags {
+            input_json: Some(r#"{"amount":"1000000"}"#.to_string()),
+            input_file: None,
+        };
+        let env = run_plan(tmp.path(), LendCmd::Supply(LendVerbCmd::Plan(args)))
+            .await
+            .expect("plan should succeed with the explicit amount");
+        let data = action_data(&env);
+        assert_eq!(
+            data["input_amount"],
+            Value::from("2000000"),
+            "explicit --amount must override the structured-input amount"
+        );
+    }
+
+    /// An unrecognized structured-input key is a usage error keyed on the full
+    /// command path, and persists nothing (Go: unknown flag lookup → usage).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supply_plan_input_json_unknown_field_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = LendPlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":"aave","bogus":"x"}"#.to_string()),
+                input_file: None,
+            },
+            ..LendPlanArgs::default()
+        };
+        let err = run_plan(tmp.path(), LendCmd::Supply(LendVerbCmd::Plan(args)))
+            .await
+            .expect_err("unknown structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert_eq!(
+            err.message,
+            "structured input field \"bogus\" is not supported by lend supply plan"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    /// A `null` value for a recognized key is a usage error, persists nothing.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supply_plan_input_json_null_field_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = LendPlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":null}"#.to_string()),
+                input_file: None,
+            },
+            ..LendPlanArgs::default()
+        };
+        let err = run_plan(tmp.path(), LendCmd::Supply(LendVerbCmd::Plan(args)))
+            .await
+            .expect_err("null structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(
+            err.message,
+            "structured input field \"provider\" cannot be null"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    /// A JSON number supplied for a string flag is a usage decode error (Go
+    /// `decodeRawFlagValue` rejects `json.Unmarshal(number → string)`), and
+    /// the borrow verb threads through the same merge.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn borrow_plan_input_json_number_for_string_flag_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = LendPlanArgs {
+            input: InputFlags {
+                input_json: Some(
+                    r#"{"provider":"aave","chain":"1","asset":"USDC","amount":1000000}"#
+                        .to_string(),
+                ),
+                input_file: None,
+            },
+            ..LendPlanArgs::default()
+        };
+        let err = run_plan(tmp.path(), LendCmd::Borrow(LendVerbCmd::Plan(args)))
+            .await
+            .expect_err("number for a string flag must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert!(
+            err.message
+                .starts_with("decode structured input field \"amount\""),
+            "got {:?}",
+            err.message
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    /// `--input-json` and `--input-file` together is a usage error before any
+    /// build (Go `readStructuredInput` mutual-exclusivity guard).
+    #[tokio::test(flavor = "multi_thread")]
+    async fn supply_plan_both_input_modes_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = LendPlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":"aave"}"#.to_string()),
+                input_file: Some("/tmp/whatever.json".to_string()),
+            },
+            ..LendPlanArgs::default()
+        };
+        let err = run_plan(tmp.path(), LendCmd::Supply(LendVerbCmd::Plan(args)))
+            .await
+            .expect_err("both input modes must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(err.message, "use only one of --input-json or --input-file");
+        assert!(no_actions_persisted(tmp.path()));
     }
 
     // --- 4. allowance sufficient -> single lend step ----------------------

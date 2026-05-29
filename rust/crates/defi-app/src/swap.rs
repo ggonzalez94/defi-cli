@@ -452,6 +452,8 @@ fn quote_set_flag(
     key: &str,
     raw: &serde_json::Value,
 ) -> Result<(), Error> {
+    use crate::execflags::{decode_f64_field, decode_string_field};
+
     // null is rejected for any recognized key (Go: cannot be null).
     if raw.is_null() {
         return Err(Error::new(
@@ -459,36 +461,21 @@ fn quote_set_flag(
             format!("structured input field {key:?} cannot be null"),
         ));
     }
-    // Decode a scalar to its flag-string form (Go decodeRawFlagValue).
-    let as_string = |v: &serde_json::Value| -> Option<String> {
-        match v {
-            serde_json::Value::String(s) => Some(s.clone()),
-            serde_json::Value::Number(n) => Some(n.to_string()),
-            serde_json::Value::Bool(b) => Some(b.to_string()),
-            _ => None,
-        }
-    };
     let canonical = key.replace('_', "-");
     match canonical.as_str() {
-        "provider" => values.provider = as_string(raw).unwrap_or_default(),
-        "chain" => values.chain = as_string(raw).unwrap_or_default(),
-        "from-asset" => values.from_asset = as_string(raw).unwrap_or_default(),
-        "to-asset" => values.to_asset = as_string(raw).unwrap_or_default(),
-        "type" => values.trade_type = as_string(raw).unwrap_or_default(),
-        "amount" => values.amount = as_string(raw).unwrap_or_default(),
-        "amount-decimal" => values.amount_decimal = as_string(raw).unwrap_or_default(),
-        "amount-out" => values.amount_out = as_string(raw).unwrap_or_default(),
-        "amount-out-decimal" => values.amount_out_decimal = as_string(raw).unwrap_or_default(),
-        "from-address" => values.from_address = as_string(raw).unwrap_or_default(),
-        "rpc-url" => values.rpc_url = as_string(raw).unwrap_or_default(),
+        "provider" => values.provider = decode_string_field(key, raw)?,
+        "chain" => values.chain = decode_string_field(key, raw)?,
+        "from-asset" => values.from_asset = decode_string_field(key, raw)?,
+        "to-asset" => values.to_asset = decode_string_field(key, raw)?,
+        "type" => values.trade_type = decode_string_field(key, raw)?,
+        "amount" => values.amount = decode_string_field(key, raw)?,
+        "amount-decimal" => values.amount_decimal = decode_string_field(key, raw)?,
+        "amount-out" => values.amount_out = decode_string_field(key, raw)?,
+        "amount-out-decimal" => values.amount_out_decimal = decode_string_field(key, raw)?,
+        "from-address" => values.from_address = decode_string_field(key, raw)?,
+        "rpc-url" => values.rpc_url = decode_string_field(key, raw)?,
         "slippage-pct" => {
-            let f = raw.as_f64().ok_or_else(|| {
-                Error::new(
-                    Code::Usage,
-                    format!("decode structured input field {key:?}"),
-                )
-            })?;
-            values.slippage_pct = f;
+            values.slippage_pct = decode_f64_field(key, raw)?;
             values.slippage_changed = true;
         }
         _ => {
@@ -709,14 +696,20 @@ pub mod cli {
         use defi_execution::SwapExecutionOptions;
         use defi_providers::normalize::normalize_swap_provider;
 
+        // 0. Merge structured input (`--input-json` / `--input-file`) onto the
+        //    resolved flag values before any guard (Go PreRunE
+        //    `applyStructuredFlagInput`). Explicitly-set flags are never
+        //    overridden; an unknown key / null value is a usage error.
+        let values = resolve_plan_values(&args)?;
+
         // 1. `--provider` required (normalized first, like the Go runner).
-        let provider_name = normalize_swap_provider(args.provider.as_deref().unwrap_or_default());
+        let provider_name = normalize_swap_provider(&values.provider);
         if provider_name.is_empty() {
             return Err(Error::new(Code::Usage, "--provider is required"));
         }
 
         // 2. `--type` parses (usage on unknown).
-        let trade_type = super::normalize_trade_type(&args.r#type)?;
+        let trade_type = super::normalize_trade_type(&values.trade_type)?;
 
         // 3. exact-output capability gate (BEFORE any build/persist).
         if trade_type == defi_execution::SwapTradeType::ExactOutput
@@ -730,22 +723,22 @@ pub mod cli {
 
         // 4. Build the canonical request (chain/asset parse, amount cross-validation).
         let req = super::parse_swap_request(
-            args.chain.as_deref().unwrap_or_default(),
-            args.from_asset.as_deref().unwrap_or_default(),
-            args.to_asset.as_deref().unwrap_or_default(),
+            &values.chain,
+            &values.from_asset,
+            &values.to_asset,
             trade_type,
-            args.amount.as_deref().unwrap_or_default(),
-            args.amount_decimal.as_deref().unwrap_or_default(),
-            args.amount_out.as_deref().unwrap_or_default(),
-            args.amount_out_decimal.as_deref().unwrap_or_default(),
-            args.rpc_url.as_deref().unwrap_or_default(),
+            &values.amount,
+            &values.amount_decimal,
+            &values.amount_out,
+            &values.amount_out_decimal,
+            &values.rpc_url,
         )?;
 
         // 5. Resolve the sender identity (Tempo = `--from-address` only; standard =
         //    OWS-first shared resolver). Errors return before any build/persist.
-        let chain_arg = args.chain.as_deref().unwrap_or_default();
-        let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
-        let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
+        let chain_arg = values.chain.as_str();
+        let wallet_ref = values.wallet.as_str();
+        let from_flag = values.from_address.as_str();
 
         let mut identity = None;
         let sender = if normalize_swap_provider(&provider_name) == "tempo" {
@@ -763,10 +756,10 @@ pub mod cli {
         // 6. Route the build through the populated registry; capture the status.
         let opts = SwapExecutionOptions {
             sender: sender.clone(),
-            recipient: args.recipient.clone().unwrap_or_default(),
-            slippage_bps: args.slippage_bps,
-            simulate: args.simulate,
-            rpc_url: args.rpc_url.clone().unwrap_or_default(),
+            recipient: values.recipient.clone(),
+            slippage_bps: values.slippage_bps,
+            simulate: values.simulate,
+            rpc_url: values.rpc_url.clone(),
         };
         let built = ctx
             .swap_action_registry()
@@ -804,6 +797,122 @@ pub mod cli {
         let mut env = ctx.metadata_envelope("swap plan", data, vec![status]);
         env.warnings = identity.map(|i| i.warnings).unwrap_or_default();
         Ok(env)
+    }
+
+    /// The resolved `swap plan` flag values (after structured-input merge).
+    struct PlanValues {
+        provider: String,
+        chain: String,
+        from_asset: String,
+        to_asset: String,
+        trade_type: String,
+        amount: String,
+        amount_decimal: String,
+        amount_out: String,
+        amount_out_decimal: String,
+        wallet: String,
+        from_address: String,
+        recipient: String,
+        slippage_bps: i64,
+        simulate: bool,
+        rpc_url: String,
+    }
+
+    /// Resolve the `swap plan` flag values, merging any structured input
+    /// (`--input-json` / `--input-file`) onto the parsed flags (Go PreRunE
+    /// `applyStructuredFlagInput` over `swapPlanArgs`). Explicitly-set flags are
+    /// never overridden; an unknown key / null value is a usage error.
+    fn resolve_plan_values(args: &PlanArgs) -> Result<PlanValues, Error> {
+        use crate::execflags::{
+            apply_structured_input, decode_bool_field, decode_i64_field, decode_string_field,
+        };
+
+        let mut values = PlanValues {
+            provider: args.provider.clone().unwrap_or_default(),
+            chain: args.chain.clone().unwrap_or_default(),
+            from_asset: args.from_asset.clone().unwrap_or_default(),
+            to_asset: args.to_asset.clone().unwrap_or_default(),
+            trade_type: args.r#type.clone(),
+            amount: args.amount.clone().unwrap_or_default(),
+            amount_decimal: args.amount_decimal.clone().unwrap_or_default(),
+            amount_out: args.amount_out.clone().unwrap_or_default(),
+            amount_out_decimal: args.amount_out_decimal.clone().unwrap_or_default(),
+            wallet: args.identity.wallet.clone().unwrap_or_default(),
+            from_address: args.identity.from_address.clone().unwrap_or_default(),
+            recipient: args.recipient.clone().unwrap_or_default(),
+            slippage_bps: args.slippage_bps,
+            simulate: args.simulate,
+            rpc_url: args.rpc_url.clone().unwrap_or_default(),
+        };
+
+        let mut explicit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        if args.provider.is_some() {
+            explicit.insert("provider");
+        }
+        if args.chain.is_some() {
+            explicit.insert("chain");
+        }
+        if args.from_asset.is_some() {
+            explicit.insert("from-asset");
+        }
+        if args.to_asset.is_some() {
+            explicit.insert("to-asset");
+        }
+        if args.r#type != "exact-input" {
+            explicit.insert("type");
+        }
+        if args.amount.is_some() {
+            explicit.insert("amount");
+        }
+        if args.amount_decimal.is_some() {
+            explicit.insert("amount-decimal");
+        }
+        if args.amount_out.is_some() {
+            explicit.insert("amount-out");
+        }
+        if args.amount_out_decimal.is_some() {
+            explicit.insert("amount-out-decimal");
+        }
+        if args.identity.wallet.is_some() {
+            explicit.insert("wallet");
+        }
+        if args.identity.from_address.is_some() {
+            explicit.insert("from-address");
+        }
+        if args.recipient.is_some() {
+            explicit.insert("recipient");
+        }
+
+        apply_structured_input(
+            &args.input,
+            &explicit,
+            "swap plan",
+            |key, canonical, raw| {
+                match canonical {
+                    "provider" => values.provider = decode_string_field(key, raw)?,
+                    "chain" => values.chain = decode_string_field(key, raw)?,
+                    "from-asset" => values.from_asset = decode_string_field(key, raw)?,
+                    "to-asset" => values.to_asset = decode_string_field(key, raw)?,
+                    "type" => values.trade_type = decode_string_field(key, raw)?,
+                    "amount" => values.amount = decode_string_field(key, raw)?,
+                    "amount-decimal" => values.amount_decimal = decode_string_field(key, raw)?,
+                    "amount-out" => values.amount_out = decode_string_field(key, raw)?,
+                    "amount-out-decimal" => {
+                        values.amount_out_decimal = decode_string_field(key, raw)?
+                    }
+                    "wallet" => values.wallet = decode_string_field(key, raw)?,
+                    "from-address" => values.from_address = decode_string_field(key, raw)?,
+                    "recipient" => values.recipient = decode_string_field(key, raw)?,
+                    "slippage-bps" => values.slippage_bps = decode_i64_field(key, raw)?,
+                    "simulate" => values.simulate = decode_bool_field(key, raw)?,
+                    "rpc-url" => values.rpc_url = decode_string_field(key, raw)?,
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            },
+        )?;
+
+        Ok(values)
     }
 
     /// Handle `swap quote`: validate inputs, build the request, route through the
@@ -965,7 +1074,7 @@ pub mod cli {
     ) -> Result<(), Error> {
         use defi_errors::Code;
 
-        let payload = read_structured_input(input)?;
+        let payload = crate::execflags::read_structured_input(input)?;
         let payload = match payload {
             Some(p) if !p.trim().is_empty() => p,
             _ => return Ok(()),
@@ -985,41 +1094,6 @@ pub mod cli {
             super::quote_set_flag(values, key, raw)?;
         }
         Ok(())
-    }
-
-    /// Resolve the structured-input payload string from `--input-json` /
-    /// `--input-file` (`-` = stdin), enforcing mutual exclusivity (Go
-    /// `readStructuredInput`).
-    fn read_structured_input(
-        input: &crate::execflags::InputFlags,
-    ) -> Result<Option<String>, Error> {
-        use defi_errors::Code;
-
-        let json = input.input_json.as_deref().unwrap_or("").trim().to_string();
-        let file = input.input_file.as_deref().unwrap_or("").trim().to_string();
-        if !json.is_empty() && !file.is_empty() {
-            return Err(Error::new(
-                Code::Usage,
-                "use only one of --input-json or --input-file",
-            ));
-        }
-        if !json.is_empty() {
-            return Ok(Some(json));
-        }
-        if file.is_empty() {
-            return Ok(None);
-        }
-        if file == "-" {
-            use std::io::Read;
-            let mut buf = String::new();
-            std::io::stdin()
-                .read_to_string(&mut buf)
-                .map_err(|e| Error::wrap(Code::Usage, "read structured input from stdin", e))?;
-            return Ok(Some(buf));
-        }
-        let buf = std::fs::read_to_string(&file)
-            .map_err(|e| Error::wrap(Code::Usage, "read structured input file", e))?;
-        Ok(Some(buf))
     }
 }
 
@@ -3208,6 +3282,87 @@ mod plan_app_tests {
             .expect_err("malformed --from-address on tempo must fail");
         assert_eq!(err.code, Code::Usage);
         assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    // ---- structured input (`--input-json` / `--input-file`) ---------------
+    //
+    // Go: `configureStructuredInput[swapPlanArgs]` wires the PreRunE merge onto
+    // `swap plan`. JSON fills flags; explicit flags override JSON; unknown keys /
+    // null values are usage errors that persist nothing.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn taikoswap_plan_resolves_all_flags_from_input_json() {
+        let server = taiko_rpc(0).await;
+        let dir = tempfile::tempdir().expect("tempdir");
+        // No explicit flags: everything arrives via structured input.
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"provider":"taikoswap","chain":"taiko","from_asset":"USDC","to_asset":"WETH","amount":"1000000","from_address":"{SENDER}","rpc_url":"{rpc}"}}"#,
+                    rpc = server.uri()
+                )),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let env = run_plan(dir.path(), args)
+            .await
+            .expect("input-json should fill all flags and the plan should succeed");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "swap plan");
+        assert_eq!(env.meta.providers[0].name, "taikoswap");
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], json!("swap"));
+        assert_eq!(data["provider"], json!("taikoswap"));
+        assert_eq!(data["chain_id"], json!("eip155:167000"));
+        assert_eq!(data["input_amount"], json!("1000000"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn swap_plan_input_json_unknown_field_is_usage_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"provider":"taikoswap","bogus":"x"}"#.to_string()),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("unknown structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert_eq!(
+            err.message,
+            "structured input field \"bogus\" is not supported by swap plan"
+        );
+        assert!(no_actions_persisted(dir.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn swap_plan_input_json_number_for_string_flag_is_usage_error() {
+        let dir = tempfile::tempdir().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"provider":"taikoswap","chain":"taiko","from_asset":"USDC","to_asset":"WETH","amount":1000000,"from_address":"{SENDER}"}}"#
+                )),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let err = run_plan(dir.path(), args)
+            .await
+            .expect_err("a JSON number for a string flag must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert!(
+            err.message
+                .starts_with("decode structured input field \"amount\""),
+            "got {:?}",
+            err.message
+        );
         assert!(no_actions_persisted(dir.path()));
     }
 

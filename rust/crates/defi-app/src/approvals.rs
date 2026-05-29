@@ -237,6 +237,12 @@ pub mod cli {
     /// [`Store`]: defi_execution::store::Store
     /// [`ApprovalRequest`]: defi_execution::planner::ApprovalRequest
     async fn handle_plan(ctx: &AppCtx, args: PlanArgs) -> Result<Envelope, Error> {
+        // 0. Merge structured input (`--input-json` / `--input-file`) onto the
+        //    parsed flags before any guard (Go PreRunE `applyStructuredFlagInput`
+        //    over `approvalArgs`). Explicit flags win; unknown key / null → usage.
+        let mut args = args;
+        merge_plan_input(&mut args)?;
+
         let chain_arg = args.chain.as_deref().unwrap_or_default();
         let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
         let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
@@ -282,6 +288,63 @@ pub mod cli {
         let mut env = ctx.metadata_envelope("approvals plan", data, providers);
         env.warnings = identity.warnings;
         Ok(env)
+    }
+
+    /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
+    /// `approvals plan` flags (Go PreRunE `applyStructuredFlagInput` over
+    /// `approvalArgs`). Explicitly-set flags are never overridden; an unknown key
+    /// / null value is a usage error keyed on the full command path.
+    fn merge_plan_input(args: &mut PlanArgs) -> Result<(), Error> {
+        use crate::execflags::{apply_structured_input, decode_bool_field, decode_string_field};
+
+        let mut explicit: std::collections::HashSet<&str> = std::collections::HashSet::new();
+        if args.chain.is_some() {
+            explicit.insert("chain");
+        }
+        if args.asset.is_some() {
+            explicit.insert("asset");
+        }
+        if args.spender.is_some() {
+            explicit.insert("spender");
+        }
+        if args.amount.is_some() {
+            explicit.insert("amount");
+        }
+        if args.amount_decimal.is_some() {
+            explicit.insert("amount-decimal");
+        }
+        if args.identity.wallet.is_some() {
+            explicit.insert("wallet");
+        }
+        if args.identity.from_address.is_some() {
+            explicit.insert("from-address");
+        }
+        if !args.simulate {
+            explicit.insert("simulate");
+        }
+
+        apply_structured_input(
+            &args.input,
+            &explicit,
+            "approvals plan",
+            |key, canonical, raw| {
+                match canonical {
+                    "chain" => args.chain = Some(decode_string_field(key, raw)?),
+                    "asset" => args.asset = Some(decode_string_field(key, raw)?),
+                    "spender" => args.spender = Some(decode_string_field(key, raw)?),
+                    "amount" => args.amount = Some(decode_string_field(key, raw)?),
+                    "amount-decimal" => args.amount_decimal = Some(decode_string_field(key, raw)?),
+                    "wallet" => args.identity.wallet = Some(decode_string_field(key, raw)?),
+                    "from-address" => {
+                        args.identity.from_address = Some(decode_string_field(key, raw)?)
+                    }
+                    "simulate" => args.simulate = decode_bool_field(key, raw)?,
+                    "rpc-url" => args.rpc_url = Some(decode_string_field(key, raw)?),
+                    _ => return Ok(false),
+                }
+                Ok(true)
+            },
+        )
     }
 }
 
@@ -781,6 +844,103 @@ mod app_tests {
             "legacy --from-address plan surfaces the OWS-recommended warning; got {:?}",
             env.warnings
         );
+    }
+
+    // --- structured input (`--input-json` / `--input-file`) ----------------
+    //
+    // Go: `configureStructuredInput[approvalArgs]` wires the PreRunE merge onto
+    // `approvals plan`. JSON fills flags; explicit flags override JSON; unknown
+    // keys / null values are usage errors that persist nothing.
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_resolves_all_flags_from_input_json() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(format!(
+                    r#"{{"chain":"1","asset":"USDC","spender":"{SPENDER}","amount":"1000000","from_address":"{SENDER}"}}"#
+                )),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let env = run_plan(tmp.path(), args)
+            .await
+            .expect("input-json should fill all flags and the plan should succeed");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "approvals plan");
+        let data = action_data(&env);
+        assert_eq!(data["intent_type"], Value::from("approve"));
+        // The approval step calldata still matches the pinned golden, proving the
+        // spender/amount were taken from the JSON.
+        assert_eq!(
+            data["steps"][0]["data"].as_str().expect("step data"),
+            APPROVE_CALLDATA_GOLDEN
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_explicit_flag_overrides_input_json() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        // Explicit asset stays USDC; JSON tries to flip it to a bogus symbol — the
+        // explicit flag must win, so the plan still succeeds on USDC.
+        args.input = InputFlags {
+            input_json: Some(r#"{"asset":"NOT_A_REAL_TOKEN"}"#.to_string()),
+            input_file: None,
+        };
+        let env = run_plan(tmp.path(), args)
+            .await
+            .expect("explicit --asset must win over the JSON asset");
+        assert!(env.success);
+        let data = action_data(&env);
+        assert_eq!(
+            data["steps"][0]["data"].as_str().expect("step data"),
+            APPROVE_CALLDATA_GOLDEN
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_input_json_unknown_field_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"chain":"1","token":"USDC"}"#.to_string()),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("unknown structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert_eq!(
+            err.message,
+            "structured input field \"token\" is not supported by approvals plan"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_input_json_null_field_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = PlanArgs {
+            input: InputFlags {
+                input_json: Some(r#"{"chain":null}"#.to_string()),
+                input_file: None,
+            },
+            ..PlanArgs::default()
+        };
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("null structured-input field must be a usage error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(
+            err.message,
+            "structured input field \"chain\" cannot be null"
+        );
+        assert!(no_actions_persisted(tmp.path()));
     }
 
     // --- 3, 4. step calldata reuses the defi-evm ABI golden ----------------
