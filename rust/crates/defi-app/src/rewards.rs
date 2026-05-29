@@ -235,11 +235,14 @@ pub fn ensure_rewards_compound_intent(intent_type: &str) -> Result<(), Error> {
 /// clap parsing + handler for the `rewards` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
-    use defi_errors::Error;
-    use defi_model::Envelope;
+    use defi_errors::{Code, Error};
+    use defi_execution::builder::Registry;
+    use defi_model::{Envelope, ProviderStatus};
+    use defi_providers::normalize::normalize_lending_provider;
 
     use crate::ctx::AppCtx;
     use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+    use crate::execident::{apply_execution_identity_to_action, resolve_execution_identity};
 
     /// `rewards` subcommands: the two execution verbs.
     #[derive(Subcommand, Debug)]
@@ -391,10 +394,178 @@ pub mod cli {
     }
 
     /// Handle `rewards <sub>`.
-    pub async fn handle(_ctx: &AppCtx, cmd: RewardsCmd) -> Result<Envelope, Error> {
-        let path = format!("rewards {}", cmd.path());
-        let ws = if path.ends_with("plan") { "WS3" } else { "WS4" };
-        Err(AppCtx::unimplemented(&path, ws))
+    pub async fn handle(ctx: &AppCtx, cmd: RewardsCmd) -> Result<Envelope, Error> {
+        match cmd {
+            RewardsCmd::Claim(ClaimVerbCmd::Plan(args)) => handle_claim_plan(ctx, args).await,
+            RewardsCmd::Claim(ClaimVerbCmd::Submit(_)) => {
+                Err(AppCtx::unimplemented("rewards claim submit", "WS4"))
+            }
+            RewardsCmd::Claim(ClaimVerbCmd::Status(_)) => {
+                Err(AppCtx::unimplemented("rewards claim status", "WS4"))
+            }
+            RewardsCmd::Compound(CompoundVerbCmd::Plan(args)) => {
+                handle_compound_plan(ctx, args).await
+            }
+            RewardsCmd::Compound(CompoundVerbCmd::Submit(_)) => {
+                Err(AppCtx::unimplemented("rewards compound submit", "WS4"))
+            }
+            RewardsCmd::Compound(CompoundVerbCmd::Status(_)) => {
+                Err(AppCtx::unimplemented("rewards compound status", "WS4"))
+            }
+        }
+    }
+
+    /// Compute the rewards-plan provider-status name the way the Go runner does
+    /// (`normalizeLendingProvider(provider)` → trimmed `--provider` → `"unknown"`).
+    fn provider_status_name(provider: &str) -> String {
+        let normalized = normalize_lending_provider(provider);
+        if !normalized.is_empty() {
+            return normalized;
+        }
+        let trimmed = provider.trim();
+        if !trimmed.is_empty() {
+            return trimmed.to_string();
+        }
+        "unknown".to_string()
+    }
+
+    /// Handle `rewards claim plan` (Go `planCmd.RunE` in `newRewardsClaimCommand`).
+    ///
+    /// Flow parity with the Go runner:
+    /// 1. resolve the execution identity (OWS `--wallet` first / legacy
+    ///    `--from-address`) on the requested chain; an identity error returns the
+    ///    typed [`Error`] before anything is persisted;
+    /// 2. build the [`RewardsClaimRequest`] from the flags + the resolved sender
+    ///    ([`super::build_rewards_claim_request`]: chain parse, `--assets`
+    ///    normalization with the at-least-one gate, and the empty-amount → `"max"`
+    ///    default);
+    /// 3. compose the claim action via the action-build registry
+    ///    ([`Registry::build_rewards_claim_action`] → the Aave rewards planner,
+    ///    which gates `--provider`, auto-resolves the incentives controller, and
+    ///    encodes the `claimRewards` calldata); a build error returns the typed
+    ///    [`Error`] (nothing persisted);
+    /// 4. stamp the resolved identity onto the action and persist it to the action
+    ///    [`Store`];
+    /// 5. emit the success envelope with the identity warnings, the cache bypassed
+    ///    (execution paths skip the cache, spec §2.5), and the provider status
+    ///    keyed on the normalized lending provider.
+    ///
+    /// [`Store`]: defi_execution::store::Store
+    async fn handle_claim_plan(ctx: &AppCtx, args: ClaimPlanArgs) -> Result<Envelope, Error> {
+        let chain_arg = args.chain.as_deref().unwrap_or_default();
+        let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
+        let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
+        let provider = args.provider.as_deref().unwrap_or_default();
+
+        // 1. Resolve the execution identity (returns before any persistence on
+        //    error — both / neither input, malformed address, Tempo/non-EVM
+        //    --wallet, OWS resolve failures).
+        let identity = resolve_execution_identity(wallet_ref, from_flag, chain_arg)?;
+
+        // 2. Build the claim request against the resolved sender (assets
+        //    normalization + at-least-one gate + empty-amount → "max").
+        let request = super::build_rewards_claim_request(
+            provider,
+            chain_arg,
+            &identity.from_address,
+            args.recipient.as_deref().unwrap_or_default(),
+            &args.assets,
+            args.reward_token.as_deref().unwrap_or_default(),
+            args.amount.as_deref().unwrap_or_default(),
+            args.simulate,
+            args.rpc_url.as_deref().unwrap_or_default(),
+            args.controller_address.as_deref().unwrap_or_default(),
+            args.pool_address_provider.as_deref().unwrap_or_default(),
+        )?;
+
+        // 3. Compose the action via the registry (provider gating + on-chain
+        //    controller resolution + calldata encoding live in the planner). A
+        //    build error is returned (the runner renders the full error envelope).
+        let mut action = Registry::new().build_rewards_claim_action(request).await?;
+
+        // 4. Stamp the identity + persist.
+        apply_execution_identity_to_action(&mut action, &identity);
+        let store = ctx.open_action_store()?;
+        store
+            .save(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "persist planned action", e))?;
+
+        // 5. Emit the success envelope (cache bypassed for execution paths). The
+        //    provider status is `ok` because the build succeeded
+        //    (Go `statusFromErr(nil)`).
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize planned action", e))?;
+        let providers = vec![ProviderStatus {
+            name: provider_status_name(provider),
+            status: "ok".to_string(),
+            latency_ms: 0,
+        }];
+        let mut env = ctx.metadata_envelope("rewards claim plan", data, providers);
+        env.warnings = identity.warnings;
+        Ok(env)
+    }
+
+    /// Handle `rewards compound plan` (Go `planCmd.RunE` in
+    /// `newRewardsCompoundCommand`).
+    ///
+    /// Same flow as [`handle_claim_plan`] with the compound divergences carried by
+    /// [`super::build_rewards_compound_request`] (the `--amount` is REQUIRED, no
+    /// `"max"` default) and the Aave rewards-compound planner
+    /// ([`Registry::build_rewards_compound_action`]): the `"max"` sentinel +
+    /// recipient-mismatch rejections, the pool resolution + allowance-gated
+    /// `[claim, approval, supply]` step assembly, and the `on_behalf_of` default.
+    async fn handle_compound_plan(ctx: &AppCtx, args: CompoundPlanArgs) -> Result<Envelope, Error> {
+        let chain_arg = args.chain.as_deref().unwrap_or_default();
+        let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
+        let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
+        let provider = args.provider.as_deref().unwrap_or_default();
+
+        // 1. Resolve the execution identity (returns before any persistence on error).
+        let identity = resolve_execution_identity(wallet_ref, from_flag, chain_arg)?;
+
+        // 2. Build the compound request against the resolved sender (assets
+        //    normalization + at-least-one gate + REQUIRED non-empty amount).
+        let request = super::build_rewards_compound_request(
+            provider,
+            chain_arg,
+            &identity.from_address,
+            args.recipient.as_deref().unwrap_or_default(),
+            args.on_behalf_of.as_deref().unwrap_or_default(),
+            &args.assets,
+            args.reward_token.as_deref().unwrap_or_default(),
+            args.amount.as_deref().unwrap_or_default(),
+            args.simulate,
+            args.rpc_url.as_deref().unwrap_or_default(),
+            args.controller_address.as_deref().unwrap_or_default(),
+            args.pool_address.as_deref().unwrap_or_default(),
+            args.pool_address_provider.as_deref().unwrap_or_default(),
+        )?;
+
+        // 3. Compose the 3-step compound action via the registry (provider gating
+        //    + max-sentinel/recipient-mismatch rejections + on-chain pool/allowance
+        //    resolution + step assembly live in the planner).
+        let mut action = Registry::new()
+            .build_rewards_compound_action(request)
+            .await?;
+
+        // 4. Stamp the identity + persist.
+        apply_execution_identity_to_action(&mut action, &identity);
+        let store = ctx.open_action_store()?;
+        store
+            .save(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "persist planned action", e))?;
+
+        // 5. Emit the success envelope (cache bypassed for execution paths).
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize planned action", e))?;
+        let providers = vec![ProviderStatus {
+            name: provider_status_name(provider),
+            status: "ok".to_string(),
+            latency_ms: 0,
+        }];
+        let mut env = ctx.metadata_envelope("rewards compound plan", data, providers);
+        env.warnings = identity.warnings;
+        Ok(env)
     }
 }
 

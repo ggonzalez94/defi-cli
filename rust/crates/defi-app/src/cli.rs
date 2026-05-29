@@ -592,12 +592,13 @@ mod tests {
         //
         // `approvals plan` (WS3 "approvals-plan"), `transfer plan` (WS3
         // "transfer-plan"), the four `lend <verb> plan` commands (WS3
-        // "lend-plan"), and the two `yield <verb> plan` commands (WS3
-        // "yield-plan") are wired: each routes to a real handler that resolves
-        // identity / builds + persists the action. With the bare argv used here
-        // they return a typed `Usage` error (missing identity), NOT the
-        // `Unsupported` not-yet-implemented stub, so they are route-verified by
-        // parse + command_path above and exercised by their own module tests.
+        // "lend-plan"), the two `yield <verb> plan` commands (WS3 "yield-plan"),
+        // and the two `rewards <verb> plan` commands (WS3 "rewards-plan") are
+        // wired: each routes to a real handler that resolves identity / builds +
+        // persists the action. With the bare argv used here they return a typed
+        // `Usage` error (missing identity), NOT the `Unsupported`
+        // not-yet-implemented stub, so they are route-verified by parse +
+        // command_path above and exercised by their own module tests.
         if path == "approvals plan"
             || path == "transfer plan"
             || matches!(
@@ -605,6 +606,7 @@ mod tests {
                 "lend supply plan" | "lend withdraw plan" | "lend borrow plan" | "lend repay plan"
             )
             || matches!(path, "yield deposit plan" | "yield withdraw plan")
+            || matches!(path, "rewards claim plan" | "rewards compound plan")
         {
             return false;
         }
