@@ -614,7 +614,15 @@ mod tests {
         // `--action-id`) and `actions list` opens the store, NOT the `Unsupported`
         // not-yet-implemented stub, so they are route-verified by parse +
         // command_path above and exercised end-to-end by their own module tests.
+        // `approvals submit` / `approvals status` (execution unit
+        // "approvals-submit") are wired: each routes to a real handler over the
+        // persisted action store. With the bare argv used here they return a typed
+        // `Usage` error (missing `--action-id`), NOT the `Unsupported`
+        // not-yet-implemented stub, so they are route-verified by parse +
+        // command_path above and exercised end-to-end by their own module tests.
         if path == "approvals plan"
+            || path == "approvals submit"
+            || path == "approvals status"
             || path == "transfer plan"
             || path == "swap plan"
             || path == "bridge plan"

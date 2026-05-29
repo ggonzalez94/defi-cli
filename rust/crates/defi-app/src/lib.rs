@@ -16,6 +16,7 @@ pub mod runner;
 pub mod ctx;
 pub mod execflags;
 pub mod execident;
+pub mod execsubmit;
 
 // One module per command group.
 pub mod actions;

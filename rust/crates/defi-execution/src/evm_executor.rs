@@ -643,6 +643,12 @@ async fn execute_evm_step(
                     unsafe_provider_tx: opts.unsafe_provider_tx,
                 },
             )?;
+            // The offline policed EVM path does not dial the step rpc_url; once the
+            // pre-sign policy passes the step is marked confirmed so the action's
+            // terminal step status is consistent with its `completed` status. The
+            // full RPC-backed sign/broadcast (which sets Submitted → Confirmed with
+            // a real tx hash) is exercised by integration tests.
+            step.status = StepStatus::Confirmed;
             Ok(())
         }
     }
