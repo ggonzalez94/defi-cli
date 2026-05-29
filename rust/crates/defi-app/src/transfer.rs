@@ -147,11 +147,13 @@ pub fn ensure_transfer_intent(intent_type: &str) -> Result<(), Error> {
 /// clap parsing + handler for the `transfer` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
-    use defi_errors::Error;
-    use defi_model::Envelope;
+    use defi_errors::{Code, Error};
+    use defi_execution::builder::Registry;
+    use defi_model::{Envelope, ProviderStatus};
 
     use crate::ctx::AppCtx;
     use crate::execflags::{PlanIdentityFlags, StatusArgs, TransferSubmitArgs};
+    use crate::execident::{apply_execution_identity_to_action, resolve_execution_identity};
 
     /// `transfer` subcommands (Go `newTransferCommand`).
     #[derive(Subcommand, Debug)]
@@ -206,13 +208,80 @@ pub mod cli {
     }
 
     /// Handle `transfer <sub>`.
-    pub async fn handle(_ctx: &AppCtx, cmd: TransferCmd) -> Result<Envelope, Error> {
-        let path = format!("transfer {}", cmd.path());
-        let ws = match cmd {
-            TransferCmd::Plan(_) => "WS3",
-            TransferCmd::Submit(_) | TransferCmd::Status(_) => "WS4",
-        };
-        Err(AppCtx::unimplemented(&path, ws))
+    pub async fn handle(ctx: &AppCtx, cmd: TransferCmd) -> Result<Envelope, Error> {
+        match cmd {
+            TransferCmd::Plan(args) => handle_plan(ctx, args).await,
+            TransferCmd::Submit(_) => Err(AppCtx::unimplemented("transfer submit", "WS4")),
+            TransferCmd::Status(_) => Err(AppCtx::unimplemented("transfer status", "WS4")),
+        }
+    }
+
+    /// Handle `transfer plan` (Go `planCmd.RunE` in `transfer_command.go`).
+    ///
+    /// Flow parity with the Go runner:
+    /// 1. resolve the execution identity (OWS `--wallet` first / legacy
+    ///    `--from-address`) on the requested chain; an identity error returns the
+    ///    typed [`Error`] before anything is persisted;
+    /// 2. build the [`TransferRequest`] from the flags + the resolved sender
+    ///    ([`super::build_transfer_request`]: chain/asset parse, decimals
+    ///    defaulting to 18, amount normalization carrying base + decimal forms);
+    /// 3. compose the single-step `transfer` action via the action-build registry
+    ///    ([`Registry::build_transfer_action`] → `planner::build_transfer_action`),
+    ///    capturing a synthetic `native` provider status (Go `statusFromErr`);
+    /// 4. stamp the resolved identity (wallet id/name, from-address, execution
+    ///    backend) onto the action and persist it to the action [`Store`];
+    /// 5. emit the success envelope with the identity warnings, the cache
+    ///    bypassed (execution paths skip the cache, spec §2.5), and the `native`
+    ///    provider status.
+    ///
+    /// [`Store`]: defi_execution::store::Store
+    /// [`TransferRequest`]: defi_execution::planner::TransferRequest
+    async fn handle_plan(ctx: &AppCtx, args: PlanArgs) -> Result<Envelope, Error> {
+        let chain_arg = args.chain.as_deref().unwrap_or_default();
+        let wallet_ref = args.identity.wallet.as_deref().unwrap_or_default();
+        let from_flag = args.identity.from_address.as_deref().unwrap_or_default();
+
+        // 1. Resolve the execution identity (returns before any persistence on
+        //    error — both / neither input, malformed address, Tempo/non-EVM
+        //    --wallet, OWS resolve failures).
+        let identity = resolve_execution_identity(wallet_ref, from_flag, chain_arg)?;
+
+        // 2. Build the transfer request against the resolved sender.
+        let request = super::build_transfer_request(
+            chain_arg,
+            args.asset.as_deref().unwrap_or_default(),
+            args.amount.as_deref().unwrap_or_default(),
+            args.amount_decimal.as_deref().unwrap_or_default(),
+            &identity.from_address,
+            args.recipient.as_deref().unwrap_or_default(),
+            args.simulate,
+            args.rpc_url.as_deref().unwrap_or_default(),
+        )?;
+
+        // 3. Compose the action via the registry (transfer routes straight to the
+        //    planner; no provider routing — `provider == "native"`). A build error
+        //    is returned (the runner renders the full error envelope to stderr).
+        let mut action = Registry::new().build_transfer_action(request)?;
+
+        // 4. Stamp the identity + persist. The synthetic `native` provider status
+        //    is `ok` because the build succeeded (Go `statusFromErr(nil)`).
+        apply_execution_identity_to_action(&mut action, &identity);
+        let store = ctx.open_action_store()?;
+        store
+            .save(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "persist planned action", e))?;
+
+        // 5. Emit the success envelope (cache bypassed for execution paths).
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize planned action", e))?;
+        let providers = vec![ProviderStatus {
+            name: "native".to_string(),
+            status: "ok".to_string(),
+            latency_ms: 0,
+        }];
+        let mut env = ctx.metadata_envelope("transfer plan", data, providers);
+        env.warnings = identity.warnings;
+        Ok(env)
     }
 }
 
@@ -430,5 +499,497 @@ mod tests {
             err.to_string().contains("action is not a transfer intent"),
             "got: {err}"
         );
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — `transfer plan` app-level handler (WS3, exec-plan)
+    //!
+    //! Go oracle: `internal/app/transfer_command.go` `planCmd.RunE`. These tests
+    //! drive [`cli::handle`] (the real dispatch entry point the binary calls)
+    //! end-to-end for `transfer plan` ONLY, asserting the full machine contract
+    //! the Go runner emits via `emitSuccess(...)` / `renderError(...)`. They are
+    //! offline + deterministic: an ERC-20 `transfer(recipient, amount)` action is
+    //! built entirely from calldata (the planner does NOT connect to RPC for
+    //! transfers — `--rpc-url` / the registry default RPC is only carried onto the
+    //! step), and persistence uses a real [`defi_execution::store::Store`] over a
+    //! `tempfile` directory. No wiremock network is required for the transfer
+    //! build itself; the base-URL / `--rpc-url` seams exist but no provider HTTP
+    //! call is made on this path (`provider == "native"`). Identity is exercised
+    //! through the OFFLINE `--from-address` (legacy_local) path so no OWS vault /
+    //! network is touched; the `--wallet` happy path (OWS resolve) is WS4b e2e
+    //! territory and is asserted here only via its offline guard rejections.
+    //!
+    //! Transfer is the simplest standard-EVM execution command and is structurally
+    //! identical to `approvals plan` (no provider routing, internal planner,
+    //! OWS-first identity) — these criteria are the transfer analogue of the
+    //! `approvals plan` app suite, with `--recipient` in place of `--spender`, the
+    //! `transfer` intent, and the `defi-evm` ERC-20 `transfer` calldata golden.
+    //!
+    //! Criteria (each a failing test until `cli::handle` routes `Plan` to a real
+    //! handler — the stub currently returns the `AppCtx::unimplemented` error):
+    //!
+    //! 1. **Plan success envelope (legacy `--from-address`).** A valid
+    //!    `transfer plan --chain 1 --asset USDC --recipient 0x..CC --amount
+    //!    1000000 --from-address 0x..aa` returns an `Ok(Envelope)` (exit 0) with:
+    //!    `version == "v1"`, `success == true`, `error == None`, `meta.partial ==
+    //!    false`, `meta.command == "transfer plan"`,
+    //!    `meta.cache == {status:"bypass", age_ms:0, stale:false}` (execution paths
+    //!    bypass the cache, spec §2.5), and `meta.providers == [{name:"native",
+    //!    status:"ok"}]` (Go `statusFromErr(nil) == "ok"`; transfer has no provider
+    //!    routing — `provider == "native"`).
+    //!
+    //! 2. **Planned action `data` shape.** `env.data` is the serialized [`Action`]:
+    //!    `action_id` matches `^act_[0-9a-f]{32}$`; `intent_type == "transfer"`;
+    //!    `provider == "native"`; `status == "planned"`; `chain_id == "eip155:1"`;
+    //!    `from_address` == the EIP-55 checksum of the sender; `to_address` == the
+    //!    recipient address; `input_amount == "1000000"`; exactly ONE step with
+    //!    `type == "transfer"`, `value == "0"`, `target` == the USDC token address,
+    //!    and `chain_id == "eip155:1"`. (Mirrors the Go oracle persisted action:
+    //!    `transfer plan ... --asset USDC --amount 1000000` → `intent_type:
+    //!    "transfer"`, `input_amount: "1000000"`, step `type: "transfer"`.)
+    //!
+    //! 3. **Step calldata reuses the `defi-evm` ABI golden.** With recipient
+    //!    `0x00000000000000000000000000000000000000CC` and amount `1000000`, the
+    //!    step `data` equals the pinned ERC-20 `transfer` calldata golden
+    //!    (`defi-evm` `encode_erc20_transfer_matches_golden`):
+    //!    `0xa9059cbb` + recipient(32) + `0xf4240`(=1000000, 32). This proves the
+    //!    handler routes through `build_transfer_action` (no re-encoding).
+    //!
+    //! 4. **Legacy-identity warning surfaces in the envelope.** The
+    //!    `--from-address` path stamps `execution_backend == "legacy_local"` on the
+    //!    action AND surfaces the Go warning
+    //!    `--wallet (OWS) is recommended over --from-address for planning; see docs
+    //!    for details` in `env.warnings`. (Go `resolveExecutionIdentity` legacy
+    //!    branch + `emitSuccess(..., identity.Warnings, ...)`.)
+    //!
+    //! 5. **Plan persists the action to the Store.** After a successful plan the
+    //!    action is retrievable by its `action_id` from a freshly opened
+    //!    [`defi_execution::store::Store`] over the same path, with matching
+    //!    `intent_type == "transfer"`, `input_amount`, and `provider == "native"`.
+    //!    (Go `s.actionStore.Save`.)
+    //!
+    //! 6. **Decimal amount parity.** `--amount-decimal 1` (no `--amount`) on USDC
+    //!    (6 decimals) yields the same `input_amount == "1000000"` and the same
+    //!    calldata golden — base ⇔ decimal stay consistent (spec §2.4).
+    //!
+    //! 7. **Identity-constraint errors (offline).**
+    //!    (a) BOTH `--wallet` and `--from-address` → [`Code::Usage`] (exit 2);
+    //!    (b) NEITHER `--wallet` nor `--from-address` → [`Code::Usage`] (exit 2);
+    //!    (c) a malformed `--from-address` → [`Code::Usage`] (exit 2);
+    //!    (d) `--wallet` on a Tempo chain → [`Code::Unsupported`] (exit 13)
+    //!        (`--wallet planning is not supported on Tempo chains yet`).
+    //!    (Go `resolveExecutionIdentity`.) On every error the handler returns the
+    //!    typed `Err(Error)` (the runner renders the full error envelope to stderr,
+    //!    spec §2.1) and persists NOTHING to the Store.
+    //!
+    //! 8. **Amount cross-validation through the handler.** BOTH `--amount` +
+    //!    `--amount-decimal` → [`Code::Usage`] (exit 2); NEITHER → [`Code::Usage`]
+    //!    (exit 2). (Delegated to `defi_id::normalize_amount` via
+    //!    `build_transfer_request`; asserted at the handler boundary.)
+    //!
+    //! 9. **Planner validation surfaces through the handler.**
+    //!    (a) a malformed `--recipient` → [`Code::Usage`] (exit 2)
+    //!        (`build_transfer_action` recipient hex validation);
+    //!    (b) a zero `--recipient` (the zero address) → [`Code::Usage`] (exit 2)
+    //!        (`transfer recipient cannot be zero address`);
+    //!    (c) a non-positive `--amount` (`0`) → [`Code::Usage`] (exit 2)
+    //!        (`transfer amount must be a positive integer in base units`).
+    //!    On each, nothing is persisted.
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * the `transfer` calldata ABI encoding itself — `defi-evm::abi` golden
+    //!     (`encode_erc20_transfer_matches_golden`);
+    //!   * `build_transfer_action` sender/recipient/token hex + zero-recipient +
+    //!     positive-amount internals — `defi-execution::planner` RED suite (ported
+    //!     from `planner/transfer_test.go`);
+    //!   * the registry routing for the `transfer` intent — `defi-execution::builder`;
+    //!   * the OWS `--wallet` happy-path resolve + wallet-id persistence — WS4b
+    //!     e2e (here only its offline guard rejections are asserted);
+    //!   * `--input-json`/`--input-file` precedence — structured-input unit;
+    //!   * cobra/clap flag defaults + required-flag marking — schema/CLI suites;
+    //!   * `transfer submit`/`status` — WS4 (`defi-execution` submit/signer concern).
+
+    use super::cli::{handle, PlanArgs, TransferCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    // --- contract constants ------------------------------------------------
+
+    /// Sender EOA (legacy `--from-address` identity); not validated for casing by
+    /// the handler — its EIP-55 checksum is what lands on the action.
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    /// Recipient matching the `defi-evm` `encode_erc20_transfer_matches_golden`
+    /// fixture (`RECIPIENT = 0x..CC`), so the planned step `data` reuses that
+    /// golden.
+    const RECIPIENT: &str = "0x00000000000000000000000000000000000000CC";
+    /// USDC contract on Ethereum mainnet (6 decimals) — resolved by `parse_asset`.
+    const USDC_MAINNET: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+    /// The pinned ERC-20 `transfer(0x..CC, 1000000)` calldata (defi-evm golden).
+    const TRANSFER_CALLDATA_GOLDEN: &str = "0xa9059cbb00000000000000000000000000000000000000000000000000000000000000cc00000000000000000000000000000000000000000000000000000000000f4240";
+    /// The Go legacy-identity warning surfaced when planning with `--from-address`.
+    const LEGACY_WARNING: &str =
+        "--wallet (OWS) is recommended over --from-address for planning; see docs for details";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir` and the cache
+    /// disabled (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `PlanArgs` with the canonical happy-path values; mutate the result per
+    /// test (e.g. clear `amount`, set `wallet`).
+    fn base_plan_args() -> PlanArgs {
+        PlanArgs {
+            chain: Some("1".to_string()),
+            asset: Some("USDC".to_string()),
+            recipient: Some(RECIPIENT.to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            rpc_url: None,
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    async fn run_plan(dir: &Path, args: PlanArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, TransferCmd::Plan(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn action_data(env: &Envelope) -> Value {
+        env.data.clone().expect("plan envelope carries `data`")
+    }
+
+    // --- 1, 2. plan success envelope + action shape ------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_legacy_from_address_emits_success_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_plan(tmp.path(), base_plan_args())
+            .await
+            .expect("transfer plan should succeed on the legacy path");
+
+        // Envelope contract (Go `emitSuccess`).
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "transfer plan");
+
+        // Execution paths bypass the cache (spec §2.5).
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // No provider routing: a single synthetic `native` status, ok.
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "native");
+        assert_eq!(env.meta.providers[0].status, "ok");
+
+        // Action `data` shape (Go persisted action).
+        let data = action_data(&env);
+        let action_id = data["action_id"].as_str().expect("action_id string");
+        assert!(
+            action_id.strip_prefix("act_").is_some_and(|rest| rest.len() == 32
+                && rest.bytes().all(|b| b.is_ascii_hexdigit())),
+            "action_id must match act_<32 hex>: got {action_id}"
+        );
+        assert_eq!(data["intent_type"], Value::from("transfer"));
+        assert_eq!(data["provider"], Value::from("native"));
+        assert_eq!(data["status"], Value::from("planned"));
+        assert_eq!(data["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            data["from_address"].as_str().unwrap().to_lowercase(),
+            SENDER.to_lowercase(),
+            "from_address is the (checksummed) sender"
+        );
+        assert_eq!(
+            data["to_address"].as_str().unwrap().to_lowercase(),
+            RECIPIENT.to_lowercase(),
+            "to_address is the recipient"
+        );
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+
+        // Exactly one transfer step, value 0, target = token, chain carried.
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 1, "transfer is a single-step action");
+        assert_eq!(steps[0]["type"], Value::from("transfer"));
+        assert_eq!(steps[0]["value"], Value::from("0"));
+        assert_eq!(steps[0]["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            steps[0]["target"].as_str().unwrap().to_lowercase(),
+            USDC_MAINNET,
+            "transfer step targets the USDC token contract"
+        );
+
+        // Legacy backend stamping + warning (criterion 4).
+        assert_eq!(data["execution_backend"], Value::from("legacy_local"));
+        assert!(
+            env.warnings.iter().any(|w| w == LEGACY_WARNING),
+            "legacy --from-address plan surfaces the OWS-recommended warning; got {:?}",
+            env.warnings
+        );
+    }
+
+    // --- 3. step calldata reuses the defi-evm ABI golden -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_step_calldata_matches_defi_evm_transfer_golden() {
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_plan(tmp.path(), base_plan_args())
+            .await
+            .expect("transfer plan should succeed");
+        let data = action_data(&env);
+        let calldata = data["steps"][0]["data"].as_str().expect("step data string");
+        assert_eq!(
+            calldata, TRANSFER_CALLDATA_GOLDEN,
+            "transfer step calldata must equal the pinned defi-evm ERC-20 transfer golden"
+        );
+    }
+
+    // --- 5. plan persists the action to the Store --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_persists_action_to_store() {
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        let ctx = AppCtx::new(settings.clone());
+        let env = handle(&ctx, TransferCmd::Plan(base_plan_args()))
+            .await
+            .expect("transfer plan should succeed");
+        let action_id = action_data(&env)["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+
+        // Re-open the store independently and confirm the action persisted.
+        let store = ActionStore::open(&settings.action_store_path, &settings.action_lock_path)
+            .expect("reopen action store");
+        let persisted = store
+            .get(&action_id)
+            .expect("planned action retrievable by id");
+        assert_eq!(persisted.intent_type, "transfer");
+        assert_eq!(persisted.input_amount, "1000000");
+        assert_eq!(persisted.provider, "native");
+    }
+
+    // --- 6. decimal amount parity ------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_decimal_amount_yields_same_base_and_calldata() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.amount = None;
+        args.amount_decimal = Some("1".to_string()); // 1 USDC (6 decimals)
+        let env = run_plan(tmp.path(), args)
+            .await
+            .expect("decimal-amount plan should succeed");
+        let data = action_data(&env);
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+        assert_eq!(
+            data["steps"][0]["data"].as_str().unwrap(),
+            TRANSFER_CALLDATA_GOLDEN,
+            "decimal 1 USDC normalizes to the same calldata as base 1000000"
+        );
+    }
+
+    // --- 7. identity-constraint errors (offline) ---------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_both_identity_inputs() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.identity.wallet = Some("alice".to_string());
+        // from_address already set in base.
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("both identity inputs must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_missing_identity_inputs() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.identity.wallet = None;
+        args.identity.from_address = None;
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("missing identity inputs must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_malformed_from_address() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.identity.from_address = Some("0xnot-an-address".to_string());
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("malformed --from-address must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_wallet_on_tempo_chain() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.chain = Some("tempo".to_string()); // eip155:4217 (Tempo mainnet)
+        args.identity.from_address = None;
+        args.identity.wallet = Some("alice".to_string());
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("--wallet on Tempo must be rejected");
+        assert_eq!(err.code, Code::Unsupported);
+        // Unsupported maps to exit 13 (spec §2.2).
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        // Go message (distinguishes the real guard from the unimplemented stub,
+        // which is also Unsupported but with a different message).
+        assert!(
+            err.to_string()
+                .contains("--wallet planning is not supported on Tempo chains yet"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 8. amount cross-validation through the handler --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_both_amount_forms() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.amount = Some("1000000".to_string());
+        args.amount_decimal = Some("1".to_string());
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("both amount forms must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_missing_amount() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.amount = None;
+        args.amount_decimal = None;
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("missing amount must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 9. planner validation surfaces through the handler ----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_malformed_recipient() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.recipient = Some("0xdeadbeef".to_string()); // too short -> invalid hex addr
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("malformed --recipient must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_zero_recipient() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.recipient = Some("0x0000000000000000000000000000000000000000".to_string());
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("zero recipient must be rejected by the planner");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("transfer recipient cannot be zero address"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn plan_rejects_non_positive_amount() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_plan_args();
+        args.amount = Some("0".to_string());
+        let err = run_plan(tmp.path(), args)
+            .await
+            .expect_err("zero amount must be rejected by the planner");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- helpers depending on the store ------------------------------------
+
+    /// True iff no action is persisted under `dir` (error paths must persist
+    /// nothing). Opens the store leniently; a never-created store (no actions
+    /// persisted yet) counts as empty.
+    fn no_actions_persisted(dir: &Path) -> bool {
+        let store = match ActionStore::open(dir.join("actions.db"), dir.join("actions.lock")) {
+            Ok(store) => store,
+            // If the store was never opened by the handler, nothing persisted.
+            Err(_) => return true,
+        };
+        store
+            .list("", 1000)
+            .map(|actions| actions.is_empty())
+            .unwrap_or(true)
     }
 }

@@ -590,12 +590,13 @@ mod tests {
         // command_path above and exercised end-to-end by their own module tests,
         // so they are no longer stubs.
         //
-        // `approvals plan` (WS3 "approvals-plan") is wired: it routes to a real
-        // handler that resolves identity / builds + persists the action. With the
-        // bare argv used here it returns a typed `Usage` error (missing identity),
-        // NOT the `Unsupported` not-yet-implemented stub, so it is route-verified
-        // by parse + command_path above and exercised by its own module tests.
-        if path == "approvals plan" {
+        // `approvals plan` (WS3 "approvals-plan") and `transfer plan` (WS3
+        // "transfer-plan") are wired: each routes to a real handler that resolves
+        // identity / builds + persists the action. With the bare argv used here
+        // they return a typed `Usage` error (missing identity), NOT the
+        // `Unsupported` not-yet-implemented stub, so they are route-verified by
+        // parse + command_path above and exercised by their own module tests.
+        if path == "approvals plan" || path == "transfer plan" {
             return false;
         }
         path.ends_with(" plan")
