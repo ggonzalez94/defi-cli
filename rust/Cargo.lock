@@ -1558,6 +1558,7 @@ dependencies = [
 name = "defi-cli"
 version = "0.5.0"
 dependencies = [
+ "assert_cmd",
  "defi-app",
  "defi-errors",
  "predicates",

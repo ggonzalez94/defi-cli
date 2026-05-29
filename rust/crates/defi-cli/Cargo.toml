@@ -21,6 +21,10 @@ tokio = { workspace = true }
 # The thin-binary crate owns the OS-boundary contract: its integration tests
 # drive the assembled `defi` executable (CARGO_BIN_EXE_defi) and assert the
 # stable exit-code map survives the i32 -> process-status cast in `main.rs`.
+# `golden_cli.rs` additionally drives the assembled binary via `assert_cmd`
+# (which resolves the same `CARGO_BIN_EXE_defi`) and diffs stdout + exit code
+# against the captured Go golden fixtures (the end-to-end contract parity oracle).
 defi-errors = { workspace = true }
 serde_json = { workspace = true }
 predicates = { workspace = true }
+assert_cmd = { workspace = true }

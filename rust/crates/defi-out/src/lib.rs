@@ -45,7 +45,8 @@ pub enum RenderError {
 ///   render the whole envelope (json) or a `{success,data,warnings,meta,error?}`
 ///   plain map.
 /// - `settings.select_fields` (non-empty) → project the named top-level fields
-///   over an object or array-of-objects (preserving requested field order).
+///   over an object or array-of-objects (kept keys sorted alphabetically, like
+///   Go's `map[string]any` JSON serialization — see [`project`]).
 ///
 /// Every record ends with a trailing `\n` (matching Go).
 pub fn render(env: &Envelope, settings: &Settings) -> Result<String, RenderError> {
@@ -120,9 +121,15 @@ fn render_plain(data: &Value) -> String {
 }
 
 /// Project the named top-level `fields` over `data` (object or array-of-objects),
-/// preserving the requested field order (mirrors `project`/`projectMap`).
+/// mirroring `project`/`projectMap`.
 ///
-/// A scalar or any non-object/non-array value passes through unchanged.
+/// CONTRACT NOTE — key ordering: Go's `projectMap` builds a plain
+/// `map[string]any`; `encoding/json` then serializes that map with its keys
+/// **sorted ALPHABETICALLY**. So the projected JSON's key order is alphabetical,
+/// NOT the requested `--select` order. (`--select symbol,asset_id` and
+/// `--select asset_id,symbol` both emit `asset_id` before `symbol`.) The set of
+/// kept fields is the requested set; only their *order* is alphabetical. A
+/// scalar or any non-object/non-array value passes through unchanged.
 pub fn project(data: &Value, fields: &[String]) -> Value {
     match data {
         Value::Array(items) => {
@@ -141,14 +148,25 @@ pub fn project(data: &Value, fields: &[String]) -> Value {
     }
 }
 
-/// Project the requested `fields` (in order) out of `map`, silently skipping any
-/// field that is absent (mirrors `projectMap`).
+/// Project the requested `fields` out of `map`, silently skipping any field that
+/// is absent (mirrors `projectMap`).
+///
+/// The kept fields are emitted with their keys **sorted alphabetically** to
+/// match Go: `projectMap` returns a `map[string]any`, and `encoding/json` sorts
+/// map keys on output. A duplicate field in `fields` is kept once.
 fn project_map(
     map: &serde_json::Map<String, Value>,
     fields: &[String],
 ) -> serde_json::Map<String, Value> {
+    // Collect the present requested keys, then sort alphabetically so the
+    // rendered object's key order matches Go's `encoding/json` map serialization
+    // (independent of the requested `--select` order).
+    let mut keys: Vec<&String> = fields.iter().filter(|f| map.contains_key(*f)).collect();
+    keys.sort();
+    keys.dedup();
+
     let mut out = serde_json::Map::new();
-    for f in fields {
+    for f in keys {
         if let Some(v) = map.get(f) {
             out.insert(f.clone(), v.clone());
         }
@@ -397,9 +415,12 @@ mod tests {
     //!
     //! 3. **`--select` projection (json & plain).** With non-empty
     //!    `select_fields`, project the named TOP-LEVEL fields over an object or an
-    //!    array-of-objects, PRESERVING the requested field order; drop the rest;
-    //!    silently skip a requested field that is absent; pass a scalar through
-    //!    unchanged. (Ports `TestRenderJSONSelectResultsOnly`.)
+    //!    array-of-objects; keep exactly the requested set; SORT the kept keys
+    //!    ALPHABETICALLY (Go's `projectMap` returns a `map[string]any` and
+    //!    `encoding/json` sorts map keys on output, so projected order is
+    //!    alphabetical, NOT the requested order); drop the rest; silently skip a
+    //!    requested field that is absent; pass a scalar through unchanged.
+    //!    (Ports `TestRenderJSONSelectResultsOnly`.)
     //!
     //! 4. **Plain, results-only — the contract path.** For an ARRAY: one line per
     //!    element, each line being its object rendered as `k=v` pairs with keys
@@ -543,16 +564,29 @@ mod tests {
     }
 
     #[test]
-    fn project_preserves_requested_field_order_over_object() {
-        // Requested order [b, a] must be reflected in the projected object's key
-        // order (serde_json preserve_order).
+    fn project_sorts_kept_keys_alphabetically_not_requested_order() {
+        // CONTRACT: Go's `projectMap` returns a `map[string]any`, which
+        // `encoding/json` serializes with keys sorted ALPHABETICALLY. So a
+        // requested order of [b, a] still emits keys as [a, b]; only the *set* of
+        // kept fields follows the request, not their order. (Probed against the
+        // Go binary: `--select b,a` and `--select a,b` produce identical output.)
         let data = json!({"a": 1, "b": 2, "c": 3});
         let out = project(&data, &["b".into(), "a".into()]);
         let keys: Vec<&String> = out.as_object().expect("object projection").keys().collect();
-        assert_eq!(keys, vec!["b", "a"], "projection preserves requested order");
+        assert_eq!(
+            keys,
+            vec!["a", "b"],
+            "projection keys are sorted alphabetically"
+        );
         assert!(
             out.as_object().unwrap().get("c").is_none(),
             "unrequested field dropped"
+        );
+        // Order-independence: reversing the request changes nothing.
+        let out_rev = project(&data, &["a".into(), "b".into()]);
+        assert_eq!(
+            out, out_rev,
+            "projected key order is independent of --select order"
         );
     }
 
