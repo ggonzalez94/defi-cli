@@ -626,6 +626,14 @@ mod tests {
         // error (missing `--action-id`), NOT the `Unsupported` not-yet-implemented
         // stub, so they are route-verified by parse + command_path above and
         // exercised end-to-end by their own module tests.
+        // The lend execution verbs are fully wired (execution unit "lend-plan" +
+        // "lend-submit"): `lend <verb> plan` resolves identity / builds + persists
+        // the action, and `lend <verb> submit` / `lend <verb> status` operate over
+        // the persisted action store. With the bare argv used here they return a
+        // typed `Usage` error (missing identity for plan; missing `--action-id` for
+        // submit/status), NOT the `Unsupported` not-yet-implemented stub, so they
+        // are route-verified by parse + command_path above and exercised end-to-end
+        // by their own module tests.
         if path == "approvals plan"
             || path == "approvals submit"
             || path == "approvals status"
@@ -635,10 +643,10 @@ mod tests {
             || path == "swap plan"
             || path == "bridge plan"
             || path.starts_with("actions ")
-            || matches!(
-                path,
-                "lend supply plan" | "lend withdraw plan" | "lend borrow plan" | "lend repay plan"
-            )
+            || path.starts_with("lend supply ")
+            || path.starts_with("lend withdraw ")
+            || path.starts_with("lend borrow ")
+            || path.starts_with("lend repay ")
             || matches!(path, "yield deposit plan" | "yield withdraw plan")
             || matches!(path, "rewards claim plan" | "rewards compound plan")
         {

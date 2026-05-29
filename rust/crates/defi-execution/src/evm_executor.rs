@@ -601,8 +601,14 @@ where
         }
 
         let step_result = {
+            // Snapshot the action so the per-step pre-sign policy runs WITH the
+            // action context (Go `ExecuteStep(ctx, store, action, step, opts)` →
+            // `validateStepPolicy(action, ...)`). This is required for bounded
+            // ERC-20 approval validation, which needs `action.input_amount`; the
+            // snapshot avoids aliasing the `&mut action.steps[i]` borrow below.
+            let action_ctx = action.clone();
             let step = &mut action.steps[i];
-            execute_evm_step(&executor, step, &opts).await
+            execute_evm_step(&executor, &action_ctx, step, &opts).await
         };
         if let Err(err) = step_result {
             if action.steps[i].status != StepStatus::Failed {
@@ -624,17 +630,20 @@ where
 /// ordering (covered by the RED suite) is owned here.
 async fn execute_evm_step(
     executor: &ResolvedExecutor,
+    action: &Action,
     step: &mut ActionStep,
     opts: &ExecuteOptions,
 ) -> Result<(), Error> {
     match executor {
         ResolvedExecutor::Tempo(t) => t.execute_step(None, None, step, opts.clone()).await,
         ResolvedExecutor::Evm(_) => {
-            // Pre-sign policy is enforced before any sign/broadcast.
+            // Pre-sign policy is enforced before any sign/broadcast, WITH the
+            // action context so bounded ERC-20 approval bounds can be checked
+            // against `action.input_amount` (Go `validateStepPolicy(action, ...)`).
             let data = decode_hex(&step.data)
                 .map_err(|e| Error::wrap(Code::Usage, "decode step calldata", to_cause(e)))?;
             validate_step_policy(
-                None,
+                Some(action),
                 step,
                 0,
                 &data,

@@ -125,6 +125,25 @@ pub fn lend_verb_intent(verb: LendVerb) -> String {
     format!("lend_{suffix}")
 }
 
+/// Validate that a persisted action's intent matches the lend verb being
+/// submitted / queried.
+///
+/// Parity with the `submit` / `status` guard
+/// `if action.IntentType != expectedIntent` in `lend_execution_commands.go`
+/// (`expectedIntent := "lend_" + string(verb)`): a mismatch — whether a
+/// cross-verb lend intent or a non-lend intent — yields a
+/// [`defi_errors::Code::Usage`] error whose message is exactly
+/// `action intent does not match lend verb`.
+pub fn ensure_lend_intent(intent_type: &str, verb: LendVerb) -> Result<(), Error> {
+    if intent_type != lend_verb_intent(verb) {
+        return Err(Error::new(
+            Code::Usage,
+            "action intent does not match lend verb",
+        ));
+    }
+    Ok(())
+}
+
 /// A validated `lend positions` query (the inputs needed to build a
 /// [`LendPositionsRequest`] for the selected provider).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -667,10 +686,29 @@ pub mod cli {
             LendCmd::Repay(LendVerbCmd::Plan(args)) => {
                 handle_plan(ctx, LendVerb::Repay, args).await
             }
-            other => {
-                let path = format!("lend {}", other.path());
-                let ws = if path.ends_with("plan") { "WS3" } else { "WS4" };
-                Err(AppCtx::unimplemented(&path, ws))
+            LendCmd::Supply(LendVerbCmd::Submit(args)) => {
+                handle_submit(ctx, LendVerb::Supply, args).await
+            }
+            LendCmd::Withdraw(LendVerbCmd::Submit(args)) => {
+                handle_submit(ctx, LendVerb::Withdraw, args).await
+            }
+            LendCmd::Borrow(LendVerbCmd::Submit(args)) => {
+                handle_submit(ctx, LendVerb::Borrow, args).await
+            }
+            LendCmd::Repay(LendVerbCmd::Submit(args)) => {
+                handle_submit(ctx, LendVerb::Repay, args).await
+            }
+            LendCmd::Supply(LendVerbCmd::Status(args)) => {
+                handle_status(ctx, LendVerb::Supply, args).await
+            }
+            LendCmd::Withdraw(LendVerbCmd::Status(args)) => {
+                handle_status(ctx, LendVerb::Withdraw, args).await
+            }
+            LendCmd::Borrow(LendVerbCmd::Status(args)) => {
+                handle_status(ctx, LendVerb::Borrow, args).await
+            }
+            LendCmd::Repay(LendVerbCmd::Status(args)) => {
+                handle_status(ctx, LendVerb::Repay, args).await
             }
         }
     }
@@ -795,6 +833,133 @@ pub mod cli {
                 pool_address_provider: args.pool_address_provider.clone().unwrap_or_default(),
             })
             .await
+    }
+
+    /// Handle `lend <verb> submit` (Go `submitCmd.RunE` in
+    /// `lend_execution_commands.go`), shared across supply/withdraw/borrow/repay.
+    ///
+    /// Flow parity with the Go runner:
+    /// 1. resolve + validate the `--action-id` ([`crate::actions::resolve_action_id`]);
+    /// 2. load the persisted action from the action [`Store`]; a not-found load
+    ///    surfaces as a [`Code::Usage`] `load action` error (Go
+    ///    `clierr.Wrap(CodeUsage, "load action", err)`);
+    /// 3. gate the intent (the per-verb `lend_<verb>` match —
+    ///    [`super::ensure_lend_intent`]); a cross-verb or non-lend intent is a
+    ///    [`Code::Usage`] error (`action intent does not match lend verb`);
+    /// 4. short-circuit an already-`completed` action (success + warning, no
+    ///    re-broadcast);
+    /// 5. resolve the execution backend from the persisted `execution_backend`
+    ///    (legacy-local / OWS) and the submit signer flags, rejecting unsupported
+    ///    combinations (legacy + non-local signer, OWS without `wallet_id`, OWS +
+    ///    legacy signer flags);
+    /// 6. validate the resolved signer against `--from-address` + the persisted
+    ///    planned sender ([`Code::Signer`] on mismatch);
+    /// 7. parse the execute options (`--gas-multiplier > 1`, durations, fee
+    ///    flags);
+    /// 8. run the bounded-approval pre-sign guardrail with the action context
+    ///    (inflated approval without `--allow-max-approval` → [`Code::ActionPlan`]);
+    /// 9. broadcast through the engine ([`defi_execution::evm_executor::execute_action`]),
+    ///    persisting each transition; and emit the terminal-state envelope.
+    ///
+    /// [`Store`]: defi_execution::store::Store
+    async fn handle_submit(
+        ctx: &AppCtx,
+        verb: LendVerb,
+        args: SubmitArgs,
+    ) -> Result<Envelope, Error> {
+        let path = format!("lend {} submit", verb_path(verb));
+
+        // 1. Resolve + validate the action id.
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+
+        // 2. Load the persisted action (not-found → usage `load action`).
+        let store = ctx.open_action_store()?;
+        let mut action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+
+        // 3. Per-verb intent gate (lend_<verb>-only).
+        super::ensure_lend_intent(&action.intent_type, verb)?;
+
+        // 4. Already-completed short-circuit (no re-broadcast).
+        if action.status == defi_execution::action::ActionStatus::Completed {
+            let data = serde_json::to_value(&action)
+                .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+            let mut env = ctx.metadata_envelope(&path, data, Vec::<ProviderStatus>::new());
+            env.warnings = vec!["action already completed".to_string()];
+            return Ok(env);
+        }
+
+        // 5. Resolve the execution backend + signer (legacy-local / OWS guards).
+        let resolved = crate::execsubmit::resolve_action_execution_backend(
+            &action,
+            crate::execsubmit::SubmitExecutionInputs {
+                signer: &args.signer,
+                key_source: &args.key_source,
+                private_key: args.private_key.as_deref().unwrap_or_default(),
+                from_address: args.from_address.as_deref().unwrap_or_default(),
+            },
+        )?;
+
+        // 6. Validate the resolved sender vs --from-address + planned sender.
+        crate::execsubmit::validate_execution_sender(
+            &action,
+            args.from_address.as_deref().unwrap_or_default(),
+            &resolved.sender,
+        )?;
+
+        // 7. Parse the execute options (durations, gas multiplier, fee flags).
+        let opts =
+            crate::execsubmit::parse_execute_options(&crate::execsubmit::ExecuteOptionInputs {
+                simulate: args.simulate,
+                poll_interval: &args.poll_interval,
+                step_timeout: &args.step_timeout,
+                gas_multiplier: args.gas_multiplier,
+                max_fee_gwei: args.max_fee_gwei.as_deref().unwrap_or_default(),
+                max_priority_fee_gwei: args.max_priority_fee_gwei.as_deref().unwrap_or_default(),
+                allow_max_approval: args.allow_max_approval,
+                unsafe_provider_tx: args.unsafe_provider_tx,
+                fee_token: args.fee_token.as_deref().unwrap_or_default(),
+            })?;
+
+        // 8. Bounded-approval pre-sign guardrail (run with action context so an
+        //    inflated approval yields the documented `allow-max-approval` hint;
+        //    the engine's per-step policy runs without action context).
+        crate::execsubmit::presign_validate_action(&action, &opts)?;
+
+        // 9. Broadcast through the engine (persisting each transition), then emit
+        //    the terminal-state envelope (cache bypassed for execution paths).
+        crate::execsubmit::execute_resolved(&store, &mut action, resolved, opts).await?;
+
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope(&path, data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Handle `lend <verb> status` (Go `statusCmd.RunE` in
+    /// `lend_execution_commands.go`), shared across supply/withdraw/borrow/repay.
+    ///
+    /// A pure read over the persisted action store: resolve + validate the
+    /// `--action-id`, load the action (not-found → usage `load action`), gate the
+    /// per-verb intent (`lend_<verb>`-only — [`super::ensure_lend_intent`]), and
+    /// emit the action verbatim (cache bypassed for execution paths, spec §2.5).
+    async fn handle_status(
+        ctx: &AppCtx,
+        verb: LendVerb,
+        args: StatusArgs,
+    ) -> Result<Envelope, Error> {
+        let path = format!("lend {} status", verb_path(verb));
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        super::ensure_lend_intent(&action.intent_type, verb)?;
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope(&path, data, Vec::<ProviderStatus>::new()))
     }
 
     /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
@@ -1253,6 +1418,29 @@ mod tests {
         assert_eq!(lend_verb_intent(LendVerb::Withdraw), "lend_withdraw");
         assert_eq!(lend_verb_intent(LendVerb::Borrow), "lend_borrow");
         assert_eq!(lend_verb_intent(LendVerb::Repay), "lend_repay");
+    }
+
+    #[test]
+    fn ensure_lend_intent_gates_per_verb() {
+        // Matching intent passes for each verb.
+        ensure_lend_intent("lend_supply", LendVerb::Supply).expect("supply matches");
+        ensure_lend_intent("lend_repay", LendVerb::Repay).expect("repay matches");
+
+        // Cross-verb mismatch is a usage error with the Go message.
+        let err = ensure_lend_intent("lend_borrow", LendVerb::Supply)
+            .expect_err("cross-verb lend intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 2);
+        assert!(
+            err.to_string()
+                .contains("action intent does not match lend verb"),
+            "got: {err}"
+        );
+
+        // A non-lend intent (e.g. an approve action) is likewise rejected.
+        let err = ensure_lend_intent("approve", LendVerb::Withdraw)
+            .expect_err("non-lend intent rejected");
+        assert_eq!(err.code, Code::Usage);
     }
 
     // --- 3. positions input validation ------------------------------------
@@ -3289,5 +3477,1156 @@ mod plan_app_tests {
             "got: {err}"
         );
         assert!(no_actions_persisted(tmp.path()));
+    }
+}
+
+#[cfg(test)]
+mod submit_app_tests {
+    //! # Success criteria — `lend <verb> submit` app-level handler (WS4, exec-submit)
+    //!
+    //! Go oracle: `internal/app/lend_execution_commands.go` `submitCmd.RunE`
+    //! (shared across the four verbs via the `expectedIntent := "lend_" + verb`
+    //! closure) + `internal/app/execution_helpers.go`
+    //! (`resolveActionExecutionBackend` / `validateExecutionSender` /
+    //! `executeActionWithTimeout`) + `internal/app/runner.go`
+    //! (`resolveActionID` / `newExecutionSigner` / `parseExecuteOptions`). These
+    //! tests drive [`cli::handle`] (the real binary dispatch entry point) for the
+    //! lend `submit` verbs (`supply`/`withdraw`/`borrow`/`repay` `submit`) ONLY,
+    //! asserting the full machine contract the Go runner emits via
+    //! `emitSuccess(...)` / `renderError(...)`.
+    //!
+    //! ## Determinism / offline strategy (no live chains)
+    //!
+    //! The reused [`defi_execution`] engine
+    //! ([`defi_execution::evm_executor::execute_action`]) is the contract source of
+    //! truth, and these tests reuse it exactly as its own suite does:
+    //!
+    //! * **Action fixtures** are planned through the REAL `cli::handle` lend `plan`
+    //!   path (Aave, with the allowance `eth_call` answered by a `wiremock`
+    //!   JSON-RPC mock and `--pool-address` short-circuiting the on-chain
+    //!   `getPool()` lookup) so the persisted shape is byte-identical to
+    //!   production. `lend borrow`/`lend withdraw` build a SINGLE `lend_call` step
+    //!   (a policy no-op, Go `validateStepPolicy` `default:` branch — `defi-execution`
+    //!   policy D4), and `lend supply` with an INSUFFICIENT mock allowance builds
+    //!   `[approval, lend_call]` where the approval amount equals the planned
+    //!   `input_amount` (a BOUNDED approval, so the pre-sign guardrail passes
+    //!   without `--allow-max-approval`).
+    //! * **Pre-broadcast guards** (action-id, store load, the PER-VERB intent gate,
+    //!   already-completed short-circuit, backend selection, sender match,
+    //!   execute-option validation) all fire BEFORE any network and are fully
+    //!   deterministic.
+    //! * **Local-signer broadcast/completion** is exercised OFFLINE: the planned
+    //!   `from_address` is the deterministic test-key address ([`SIGNER_ADDR`]), the
+    //!   `--private-key` override carries [`TEST_KEY`], and in this build the policed
+    //!   EVM step path (matching the engine's own `execute_action` tests, which never
+    //!   dial the step `rpc_url` for a policed EVM step) transitions the action to
+    //!   `completed` without a network call. The full RPC-backed sign+broadcast
+    //!   (chain-id/gas/nonce/`sendRawTransaction`/receipt) is integration/`wiremock`-
+    //!   RPC territory (WS5) and is recorded as a deferral — it is NOT asserted here.
+    //! * **OWS `--wallet` backend** resolves through the OWS vault/CLI (WS4b e2e), so
+    //!   only its OFFLINE guard rejections are asserted (missing persisted
+    //!   `wallet_id`; legacy signer flags on a wallet-backed action). The OWS
+    //!   happy-path broadcast (the `OwsSubmitBackend` send-hook seam) is a WS4b
+    //!   deferral.
+    //! * **Tempo (type 0x76) submit** is a SEPARATE execution path (`--signer tempo`
+    //!   / `execution_backend == "tempo"`); lend planning is OWS-first standard-EVM
+    //!   (no Tempo identity branch), byte-parity is WS4a — NOT asserted here.
+    //! * **Bridge destination-settlement waits** do NOT apply to `lend` (lend actions
+    //!   never carry a `bridge_send` step); that transition is owned by the
+    //!   `bridge submit/status` unit + the `defi-execution`
+    //!   `verify_bridge_settlement` suite, and is intentionally NOT re-asserted here.
+    //!
+    //! Each criterion below is a FAILING test until `cli::handle` implements the lend
+    //! `submit` verbs (today they return the `AppCtx::unimplemented` WS4 stub).
+    //!
+    //! ## Criteria
+    //!
+    //! 1. **Submit success envelope (Aave borrow, legacy local key) + completion.**
+    //!    Given a persisted `lend_borrow` action (single `lend_call` step) whose
+    //!    `from_address` matches the deterministic `--private-key` signer, `lend
+    //!    borrow submit --action-id <id> --private-key <key>` returns `Ok(Envelope)`
+    //!    (exit 0) with: `version == "v1"`, `success == true`, `error == None`,
+    //!    `meta.partial == false`, `meta.command == "lend borrow submit"`, and
+    //!    `meta.cache == {status:"bypass", age_ms:0, stale:false}` (execution paths
+    //!    bypass the cache, spec §2.5). The serialized `data` Action has `status ==
+    //!    "completed"` and its single step has `status == "confirmed"`. (Go
+    //!    `emitSuccess(..., action, nil, cacheMetaBypass(), nil, false)` after
+    //!    `executeActionWithTimeout`.)
+    //!
+    //! 2. **Submit persists the terminal state.** After a successful submit, the
+    //!    action re-loaded from a freshly opened [`defi_execution::store::Store`] has
+    //!    `status == "completed"`. (Go `ExecuteAction` persists each transition.)
+    //!
+    //! 3. **Supply completes its bounded `[approval, lend_call]` action.** A
+    //!    persisted `lend_supply` action built with an insufficient allowance (two
+    //!    steps; the approval amount == the planned `input_amount`, i.e. BOUNDED)
+    //!    submits to `completed` WITHOUT `--allow-max-approval`, and BOTH steps end
+    //!    `confirmed`. (Go bounded-approval pre-sign check passes for an in-bound
+    //!    approval; AGENTS.md "Execution pre-sign checks enforce bounded ERC-20
+    //!    approvals by default".)
+    //!
+    //! 4. **Per-verb intent gate (cross-verb mismatch).** Submitting a persisted
+    //!    `lend_borrow` action through `lend supply submit` → [`Code::Usage`]
+    //!    (exit 2) with `action intent does not match lend verb`, and the persisted
+    //!    status stays `planned`. Likewise a persisted `lend_supply` action through
+    //!    `lend withdraw submit`. (Go `if action.IntentType != expectedIntent {
+    //!    return clierr.New(CodeUsage, "action intent does not match lend verb") }`.)
+    //!
+    //! 5. **Non-lend intent rejected.** Submitting a persisted NON-lend action
+    //!    (e.g. an `approve` intent) through `lend supply submit` → [`Code::Usage`]
+    //!    (exit 2) with `action intent does not match lend verb`. Status untouched.
+    //!
+    //! 6. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2)
+    //!    (`action id is required (--action-id)`); a malformed id (`"act_xyz"`) →
+    //!    [`Code::Usage`] (exit 2) (`action id must match act_<32 hex chars>`). (Go
+    //!    `resolveActionID`.)
+    //!
+    //! 7. **Load failure for a non-existent action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`).
+    //!
+    //! 8. **Already-completed short-circuit.** Submitting an action already in
+    //!    `status == "completed"` returns `Ok(Envelope)` (exit 0) WITHOUT
+    //!    re-broadcast, carrying the warning `action already completed` and the
+    //!    unchanged completed action in `data`. (Go `if action.Status ==
+    //!    ActionStatusCompleted { return s.emitSuccess(..., []string{"action already
+    //!    completed"}, ...) }`.)
+    //!
+    //! 9. **Legacy backend rejects a non-local signer.** A `legacy_local` lend
+    //!    action submitted with `--signer tempo` → [`Code::Usage`] (exit 2)
+    //!    (`legacy actions only support --signer local`). (Go
+    //!    `resolveActionExecutionBackend` legacy branch.) Status untouched.
+    //!
+    //! 10. **OWS action missing persisted wallet_id.** A wallet-backed
+    //!     (`execution_backend == "ows"`) `lend_supply` action with an empty
+    //!     `wallet_id` → submit rejected with [`Code::Usage`] (exit 2)
+    //!     (`wallet-backed action is missing persisted wallet_id`). (Go OWS branch
+    //!     guard — reachable OFFLINE because the guard precedes any OWS resolve.)
+    //!
+    //! 11. **OWS action rejects legacy signer flags.** A wallet-backed
+    //!     `lend_supply` action WITH a persisted `wallet_id`, submitted with an
+    //!     explicit legacy signer flag (`--private-key`) → [`Code::Usage`] (exit 2)
+    //!     (`wallet-backed actions do not accept legacy signer flags`). (Go
+    //!     `usesLegacySignerFlags` guard.)
+    //!
+    //! 12. **Sender mismatch (`--from-address`).** A `legacy_local` action whose
+    //!     persisted `from_address` matches the signer, submitted with
+    //!     `--from-address` == a DIFFERENT address → [`Code::Signer`] (exit 24).
+    //!     (Go `validateExecutionSender`: `signer address does not match
+    //!     --from-address`.) Status untouched.
+    //!
+    //! 13. **Sender mismatch (planned action sender vs signer).** A `legacy_local`
+    //!     action whose persisted `from_address` does NOT match the `--private-key`
+    //!     signer (and no `--from-address` is supplied) → [`Code::Signer`] (exit 24)
+    //!     surfaces from the persisted-sender validation. (Go
+    //!     `validateExecutionSender` / `validate_persisted_action_sender`.) Status
+    //!     untouched.
+    //!
+    //! 14. **Execute-option validation.** `--gas-multiplier 1.0` → [`Code::Usage`]
+    //!     (exit 2) (`--gas-multiplier must be > 1`); `--poll-interval "0s"` →
+    //!     [`Code::Usage`] (exit 2); `--step-timeout "nope"` → [`Code::Usage`]
+    //!     (exit 2). (Go `parseExecuteOptions`.)
+    //!
+    //! 15. **Signer init failure (no key).** A `legacy_local` action submitted with
+    //!     `--signer local` and NO resolvable key (`--key-source env` with the env
+    //!     hex var unset, no `--private-key`) → [`Code::Signer`] (exit 24). (Go
+    //!     `newExecutionSigner` → `initialize local signer`.) Status untouched.
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit / deferred):
+    //!   * the full RPC-backed sign+broadcast (chain-id/gas/fee/nonce/
+    //!     `sendRawTransaction`/receipt) — WS5 `wiremock`-RPC integration deferral;
+    //!   * the OWS happy-path resolve + send-hook broadcast — WS4b e2e deferral;
+    //!   * Tempo (type 0x76) submit byte-parity — WS4a (`--signer tempo`);
+    //!   * bridge destination-settlement waits — `bridge submit/status` unit +
+    //!     `defi-execution::verify_bridge_settlement`;
+    //!   * the EIP-1559 signing byte layout — `defi-evm` signer goldens;
+    //!   * the lend action calldata/ABI build internals — `defi-execution::planner`
+    //!     RED suite (asserted on the plan side in `plan_app_tests`);
+    //!   * `actions estimate` fee fields (EIP-1559 native gas for EVM / fee-token
+    //!     for Tempo) — owned by the `actions` unit (`actions estimate` over the
+    //!     persisted store), NOT the lend group;
+    //!   * `--input-json`/`--input-file` precedence on submit — structured-input
+    //!     unit (the plan-side merge is covered in `plan_app_tests`);
+    //!   * cobra/clap flag defaults + schema auth metadata — schema/CLI suites.
+
+    use super::cli::{handle, LendCmd, LendPlanArgs, LendVerbCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, SubmitArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    use alloy::primitives::U256;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants ------------------------------------------------
+
+    /// The deterministic secp256k1 test key (`defi-evm`/`defi-execution`
+    /// `testPrivateKey`).
+    const TEST_KEY: &str = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1";
+    /// The EIP-55 address `defi-evm` derives for [`TEST_KEY`] (pinned against the
+    /// go-ethereum oracle). The planned action's `from_address` must equal this for
+    /// the local-signer submit to pass the sender-match guard.
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+    /// A DIFFERENT canonical address — used to force the sender-mismatch guards.
+    const OTHER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    /// Aave Pool override (`--pool-address`) — short-circuits the on-chain
+    /// `getPool()` lookup so the action builds deterministically.
+    const POOL: &str = "0x00000000000000000000000000000000000000cc";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir`, cache disabled
+    /// (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    // --- wiremock JSON-RPC: every eth_call returns a fixed `result` word ----
+
+    /// A `wiremock` responder that wraps a fixed hex `result` in a JSON-RPC
+    /// success envelope, echoing the incoming request `id` (mirrors the
+    /// `plan_app_tests` / `defi-execution` planner `EchoIdResponder`).
+    struct EchoIdResponder {
+        result: String,
+    }
+
+    impl Respond for EchoIdResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let id = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or_else(|| Value::from(1));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.result,
+            }))
+        }
+    }
+
+    fn uint_word(v: u128) -> String {
+        format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()))
+    }
+
+    /// A mock JSON-RPC endpoint answering every `eth_call` with an ABI-encoded
+    /// `uint256` word == `allowance`.
+    async fn allowance_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(EchoIdResponder {
+                result: uint_word(allowance),
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Build an Aave `LendPlanArgs` for `verb` with `--pool-address` set (no
+    /// on-chain `getPool()`). `from_addr` becomes the planned `from_address`.
+    fn aave_args(verb_chain_amount: &str, from_addr: &str, rpc: &str) -> LendPlanArgs {
+        let _ = verb_chain_amount;
+        LendPlanArgs {
+            chain: Some("1".to_string()),
+            asset: Some("USDC".to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            provider: Some("aave".to_string()),
+            recipient: None,
+            on_behalf_of: None,
+            interest_rate_mode: 2,
+            market_id: None,
+            pool_address: Some(POOL.to_string()),
+            pool_address_provider: None,
+            rpc_url: Some(rpc.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(from_addr.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Plan + persist a canonical Aave action for `verb` against `dir`, returning
+    /// its `action_id`. `allowance` controls whether `supply`/`repay` emit an
+    /// approval step (insufficient → `[approval, lend_call]`). `from_addr` becomes
+    /// the action's `from_address`. Plans through the real `cli::handle` plan path.
+    async fn plan_lend(
+        dir: &Path,
+        verb: defi_execution::builder::LendVerb,
+        from_addr: &str,
+        allowance: u128,
+    ) -> String {
+        let server = allowance_rpc(allowance).await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = aave_args("", from_addr, &server.uri());
+        let cmd = match verb {
+            defi_execution::builder::LendVerb::Supply => LendCmd::Supply(LendVerbCmd::Plan(args)),
+            defi_execution::builder::LendVerb::Withdraw => {
+                LendCmd::Withdraw(LendVerbCmd::Plan(args))
+            }
+            defi_execution::builder::LendVerb::Borrow => LendCmd::Borrow(LendVerbCmd::Plan(args)),
+            defi_execution::builder::LendVerb::Repay => LendCmd::Repay(LendVerbCmd::Plan(args)),
+        };
+        let env = handle(&ctx, cmd)
+            .await
+            .expect("plan a lend action for the submit fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    /// Persist `action` directly (used for fixtures the plan path cannot build,
+    /// e.g. an `approve`-intent or an OWS-backed action).
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    /// Re-load a persisted action's `status` string from a freshly opened store.
+    fn persisted_status(dir: &Path, action_id: &str) -> String {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let action = store.get(action_id).expect("action retrievable");
+        serde_json::to_value(action.status)
+            .expect("status serializes")
+            .as_str()
+            .expect("status is a string")
+            .to_string()
+    }
+
+    /// A `SubmitArgs` carrying the clap flag DEFAULTS (`signer=local`,
+    /// `key_source=auto`, `gas_multiplier=1.2`, `poll_interval=2s`,
+    /// `step_timeout=2m`, `simulate=true`) plus the deterministic `--private-key`.
+    /// Callers mutate the returned value per test.
+    fn base_submit_args(action_id: &str) -> SubmitArgs {
+        SubmitArgs {
+            action_id: Some(action_id.to_string()),
+            from_address: None,
+            allow_max_approval: false,
+            unsafe_provider_tx: false,
+            signer: "local".to_string(),
+            key_source: "auto".to_string(),
+            private_key: Some(TEST_KEY.to_string()),
+            fee_token: None,
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+            simulate: true,
+            poll_interval: "2s".to_string(),
+            step_timeout: "2m".to_string(),
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Run `lend <verb> submit` through the real dispatch entry point.
+    async fn run_submit(
+        dir: &Path,
+        verb: defi_execution::builder::LendVerb,
+        args: SubmitArgs,
+    ) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        let cmd = match verb {
+            defi_execution::builder::LendVerb::Supply => LendCmd::Supply(LendVerbCmd::Submit(args)),
+            defi_execution::builder::LendVerb::Withdraw => {
+                LendCmd::Withdraw(LendVerbCmd::Submit(args))
+            }
+            defi_execution::builder::LendVerb::Borrow => LendCmd::Borrow(LendVerbCmd::Submit(args)),
+            defi_execution::builder::LendVerb::Repay => LendCmd::Repay(LendVerbCmd::Submit(args)),
+        };
+        handle(&ctx, cmd).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("submit envelope carries `data`")
+    }
+
+    // --- 1, 2. submit success + completion + persistence -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_borrow_legacy_local_completes_and_emits_envelope() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        // Borrow builds a SINGLE lend_call step (policy no-op); allowance is unused.
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+
+        let env = run_submit(tmp.path(), LendVerb::Borrow, base_submit_args(&action_id))
+            .await
+            .expect("legacy-local lend borrow submit should complete offline");
+
+        // Envelope contract.
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "lend borrow submit");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // Completed action in data, single confirmed step.
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 1, "borrow is a single lend_call step");
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+
+        // Persisted terminal state (criterion 2).
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- 3. supply completes its bounded [approval, lend_call] action ------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_supply_bounded_two_step_completes_without_allow_max() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        // Insufficient allowance (0 < 1000000) → the plan emits a leading approval
+        // step whose amount == the planned input_amount (a BOUNDED approval).
+        let action_id = plan_lend(tmp.path(), LendVerb::Supply, SIGNER_ADDR, 0).await;
+
+        // Sanity: the planned action has the bounded two-step shape.
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let action = store.get(&action_id).expect("load planned supply");
+            assert_eq!(action.intent_type, "lend_supply");
+            assert_eq!(
+                action.steps.len(),
+                2,
+                "insufficient allowance → [approval, lend_call]"
+            );
+        }
+
+        // No --allow-max-approval: the bounded approval must still pass the pre-sign
+        // guardrail (amount == input_amount).
+        let env = run_submit(tmp.path(), LendVerb::Supply, base_submit_args(&action_id))
+            .await
+            .expect("bounded two-step supply should complete without --allow-max-approval");
+        assert_eq!(env.meta.command, "lend supply submit");
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 2);
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+        assert_eq!(steps[1]["status"], Value::from("confirmed"));
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- 4. per-verb intent gate (cross-verb mismatch) ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_cross_verb_intent_mismatch() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        // A planned lend_borrow action submitted through `lend supply submit`.
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let err = run_submit(tmp.path(), LendVerb::Supply, base_submit_args(&action_id))
+            .await
+            .expect_err("a lend_borrow action must not submit as lend supply");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action intent does not match lend verb"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_supply_action_through_withdraw_verb() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Supply, SIGNER_ADDR, 0).await;
+        let err = run_submit(tmp.path(), LendVerb::Withdraw, base_submit_args(&action_id))
+            .await
+            .expect_err("a lend_supply action must not submit as lend withdraw");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action intent does not match lend verb"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 5. non-lend intent rejected ---------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_lend_intent() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "approve",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_submit(
+            tmp.path(),
+            LendVerb::Supply,
+            base_submit_args(&action.action_id),
+        )
+        .await
+        .expect_err("a non-lend action must not submit through lend supply");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action intent does not match lend verb"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+    }
+
+    // --- 6. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_empty_action_id() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_submit_args("");
+        args.action_id = Some(String::new());
+        let err = run_submit(tmp.path(), LendVerb::Supply, args)
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_malformed_action_id() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_xyz");
+        let err = run_submit(tmp.path(), LendVerb::Supply, args)
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 7. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_unknown_action_is_usage_error() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_0123456789abcdef0123456789abcdef");
+        let err = run_submit(tmp.path(), LendVerb::Supply, args)
+            .await
+            .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 8. already-completed short-circuit --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_already_completed_short_circuits_with_warning() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            action.status = ActionStatus::Completed;
+            store.save(&action).expect("persist completed");
+        }
+
+        let env = run_submit(tmp.path(), LendVerb::Borrow, base_submit_args(&action_id))
+            .await
+            .expect("already-completed submit returns success without re-broadcast");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "lend borrow submit");
+        assert!(
+            env.warnings.iter().any(|w| w == "action already completed"),
+            "expected `action already completed` warning, got {:?}",
+            env.warnings
+        );
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    // --- 9. legacy backend rejects a non-local signer ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_action_rejects_tempo_signer() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = None;
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("legacy action with --signer tempo rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("legacy actions only support --signer local"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 10, 11. OWS backend offline guards --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_missing_wallet_id_is_usage_error() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "lend_supply",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = String::new();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        args.private_key = None;
+        args.signer = "local".to_string();
+        args.key_source = "auto".to_string();
+        let err = run_submit(tmp.path(), LendVerb::Supply, args)
+            .await
+            .expect_err("OWS action without wallet_id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed action is missing persisted wallet_id"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_rejects_legacy_signer_flags() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "lend_supply",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = "wallet-123".to_string();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        args.private_key = Some(TEST_KEY.to_string()); // explicit legacy flag
+        let err = run_submit(tmp.path(), LendVerb::Supply, args)
+            .await
+            .expect_err("OWS action with legacy signer flags rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed actions do not accept legacy signer flags"),
+            "got: {err}"
+        );
+    }
+
+    // --- 12, 13. sender mismatch -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_from_address_mismatch() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        // Action sender matches the signer, but --from-address is a DIFFERENT addr.
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let mut args = base_submit_args(&action_id);
+        args.from_address = Some(OTHER_ADDR.to_string());
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("--from-address mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_planned_sender_signer_mismatch() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        // Planned action sender is OTHER_ADDR but the local signer is SIGNER_ADDR;
+        // no --from-address supplied.
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, OTHER_ADDR, 0).await;
+        let args = base_submit_args(&action_id);
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("planned-sender/signer mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 14. execute-option validation -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_gas_multiplier_not_greater_than_one() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let mut args = base_submit_args(&action_id);
+        args.gas_multiplier = 1.0;
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("gas-multiplier <= 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("gas-multiplier"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_positive_poll_interval() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let mut args = base_submit_args(&action_id);
+        args.poll_interval = "0s".to_string();
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("non-positive poll-interval rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_unparseable_step_timeout() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let mut args = base_submit_args(&action_id);
+        args.step_timeout = "nope".to_string();
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("unparseable step-timeout rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 15. signer init failure (no key) ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_signer_init_failure_is_signer_error() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let mut args = base_submit_args(&action_id);
+        // Force an unresolvable key: source=env with no --private-key override.
+        args.private_key = None;
+        args.key_source = "env".to_string();
+        let err = run_submit(tmp.path(), LendVerb::Borrow, args)
+            .await
+            .expect_err("signer init with no key must fail");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+}
+
+#[cfg(test)]
+mod status_app_tests {
+    //! # Success criteria — `lend <verb> status` app-level handler (WS4, exec-status)
+    //!
+    //! Go oracle: `internal/app/lend_execution_commands.go` `statusCmd.RunE`
+    //! (shared across the four verbs via the `expectedIntent := "lend_" + verb`
+    //! closure). These tests drive [`cli::handle`] for the lend `status` verbs
+    //! ONLY. `lend <verb> status` is a pure READ over the persisted action store
+    //! (no signing, no network), so it is fully offline + deterministic. (Bridge
+    //! destination-settlement polling — the only network-backed status transition —
+    //! does NOT apply to `lend`: lend actions never carry a `bridge_send` step.
+    //! That wait is owned by `bridge status` + `defi-execution::verify_bridge_settlement`
+    //! and is NOT re-asserted here.)
+    //!
+    //! Criteria (each FAILING until `cli::handle` implements the lend `status`
+    //! verbs — today they return the `AppCtx::unimplemented` WS4 stub):
+    //!
+    //! 1. **Status success envelope reflects the persisted action.** Given a
+    //!    persisted `lend_borrow` action in `status == "planned"`, `lend borrow
+    //!    status --action-id <id>` returns `Ok(Envelope)` (exit 0) with `version ==
+    //!    "v1"`, `success == true`, `error == None`, `meta.partial == false`,
+    //!    `meta.command == "lend borrow status"`, `meta.cache == {status:"bypass",
+    //!    age_ms:0, stale:false}` (execution paths bypass the cache, spec §2.5), and
+    //!    `data` is the serialized Action with `action_id` == the requested id,
+    //!    `intent_type == "lend_borrow"`, and `status == "planned"`. (Go
+    //!    `emitSuccess(..., action, nil, cacheMetaBypass(), nil, false)`.)
+    //!
+    //! 2. **Status reflects lifecycle transitions.** After the persisted action is
+    //!    advanced to `completed` / `running`, `lend borrow status` reports
+    //!    `data.status == "completed"` / `"running"` verbatim (status is a read of
+    //!    the persisted lifecycle, not a re-execution).
+    //!
+    //! 3. **Per-verb intent gate (cross-verb mismatch).** `lend supply status` on a
+    //!    persisted `lend_borrow` action → [`Code::Usage`] (exit 2) with `action
+    //!    intent does not match lend verb`. (Go `statusCmd` IntentType guard.)
+    //!
+    //! 4. **Non-lend intent rejected.** `lend supply status` on a persisted
+    //!    NON-lend action (e.g. an `approve` intent) → [`Code::Usage`] (exit 2) with
+    //!    `action intent does not match lend verb`.
+    //!
+    //! 5. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2);
+    //!    a malformed id → [`Code::Usage`] (exit 2). (Go `resolveActionID`.)
+    //!
+    //! 6. **Load failure for an unknown action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`). Mirrors the Go
+    //!    runner test `TestRunnerExecutionStatusBypassesCacheOpen`, which runs a
+    //!    `status --action-id act_<32hex>` against an empty store and asserts exit 2.
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * bridge destination-settlement polling — `bridge status` unit;
+    //!   * the action JSON shape internals — `defi-execution::action` golden;
+    //!   * `actions estimate` fee fields — owned by the `actions` unit;
+    //!   * cache-bypass routing — runner cache-flow concern (`should_open_cache`),
+    //!     asserted here only via `meta.cache.status`.
+
+    use super::cli::{handle, LendCmd, LendPlanArgs, LendVerbCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, StatusArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    use alloy::primitives::U256;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    const POOL: &str = "0x00000000000000000000000000000000000000cc";
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    struct EchoIdResponder {
+        result: String,
+    }
+
+    impl Respond for EchoIdResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let id = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or_else(|| Value::from(1));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.result,
+            }))
+        }
+    }
+
+    fn uint_word(v: u128) -> String {
+        format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()))
+    }
+
+    async fn allowance_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(EchoIdResponder {
+                result: uint_word(allowance),
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// Plan + persist a canonical Aave `lend borrow` action, returning its
+    /// `action_id`. Borrow builds a single lend_call step (no allowance read used).
+    async fn plan_borrow(dir: &Path) -> String {
+        let server = allowance_rpc(0).await;
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = LendPlanArgs {
+            chain: Some("1".to_string()),
+            asset: Some("USDC".to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            provider: Some("aave".to_string()),
+            recipient: None,
+            on_behalf_of: None,
+            interest_rate_mode: 2,
+            market_id: None,
+            pool_address: Some(POOL.to_string()),
+            pool_address_provider: None,
+            rpc_url: Some(server.uri()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, LendCmd::Borrow(LendVerbCmd::Plan(args)))
+            .await
+            .expect("plan a lend_borrow action for the status fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    fn set_status(dir: &Path, action_id: &str, status: ActionStatus) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open store");
+        let mut action = store.get(action_id).expect("load");
+        action.status = status;
+        store.save(&action).expect("persist status");
+    }
+
+    async fn run_status(
+        dir: &Path,
+        verb: defi_execution::builder::LendVerb,
+        action_id: &str,
+    ) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = StatusArgs {
+            action_id: Some(action_id.to_string()),
+        };
+        let cmd = match verb {
+            defi_execution::builder::LendVerb::Supply => LendCmd::Supply(LendVerbCmd::Status(args)),
+            defi_execution::builder::LendVerb::Withdraw => {
+                LendCmd::Withdraw(LendVerbCmd::Status(args))
+            }
+            defi_execution::builder::LendVerb::Borrow => LendCmd::Borrow(LendVerbCmd::Status(args)),
+            defi_execution::builder::LendVerb::Repay => LendCmd::Repay(LendVerbCmd::Status(args)),
+        };
+        handle(&ctx, cmd).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("status envelope carries `data`")
+    }
+
+    // --- 1. status success envelope ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_planned_emits_success_envelope() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_borrow(tmp.path()).await;
+        let env = run_status(tmp.path(), LendVerb::Borrow, &action_id)
+            .await
+            .expect("status on a planned lend_borrow should succeed");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "lend borrow status");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        let data = data_of(&env);
+        assert_eq!(data["action_id"], Value::from(action_id.as_str()));
+        assert_eq!(data["intent_type"], Value::from("lend_borrow"));
+        assert_eq!(data["status"], Value::from("planned"));
+    }
+
+    // --- 2. status reflects lifecycle transitions --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reflects_completed_transition() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_borrow(tmp.path()).await;
+        set_status(tmp.path(), &action_id, ActionStatus::Completed);
+        let env = run_status(tmp.path(), LendVerb::Borrow, &action_id)
+            .await
+            .expect("status ok");
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reflects_running_transition() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_borrow(tmp.path()).await;
+        set_status(tmp.path(), &action_id, ActionStatus::Running);
+        let env = run_status(tmp.path(), LendVerb::Borrow, &action_id)
+            .await
+            .expect("status ok");
+        assert_eq!(data_of(&env)["status"], Value::from("running"));
+    }
+
+    // --- 3. per-verb intent gate (cross-verb mismatch) ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_cross_verb_intent_mismatch() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        // A planned lend_borrow action read through `lend supply status`.
+        let action_id = plan_borrow(tmp.path()).await;
+        let err = run_status(tmp.path(), LendVerb::Supply, &action_id)
+            .await
+            .expect_err("a lend_borrow action must not status as lend supply");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action intent does not match lend verb"),
+            "got: {err}"
+        );
+    }
+
+    // --- 4. non-lend intent rejected ---------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_non_lend_intent() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "approve",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SENDER.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_status(tmp.path(), LendVerb::Supply, &action.action_id)
+            .await
+            .expect_err("a non-lend action must not status through lend supply");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("action intent does not match lend verb"),
+            "got: {err}"
+        );
+    }
+
+    // --- 5. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_empty_action_id() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), LendVerb::Borrow, "")
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_malformed_action_id() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), LendVerb::Borrow, "act_not_hex")
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 6. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_unknown_action_is_usage_error() {
+        use defi_execution::builder::LendVerb;
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(
+            tmp.path(),
+            LendVerb::Borrow,
+            "act_0123456789abcdef0123456789abcdef",
+        )
+        .await
+        .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
     }
 }
