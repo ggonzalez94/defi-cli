@@ -393,23 +393,26 @@ pub fn ensure_swap_intent(intent_type: &str) -> Result<(), Error> {
 }
 
 /// The cache-key payload for `swap quote` (mirrors the Go `quoteCmd` cache-key
-/// map at `runner.go` ~L1238). Field declaration/serialization order matches the
-/// Go `map[string]any` rendered to canonical JSON; identical inputs MUST yield an
-/// identical key (the runner hashes the canonical JSON). Built only AFTER the
-/// request has been resolved so every field is the canonical normalized form.
+/// map at `runner.go` ~L1238). The Go key is a `map[string]any` hashed via
+/// `cacheKey`'s `json.Marshal`, and `encoding/json` emits map keys in
+/// **alphabetical** order — so the field declaration order here is ALPHABETICAL
+/// (`amount, chain, from, provider, rpc_url, slippage_mode, slippage_pct,
+/// swapper, to, trade_type`) to produce a byte-identical canonical JSON payload
+/// and therefore a cross-binary-stable cache key. Built only AFTER the request
+/// has been resolved so every field is the canonical normalized form.
 #[derive(serde::Serialize)]
 struct SwapQuoteCacheKey<'a> {
-    provider: &'a str,
+    amount: &'a str,
     chain: &'a str,
     from: &'a str,
-    to: &'a str,
-    trade_type: &'a str,
-    amount: &'a str,
+    provider: &'a str,
+    rpc_url: &'a str,
     slippage_mode: &'a str,
     slippage_pct: Option<f64>,
     /// Lowercased swapper (Go `strings.ToLower(reqStruct.Swapper)`).
     swapper: String,
-    rpc_url: &'a str,
+    to: &'a str,
+    trade_type: &'a str,
 }
 
 /// `swap quote` time-to-live (Go `runCachedCommand(..., 15*time.Second, ...)`).
@@ -523,16 +526,16 @@ pub fn cache_key_for_quote(
     req: &SwapQuoteRequest,
 ) -> String {
     let payload = SwapQuoteCacheKey {
-        provider: &plan.provider,
+        amount: &req.amount_base_units,
         chain: &req.chain.caip2,
         from: &req.from_asset.asset_id,
-        to: &req.to_asset.asset_id,
-        trade_type: req.trade_type.as_str(),
-        amount: &req.amount_base_units,
+        provider: &plan.provider,
+        rpc_url: &req.rpc_url,
         slippage_mode: &plan.slippage_mode,
         slippage_pct: req.slippage_pct,
         swapper: req.swapper.to_lowercase(),
-        rpc_url: &req.rpc_url,
+        to: &req.to_asset.asset_id,
+        trade_type: req.trade_type.as_str(),
     };
     crate::protocols::cache_key(command_path, &payload)
 }
@@ -1386,6 +1389,81 @@ mod tests {
         assert!(
             err.to_string().contains("action is not a swap intent"),
             "got: {err}"
+        );
+    }
+
+    // --- 8. cache-key cross-binary parity ----------------------------------
+
+    #[test]
+    fn cache_key_for_quote_matches_go_alphabetical_map_json() {
+        // The Go swap-quote cache key hashes a `map[string]any` via `cacheKey`'s
+        // `json.Marshal`, and `encoding/json` emits map keys in ALPHABETICAL
+        // order. The Rust `SwapQuoteCacheKey` struct must therefore serialize its
+        // fields alphabetically so the resulting key is byte-identical to Go's
+        // (cross-binary cache stability). This pins that ordering: if the struct
+        // field order drifts away from alphabetical, the canonical JSON — and
+        // thus the key — diverges and this assertion fails.
+        use defi_id::{Asset, Chain};
+
+        let plan = SwapQuotePlan {
+            provider: "1inch".to_string(),
+            trade_type: SwapTradeType::ExactInput,
+            slippage_pct: None,
+            slippage_mode: "auto".to_string(),
+            swapper: String::new(),
+        };
+        let req = SwapQuoteRequest {
+            chain: Chain {
+                caip2: "eip155:1".to_string(),
+                ..Chain::default()
+            },
+            from_asset: Asset {
+                asset_id: "eip155:1/erc20:0xfrom".to_string(),
+                ..Asset::default()
+            },
+            to_asset: Asset {
+                asset_id: "eip155:1/erc20:0xto".to_string(),
+                ..Asset::default()
+            },
+            amount_base_units: "1000000".to_string(),
+            amount_decimal: "1".to_string(),
+            rpc_url: "https://rpc.example".to_string(),
+            trade_type: SwapTradeType::ExactInput,
+            slippage_pct: None,
+            swapper: String::new(),
+        };
+
+        let got = cache_key_for_quote("swap quote", &plan, &req);
+
+        // Independent reference: an alphabetically-keyed JSON object (serde
+        // serializes a `json!` object in insertion order, so the keys are listed
+        // alphabetically here on purpose) run through the documented
+        // `hex(sha256(path | "v2" | json))` formula. This mirrors Go's
+        // `json.Marshal(map[string]any{...})` (sorted keys).
+        let payload = serde_json::json!({
+            "amount": "1000000",
+            "chain": "eip155:1",
+            "from": "eip155:1/erc20:0xfrom",
+            "provider": "1inch",
+            "rpc_url": "https://rpc.example",
+            "slippage_mode": "auto",
+            "slippage_pct": serde_json::Value::Null,
+            "swapper": "",
+            "to": "eip155:1/erc20:0xto",
+            "trade_type": "exact-input",
+        });
+        let canonical = serde_json::to_string(&payload).expect("serialize payload");
+        // Sanity-check the reference really is alphabetical (guards the test
+        // itself from a mis-ordered literal above).
+        assert!(
+            canonical.starts_with(r#"{"amount":"#),
+            "reference payload must be alphabetical, got: {canonical}"
+        );
+        let expected = crate::protocols::cache_key("swap quote", &payload);
+
+        assert_eq!(
+            got, expected,
+            "swap-quote cache key must equal hex(sha256(path | v2 | alphabetical-map-json))"
         );
     }
 }
