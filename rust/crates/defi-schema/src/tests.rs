@@ -642,8 +642,8 @@ fn full_golden_schema_data_node_round_trips_order_preserving() {
     // Deserialize into the typed model. Any unrepresentable / renamed / missing field in
     // the model would surface here (deny_unknown_fields is not set, so the order-sensitive
     // equality below is what actually catches dropped/renamed/reordered keys).
-    let cmd: CommandSchema =
-        serde_json::from_value(data.clone()).expect("data node must deserialize into CommandSchema");
+    let cmd: CommandSchema = serde_json::from_value(data.clone())
+        .expect("data node must deserialize into CommandSchema");
 
     // Re-serialize and compare as order-preserving JSON values. `serde_json/preserve_order`
     // is enabled workspace-wide, so `Value`'s object maps retain key order: this comparison

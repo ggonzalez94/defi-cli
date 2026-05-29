@@ -499,11 +499,17 @@ mod tests {
         let store = open_store(&tmp, Duration::from_secs(300));
 
         let payload: &[u8] = &[0x00, 0xFF, 0x10, 0x80, b'a', 0x00, 0xC3, 0x28];
-        store.set("bin", payload, Duration::from_secs(60)).expect("set");
+        store
+            .set("bin", payload, Duration::from_secs(60))
+            .expect("set");
 
         let res = store.get("bin", Duration::from_secs(60)).expect("get");
         assert!(res.hit, "binary entry is a hit");
-        assert_eq!(res.value, payload.to_vec(), "binary bytes round-trip intact");
+        assert_eq!(
+            res.value,
+            payload.to_vec(),
+            "binary bytes round-trip intact"
+        );
     }
 
     // ---- Criterion 6: prune removes expired ------------------------------
