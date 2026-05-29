@@ -392,6 +392,143 @@ pub fn ensure_swap_intent(intent_type: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// clap parsing + handler for the `swap` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+
+    /// `swap` subcommands (Go `newSwapCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum SwapCmd {
+        /// Get swap quote.
+        Quote(QuoteArgs),
+        /// Create and persist a swap action plan.
+        Plan(PlanArgs),
+        /// Execute a previously planned swap action.
+        Submit(SubmitArgs),
+        /// Get swap action status.
+        Status(StatusArgs),
+    }
+
+    impl SwapCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                SwapCmd::Quote(_) => "quote",
+                SwapCmd::Plan(_) => "plan",
+                SwapCmd::Submit(_) => "submit",
+                SwapCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `swap quote` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct QuoteArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Input asset.
+        #[arg(long = "from-asset")]
+        pub from_asset: Option<String>,
+        /// Output asset.
+        #[arg(long = "to-asset")]
+        pub to_asset: Option<String>,
+        /// Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Swap type (exact-input|exact-output).
+        #[arg(long, default_value = "exact-input")]
+        pub r#type: String,
+        /// Exact-input amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Exact-input amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// Exact-output amount in base units.
+        #[arg(long = "amount-out")]
+        pub amount_out: Option<String>,
+        /// Exact-output amount in decimal units.
+        #[arg(long = "amount-out-decimal")]
+        pub amount_out_decimal: Option<String>,
+        /// Swapper/sender EOA address (required for --provider uniswap).
+        #[arg(long = "from-address")]
+        pub from_address: Option<String>,
+        /// Manual max slippage percent override (Uniswap only).
+        #[arg(long = "slippage-pct")]
+        pub slippage_pct: Option<f64>,
+        /// RPC URL override for on-chain quote providers.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// `swap plan` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct PlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Input asset.
+        #[arg(long = "from-asset")]
+        pub from_asset: Option<String>,
+        /// Output asset.
+        #[arg(long = "to-asset")]
+        pub to_asset: Option<String>,
+        /// Swap execution provider (taikoswap|tempo).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Swap type (exact-input|exact-output).
+        #[arg(long, default_value = "exact-input")]
+        pub r#type: String,
+        /// Exact-input amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Exact-input amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// Exact-output amount in base units.
+        #[arg(long = "amount-out")]
+        pub amount_out: Option<String>,
+        /// Exact-output amount in decimal units.
+        #[arg(long = "amount-out-decimal")]
+        pub amount_out_decimal: Option<String>,
+        /// Recipient address (defaults to the resolved sender address).
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Max slippage in basis points.
+        #[arg(long = "slippage-bps", default_value_t = 50)]
+        pub slippage_bps: i64,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `swap <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: SwapCmd) -> Result<Envelope, Error> {
+        let path = format!("swap {}", cmd.path());
+        let ws = match cmd {
+            SwapCmd::Quote(_) => "WS2",
+            SwapCmd::Plan(_) => "WS3",
+            SwapCmd::Submit(_) | SwapCmd::Status(_) => "WS4",
+        };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::swap` (Go: `internal/app` swap command

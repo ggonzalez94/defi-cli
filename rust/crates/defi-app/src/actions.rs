@@ -220,6 +220,85 @@ fn go_quote(s: &str) -> String {
     out
 }
 
+/// clap parsing + handler for the `actions` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+
+    /// `actions` subcommands (Go `newActionsCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum ActionsCmd {
+        /// List persisted actions.
+        List(ListArgs),
+        /// Show action details by action id.
+        Show(ShowArgs),
+        /// Estimate gas and EIP-1559 fees for a planned action.
+        Estimate(EstimateArgs),
+    }
+
+    impl ActionsCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                ActionsCmd::List(_) => "list",
+                ActionsCmd::Show(_) => "show",
+                ActionsCmd::Estimate(_) => "estimate",
+            }
+        }
+    }
+
+    /// `actions list` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct ListArgs {
+        /// Optional action status filter.
+        #[arg(long)]
+        pub status: Option<String>,
+        /// Maximum actions to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+    }
+
+    /// `actions show` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct ShowArgs {
+        /// Action identifier.
+        #[arg(long = "action-id")]
+        pub action_id: Option<String>,
+    }
+
+    /// `actions estimate` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct EstimateArgs {
+        /// Action identifier.
+        #[arg(long = "action-id")]
+        pub action_id: Option<String>,
+        /// Optional comma-separated step_id filter.
+        #[arg(long = "step-ids")]
+        pub step_ids: Option<String>,
+        /// Block tag used for estimation (pending|latest).
+        #[arg(long = "block-tag", default_value = "pending")]
+        pub block_tag: String,
+        /// Gas estimate safety multiplier.
+        #[arg(long = "gas-multiplier", default_value_t = 1.2)]
+        pub gas_multiplier: f64,
+        /// Optional EIP-1559 max fee (gwei).
+        #[arg(long = "max-fee-gwei")]
+        pub max_fee_gwei: Option<String>,
+        /// Optional EIP-1559 max priority fee (gwei).
+        #[arg(long = "max-priority-fee-gwei")]
+        pub max_priority_fee_gwei: Option<String>,
+    }
+
+    /// Handle `actions <sub>` (WS4 — not yet ported).
+    pub async fn handle(_ctx: &AppCtx, cmd: ActionsCmd) -> Result<Envelope, Error> {
+        let path = format!("actions {}", cmd.path());
+        Err(AppCtx::unimplemented(&path, "WS4"))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::actions` (Go: `internal/app` actions

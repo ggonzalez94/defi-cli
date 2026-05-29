@@ -204,6 +204,141 @@ pub async fn run_revenue(
     build_outcome(provider, res)
 }
 
+/// clap parsing + handler for the `protocols` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use super::{ProtocolsFilter, DEFAULT_LIMIT, PROTOCOLS_TTL_SECS};
+    use crate::ctx::AppCtx;
+
+    /// `protocols` subcommands (Go `newProtocolsCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum ProtocolsCmd {
+        /// Top protocols by TVL.
+        Top(FilterArgs),
+        /// List protocol categories with protocol counts and TVL.
+        Categories,
+        /// Top protocols by 24h fees.
+        Fees(FilterArgs),
+        /// Top protocols by 24h revenue.
+        Revenue(FilterArgs),
+    }
+
+    impl ProtocolsCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                ProtocolsCmd::Top(_) => "top",
+                ProtocolsCmd::Categories => "categories",
+                ProtocolsCmd::Fees(_) => "fees",
+                ProtocolsCmd::Revenue(_) => "revenue",
+            }
+        }
+    }
+
+    /// Shared `--category` / `--chain` / `--limit` flags for top/fees/revenue.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct FilterArgs {
+        /// Filter by protocol category (e.g. lending).
+        #[arg(long)]
+        pub category: Option<String>,
+        /// Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon).
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Number of protocols to return.
+        #[arg(long, default_value_t = DEFAULT_LIMIT)]
+        pub limit: i64,
+    }
+
+    impl FilterArgs {
+        fn to_filter(&self) -> ProtocolsFilter {
+            ProtocolsFilter {
+                category: self.category.clone().unwrap_or_default(),
+                chain: self.chain.clone().unwrap_or_default(),
+                limit: self.limit,
+            }
+        }
+    }
+
+    /// Handle `protocols <sub>`: fetch via DefiLlama through the cache flow.
+    ///
+    /// The async provider fetch is deferred into the cache-flow closure (run via
+    /// [`crate::ctx::block_on_fetch`]) so a fresh cache hit short-circuits WITHOUT
+    /// issuing a network call (spec §2.5).
+    pub async fn handle(ctx: &AppCtx, cmd: ProtocolsCmd) -> Result<Envelope, Error> {
+        let ttl = std::time::Duration::from_secs(PROTOCOLS_TTL_SECS);
+        let provider = ctx.defillama();
+        match cmd {
+            ProtocolsCmd::Top(args) => {
+                let filter = args.to_filter();
+                let path = "protocols top";
+                let key = super::cache_key(path, &filter);
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_top(
+                        &provider, &filter,
+                    )))
+                })
+            }
+            ProtocolsCmd::Categories => {
+                let path = "protocols categories";
+                let key = super::cache_key(path, &serde_json::json!({}));
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_categories(&provider)))
+                })
+            }
+            ProtocolsCmd::Fees(args) => {
+                let filter = args.to_filter();
+                let path = "protocols fees";
+                let key = super::cache_key(path, &filter);
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_fees(
+                        &provider, &filter,
+                    )))
+                })
+            }
+            ProtocolsCmd::Revenue(args) => {
+                let filter = args.to_filter();
+                let path = "protocols revenue";
+                let key = super::cache_key(path, &filter);
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_revenue(
+                        &provider, &filter,
+                    )))
+                })
+            }
+        }
+    }
+
+    /// Convert a [`super::ProtocolsOutcome`] result into the cache-flow fetch
+    /// outcome tuple expected by `run_cached_command`.
+    #[allow(clippy::type_complexity)]
+    fn finalize(
+        outcome: Result<super::ProtocolsOutcome, Error>,
+    ) -> Result<
+        crate::runner::FetchOutcome,
+        (Vec<defi_model::ProviderStatus>, Vec<String>, bool, Error),
+    > {
+        match outcome {
+            Ok(o) => Ok(crate::runner::FetchOutcome {
+                data: o.data,
+                providers: vec![o.provider],
+                warnings: Vec::new(),
+                partial: false,
+            }),
+            Err(err) => {
+                let status = defi_model::ProviderStatus {
+                    name: "defillama".to_string(),
+                    status: super::status_from_result::<()>(&Err(Error::new(err.code, ""))),
+                    latency_ms: 0,
+                };
+                Err((vec![status], Vec::new(), false, err))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::protocols_cmd` (Go: `internal/app` protocols)

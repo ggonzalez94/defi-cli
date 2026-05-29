@@ -298,6 +298,38 @@ pub fn list() -> Envelope {
     )
 }
 
+/// clap parsing + handler for the `providers` command group.
+pub mod cli {
+    use clap::Subcommand;
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+
+    /// `providers` subcommands (Go `newProvidersCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum ProvidersCmd {
+        /// List supported providers and API key metadata (no keys required).
+        List,
+    }
+
+    impl ProvidersCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                ProvidersCmd::List => "list",
+            }
+        }
+    }
+
+    /// Handle `providers <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: ProvidersCmd) -> Result<Envelope, Error> {
+        match cmd {
+            ProvidersCmd::List => Ok(super::list()),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::providers` (`providers list`)

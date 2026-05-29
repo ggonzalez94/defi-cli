@@ -170,6 +170,112 @@ pub async fn run_chains(
     build_outcome(provider, res)
 }
 
+/// clap parsing + handler for the `stablecoins` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use super::{
+        StablecoinChainsRequest, StablecoinsTopRequest, DEFAULT_LIMIT, STABLECOINS_TTL_SECS,
+    };
+    use crate::ctx::AppCtx;
+
+    /// `stablecoins` subcommands (Go `newStablecoinsCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum StablecoinsCmd {
+        /// Top stablecoins by circulating market cap.
+        Top(TopArgs),
+        /// Chains ranked by total stablecoin market cap.
+        Chains(ChainsArgs),
+    }
+
+    impl StablecoinsCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                StablecoinsCmd::Top(_) => "top",
+                StablecoinsCmd::Chains(_) => "chains",
+            }
+        }
+    }
+
+    /// `stablecoins top` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct TopArgs {
+        /// Number of stablecoins to return.
+        #[arg(long, default_value_t = DEFAULT_LIMIT)]
+        pub limit: i64,
+        /// Filter by peg type (e.g. peggedUSD, peggedEUR).
+        #[arg(long = "peg-type")]
+        pub peg_type: Option<String>,
+    }
+
+    /// `stablecoins chains` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct ChainsArgs {
+        /// Number of chains to return.
+        #[arg(long, default_value_t = DEFAULT_LIMIT)]
+        pub limit: i64,
+    }
+
+    /// Handle `stablecoins <sub>`.
+    pub async fn handle(ctx: &AppCtx, cmd: StablecoinsCmd) -> Result<Envelope, Error> {
+        let ttl = std::time::Duration::from_secs(STABLECOINS_TTL_SECS);
+        let provider = ctx.defillama();
+        match cmd {
+            StablecoinsCmd::Top(args) => {
+                let req = StablecoinsTopRequest {
+                    limit: args.limit,
+                    peg_type: args.peg_type.unwrap_or_default(),
+                };
+                let path = "stablecoins top";
+                let key = crate::protocols::cache_key(path, &req);
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_top(&provider, &req)))
+                })
+            }
+            StablecoinsCmd::Chains(args) => {
+                let req = StablecoinChainsRequest { limit: args.limit };
+                let path = "stablecoins chains";
+                let key = crate::protocols::cache_key(path, &req);
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_chains(
+                        &provider, &req,
+                    )))
+                })
+            }
+        }
+    }
+
+    /// Convert a [`super::StablecoinsOutcome`] result into the cache-flow fetch
+    /// outcome tuple expected by `run_cached_command`.
+    #[allow(clippy::type_complexity)]
+    fn finalize(
+        outcome: Result<super::StablecoinsOutcome, Error>,
+    ) -> Result<
+        crate::runner::FetchOutcome,
+        (Vec<defi_model::ProviderStatus>, Vec<String>, bool, Error),
+    > {
+        match outcome {
+            Ok(o) => Ok(crate::runner::FetchOutcome {
+                data: o.data,
+                providers: vec![o.provider],
+                warnings: Vec::new(),
+                partial: false,
+            }),
+            Err(err) => {
+                let status = defi_model::ProviderStatus {
+                    name: "defillama".to_string(),
+                    status: super::status_from_result::<()>(&Err(Error::new(err.code, ""))),
+                    latency_ms: 0,
+                };
+                Err((vec![status], Vec::new(), false, err))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::stablecoins_cmd` (Go: `internal/app` stablecoins)

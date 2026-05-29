@@ -155,6 +155,190 @@ pub async fn fetch_lend_positions(
     }
 }
 
+/// clap parsing + handler for the `lend` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+
+    /// `lend` subcommands: read data + the four execution verbs.
+    #[derive(Subcommand, Debug)]
+    pub enum LendCmd {
+        /// List lending markets.
+        Markets(MarketsArgs),
+        /// List lending rates.
+        Rates(MarketsArgs),
+        /// List lending positions for an account address.
+        Positions(PositionsArgs),
+        /// Supply assets to a lending protocol.
+        #[command(subcommand)]
+        Supply(LendVerbCmd),
+        /// Withdraw assets from a lending protocol.
+        #[command(subcommand)]
+        Withdraw(LendVerbCmd),
+        /// Borrow assets from a lending protocol.
+        #[command(subcommand)]
+        Borrow(LendVerbCmd),
+        /// Repay borrowed assets on a lending protocol.
+        #[command(subcommand)]
+        Repay(LendVerbCmd),
+    }
+
+    impl LendCmd {
+        /// The full path tail (e.g. `markets`, `supply plan`) for `meta.command`.
+        pub fn path(&self) -> String {
+            match self {
+                LendCmd::Markets(_) => "markets".to_string(),
+                LendCmd::Rates(_) => "rates".to_string(),
+                LendCmd::Positions(_) => "positions".to_string(),
+                LendCmd::Supply(v) => format!("supply {}", v.path()),
+                LendCmd::Withdraw(v) => format!("withdraw {}", v.path()),
+                LendCmd::Borrow(v) => format!("borrow {}", v.path()),
+                LendCmd::Repay(v) => format!("repay {}", v.path()),
+            }
+        }
+    }
+
+    /// `lend markets` / `lend rates` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct MarketsArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset (symbol/address/CAIP-19).
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Lending provider (aave, morpho, kamino, moonwell).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Maximum rows to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+        /// Optional RPC URL override for on-chain providers.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+    }
+
+    /// `lend positions` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct PositionsArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Position owner address.
+        #[arg(long)]
+        pub address: Option<String>,
+        /// Optional asset filter (symbol/address/CAIP-19).
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Lending provider (aave, morpho, moonwell).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Position type filter (all|supply|borrow|collateral).
+        #[arg(long, default_value = "all")]
+        pub r#type: String,
+        /// Maximum positions to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+        /// Optional RPC URL override used by providers that need on-chain reads.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+    }
+
+    /// The `plan` / `submit` / `status` sub-subcommands shared by every lend verb.
+    #[derive(Subcommand, Debug)]
+    pub enum LendVerbCmd {
+        /// Create and persist a lend action plan.
+        Plan(LendPlanArgs),
+        /// Execute an existing lend action.
+        Submit(SubmitArgs),
+        /// Get lend action status.
+        Status(StatusArgs),
+    }
+
+    impl LendVerbCmd {
+        /// The leaf path token (`plan`/`submit`/`status`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                LendVerbCmd::Plan(_) => "plan",
+                LendVerbCmd::Submit(_) => "submit",
+                LendVerbCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `lend <verb> plan` flags (shared across supply/withdraw/borrow/repay).
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct LendPlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol/address/CAIP-19.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// Lending provider (aave|morpho|moonwell).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Recipient address (defaults to the resolved sender address).
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Position owner address (defaults to the resolved sender address).
+        #[arg(long = "on-behalf-of")]
+        pub on_behalf_of: Option<String>,
+        /// Aave borrow/repay mode (1=stable,2=variable).
+        #[arg(long = "interest-rate-mode", default_value_t = 2)]
+        pub interest_rate_mode: i64,
+        /// Morpho market unique key (required for --provider morpho).
+        #[arg(long = "market-id")]
+        pub market_id: Option<String>,
+        /// Aave pool address override.
+        #[arg(long = "pool-address")]
+        pub pool_address: Option<String>,
+        /// Aave pool address provider override.
+        #[arg(long = "pool-address-provider")]
+        pub pool_address_provider: Option<String>,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `lend <sub>`.
+    ///
+    /// Reads (`markets`/`rates`/`positions`) are WS2; execution verbs are
+    /// WS3 (`plan`) / WS4 (`submit`/`status`). All route here; unimplemented
+    /// leaves return a typed `Unsupported` error (never `unknown command`).
+    pub async fn handle(_ctx: &AppCtx, cmd: LendCmd) -> Result<Envelope, Error> {
+        let path = format!("lend {}", cmd.path());
+        let ws = if matches!(
+            cmd,
+            LendCmd::Markets(_) | LendCmd::Rates(_) | LendCmd::Positions(_)
+        ) {
+            "WS2"
+        } else if path.ends_with("plan") {
+            "WS3"
+        } else {
+            "WS4"
+        };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::lend` (Go: `internal/app` lend command

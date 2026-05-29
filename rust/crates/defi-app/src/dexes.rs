@@ -127,6 +127,91 @@ pub async fn run_volume(
     })
 }
 
+/// clap parsing + handler for the `dexes` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use super::{DexesVolumeRequest, DEFAULT_LIMIT, DEXES_TTL_SECS};
+    use crate::ctx::AppCtx;
+
+    /// `dexes` subcommands (Go `newDexesCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum DexesCmd {
+        /// Top DEXes by 24h trading volume.
+        Volume(VolumeArgs),
+    }
+
+    impl DexesCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                DexesCmd::Volume(_) => "volume",
+            }
+        }
+    }
+
+    /// `dexes volume` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct VolumeArgs {
+        /// Filter by DefiLlama chain name (e.g. Ethereum, Arbitrum, Polygon).
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Number of DEXes to return.
+        #[arg(long, default_value_t = DEFAULT_LIMIT)]
+        pub limit: i64,
+    }
+
+    /// Handle `dexes <sub>`.
+    pub async fn handle(ctx: &AppCtx, cmd: DexesCmd) -> Result<Envelope, Error> {
+        let ttl = std::time::Duration::from_secs(DEXES_TTL_SECS);
+        let provider = ctx.defillama();
+        match cmd {
+            DexesCmd::Volume(args) => {
+                let req = DexesVolumeRequest {
+                    chain: args.chain.unwrap_or_default(),
+                    limit: args.limit,
+                };
+                let path = "dexes volume";
+                let key = crate::protocols::cache_key(path, &req);
+                ctx.run_cached_command(path, &key, ttl, || {
+                    finalize(crate::ctx::block_on_fetch(super::run_volume(
+                        &provider, &req,
+                    )))
+                })
+            }
+        }
+    }
+
+    /// Convert a [`super::DexesOutcome`] result into the cache-flow fetch outcome
+    /// tuple expected by `run_cached_command`.
+    #[allow(clippy::type_complexity)]
+    fn finalize(
+        outcome: Result<super::DexesOutcome, Error>,
+    ) -> Result<
+        crate::runner::FetchOutcome,
+        (Vec<defi_model::ProviderStatus>, Vec<String>, bool, Error),
+    > {
+        match outcome {
+            Ok(o) => Ok(crate::runner::FetchOutcome {
+                data: o.data,
+                providers: vec![o.provider],
+                warnings: Vec::new(),
+                partial: false,
+            }),
+            Err(err) => {
+                let status = defi_model::ProviderStatus {
+                    name: "defillama".to_string(),
+                    status: super::status_from_result::<()>(&Err(Error::new(err.code, ""))),
+                    latency_ms: 0,
+                };
+                Err((vec![status], Vec::new(), false, err))
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::dexes_cmd` (Go: `internal/app` dexes)

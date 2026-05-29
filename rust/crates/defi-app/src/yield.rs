@@ -474,6 +474,219 @@ pub fn require_yield_history_capability<'a>(
     })
 }
 
+/// clap parsing + handler for the `yield` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+
+    /// `yield` subcommands: read data + the two execution verbs.
+    #[derive(Subcommand, Debug)]
+    pub enum YieldCmd {
+        /// Rank yield opportunities.
+        Opportunities(OpportunitiesArgs),
+        /// List yield positions for an account address.
+        Positions(PositionsArgs),
+        /// Get yield history for provider opportunities.
+        History(HistoryArgs),
+        /// Deposit assets into a yield product.
+        #[command(subcommand)]
+        Deposit(YieldVerbCmd),
+        /// Withdraw assets from a yield product.
+        #[command(subcommand)]
+        Withdraw(YieldVerbCmd),
+    }
+
+    impl YieldCmd {
+        /// The full path tail (e.g. `opportunities`, `deposit plan`).
+        pub fn path(&self) -> String {
+            match self {
+                YieldCmd::Opportunities(_) => "opportunities".to_string(),
+                YieldCmd::Positions(_) => "positions".to_string(),
+                YieldCmd::History(_) => "history".to_string(),
+                YieldCmd::Deposit(v) => format!("deposit {}", v.path()),
+                YieldCmd::Withdraw(v) => format!("withdraw {}", v.path()),
+            }
+        }
+    }
+
+    /// `yield opportunities` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct OpportunitiesArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol/address/CAIP-19.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Filter by provider names (aave,morpho,kamino,moonwell).
+        #[arg(long)]
+        pub providers: Option<String>,
+        /// Sort key (apy_total|tvl_usd|liquidity_usd).
+        #[arg(long, default_value = "apy_total")]
+        pub sort: String,
+        /// Minimum total APY percent.
+        #[arg(long = "min-apy")]
+        pub min_apy: Option<f64>,
+        /// Minimum TVL in USD.
+        #[arg(long = "min-tvl-usd")]
+        pub min_tvl_usd: Option<f64>,
+        /// Include opportunities missing APY/TVL.
+        #[arg(long = "include-incomplete")]
+        pub include_incomplete: bool,
+        /// Maximum opportunities to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+        /// Optional RPC URL override for on-chain providers.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+    }
+
+    /// `yield positions` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct PositionsArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Position owner address.
+        #[arg(long)]
+        pub address: Option<String>,
+        /// Optional asset filter (symbol/address/CAIP-19).
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Filter by provider names (aave,morpho,kamino,moonwell).
+        #[arg(long)]
+        pub providers: Option<String>,
+        /// Maximum positions to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+        /// Optional RPC URL override used by providers that need on-chain valuation.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+    }
+
+    /// `yield history` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct HistoryArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol/address/CAIP-19.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Filter by provider names (aave,morpho,kamino).
+        #[arg(long)]
+        pub providers: Option<String>,
+        /// Optional comma-separated opportunity IDs from yield opportunities.
+        #[arg(long = "opportunity-ids")]
+        pub opportunity_ids: Option<String>,
+        /// History metrics (apy_total,tvl_usd).
+        #[arg(long, default_value = "apy_total")]
+        pub metrics: String,
+        /// Lookback window (for example 24h,7d,30d).
+        #[arg(long, default_value = "7d")]
+        pub window: String,
+        /// Point interval (hour|day).
+        #[arg(long, default_value = "day")]
+        pub interval: String,
+        /// Start time (RFC3339). Overrides --window when set.
+        #[arg(long)]
+        pub from: Option<String>,
+        /// End time (RFC3339). Defaults to now.
+        #[arg(long)]
+        pub to: Option<String>,
+        /// Maximum opportunities per provider to fetch history for.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+    }
+
+    /// The `plan` / `submit` / `status` sub-subcommands shared by both yield verbs.
+    #[derive(Subcommand, Debug)]
+    pub enum YieldVerbCmd {
+        /// Create and persist a yield action plan.
+        Plan(YieldPlanArgs),
+        /// Execute an existing yield action.
+        Submit(SubmitArgs),
+        /// Get yield action status.
+        Status(StatusArgs),
+    }
+
+    impl YieldVerbCmd {
+        /// The leaf path token (`plan`/`submit`/`status`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                YieldVerbCmd::Plan(_) => "plan",
+                YieldVerbCmd::Submit(_) => "submit",
+                YieldVerbCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `yield <verb> plan` flags (shared across deposit/withdraw).
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct YieldPlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol/address/CAIP-19.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// Yield provider (aave|morpho|moonwell).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Recipient address (defaults to the resolved sender address).
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Position owner address (defaults to the resolved sender address).
+        #[arg(long = "on-behalf-of")]
+        pub on_behalf_of: Option<String>,
+        /// Morpho vault address (required for --provider morpho).
+        #[arg(long = "vault-address")]
+        pub vault_address: Option<String>,
+        /// Aave pool address override.
+        #[arg(long = "pool-address")]
+        pub pool_address: Option<String>,
+        /// Aave pool address provider override.
+        #[arg(long = "pool-address-provider")]
+        pub pool_address_provider: Option<String>,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `yield <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: YieldCmd) -> Result<Envelope, Error> {
+        let path = format!("yield {}", cmd.path());
+        let ws = if matches!(
+            cmd,
+            YieldCmd::Opportunities(_) | YieldCmd::Positions(_) | YieldCmd::History(_)
+        ) {
+            "WS2"
+        } else if path.ends_with("plan") {
+            "WS3"
+        } else {
+            "WS4"
+        };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::yield` (Go: `internal/app` yield command

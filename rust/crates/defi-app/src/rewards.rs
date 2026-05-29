@@ -232,6 +232,172 @@ pub fn ensure_rewards_compound_intent(intent_type: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// clap parsing + handler for the `rewards` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+
+    /// `rewards` subcommands: the two execution verbs.
+    #[derive(Subcommand, Debug)]
+    pub enum RewardsCmd {
+        /// Claim rewards.
+        #[command(subcommand)]
+        Claim(ClaimVerbCmd),
+        /// Compound rewards by claim + resupply.
+        #[command(subcommand)]
+        Compound(CompoundVerbCmd),
+    }
+
+    impl RewardsCmd {
+        /// The full path tail (e.g. `claim plan`).
+        pub fn path(&self) -> String {
+            match self {
+                RewardsCmd::Claim(v) => format!("claim {}", v.path()),
+                RewardsCmd::Compound(v) => format!("compound {}", v.path()),
+            }
+        }
+    }
+
+    /// `rewards claim` sub-subcommands.
+    #[derive(Subcommand, Debug)]
+    pub enum ClaimVerbCmd {
+        /// Create and persist a rewards-claim action plan.
+        Plan(ClaimPlanArgs),
+        /// Execute an existing rewards-claim action.
+        Submit(SubmitArgs),
+        /// Get rewards-claim action status.
+        Status(StatusArgs),
+    }
+
+    impl ClaimVerbCmd {
+        /// The leaf path token.
+        pub fn path(&self) -> &'static str {
+            match self {
+                ClaimVerbCmd::Plan(_) => "plan",
+                ClaimVerbCmd::Submit(_) => "submit",
+                ClaimVerbCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `rewards compound` sub-subcommands.
+    #[derive(Subcommand, Debug)]
+    pub enum CompoundVerbCmd {
+        /// Create and persist a rewards-compound action plan.
+        Plan(CompoundPlanArgs),
+        /// Execute an existing rewards-compound action.
+        Submit(SubmitArgs),
+        /// Get rewards-compound action status.
+        Status(StatusArgs),
+    }
+
+    impl CompoundVerbCmd {
+        /// The leaf path token.
+        pub fn path(&self) -> &'static str {
+            match self {
+                CompoundVerbCmd::Plan(_) => "plan",
+                CompoundVerbCmd::Submit(_) => "submit",
+                CompoundVerbCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `rewards claim plan` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct ClaimPlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Comma-separated rewards source asset addresses.
+        #[arg(long, value_delimiter = ',')]
+        pub assets: Vec<String>,
+        /// Reward token address.
+        #[arg(long = "reward-token")]
+        pub reward_token: Option<String>,
+        /// Claim amount in base units (defaults to max).
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Recipient address (defaults to the resolved sender address).
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Aave incentives controller address override.
+        #[arg(long = "controller-address")]
+        pub controller_address: Option<String>,
+        /// Aave pool address provider override.
+        #[arg(long = "pool-address-provider")]
+        pub pool_address_provider: Option<String>,
+        /// Rewards provider (aave).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// `rewards compound plan` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct CompoundPlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Comma-separated rewards source asset addresses.
+        #[arg(long, value_delimiter = ',')]
+        pub assets: Vec<String>,
+        /// Reward token address.
+        #[arg(long = "reward-token")]
+        pub reward_token: Option<String>,
+        /// Compound amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Recipient address (defaults to the resolved sender address).
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Aave onBehalfOf address for compounding supply.
+        #[arg(long = "on-behalf-of")]
+        pub on_behalf_of: Option<String>,
+        /// Aave incentives controller address override.
+        #[arg(long = "controller-address")]
+        pub controller_address: Option<String>,
+        /// Aave pool address override.
+        #[arg(long = "pool-address")]
+        pub pool_address: Option<String>,
+        /// Aave pool address provider override.
+        #[arg(long = "pool-address-provider")]
+        pub pool_address_provider: Option<String>,
+        /// Rewards provider (aave).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `rewards <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: RewardsCmd) -> Result<Envelope, Error> {
+        let path = format!("rewards {}", cmd.path());
+        let ws = if path.ends_with("plan") { "WS3" } else { "WS4" };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::rewards` (Go: `internal/app` rewards

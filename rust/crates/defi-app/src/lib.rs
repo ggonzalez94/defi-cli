@@ -12,6 +12,10 @@
 
 pub mod runner;
 
+// Shared application plumbing.
+pub mod ctx;
+pub mod execflags;
+
 // One module per command group.
 pub mod actions;
 pub mod approvals;

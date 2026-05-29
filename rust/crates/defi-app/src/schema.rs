@@ -423,6 +423,49 @@ pub fn run(
     ))
 }
 
+/// clap parsing + handler for the `schema` command.
+pub mod cli {
+    use clap::Args;
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+
+    /// `schema [command path...]` flags (Go `newSchemaCommand`).
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct SchemaArgs {
+        /// Optional command path to scope the schema document (e.g. `yield plan`).
+        #[arg(trailing_var_arg = true)]
+        pub path: Vec<String>,
+    }
+
+    /// Handle `schema`: build the schema document for the requested path.
+    ///
+    /// NOTE: the schema tree is still the partial (version+schema) subtree; the
+    /// full 19-command tree is WS6. The command nonetheless routes here.
+    pub fn handle(_ctx: &AppCtx, args: SchemaArgs) -> Result<Envelope, Error> {
+        let root = super::root();
+        let path = args.path.join(" ");
+        super::run(&root, &path, &super::root_persistent_flags())
+    }
+}
+
+/// The (partial) schema command tree used by `schema`.
+///
+/// NOTE: only the `version` and `schema` subtrees are populated today; the full
+/// 19-command tree (required for whole-document golden parity with the Go
+/// `schema.json`) is WS6 work tracked in the completion plan.
+pub fn root() -> CommandNode {
+    CommandNode {
+        name: "defi".to_string(),
+        r#use: "defi".to_string(),
+        short: "DeFi CLI".to_string(),
+        persistent_flags: root_persistent_flags(),
+        subcommands: vec![schema_node(), version_node()],
+        ..CommandNode::leaf("defi", "defi", "DeFi CLI")
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::schema` (Go: `internal/schema/schema.go`

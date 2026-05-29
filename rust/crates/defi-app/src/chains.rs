@@ -239,6 +239,120 @@ pub async fn run_gas(targets: &[GasChainTarget], now: DateTime<Utc>) -> Result<G
     })
 }
 
+/// clap parsing + handler for the `chains` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::{CacheStatus, Envelope};
+
+    use crate::ctx::AppCtx;
+
+    /// `chains` subcommands (Go `newChainsCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum ChainsCmd {
+        /// List all supported chains with aliases (no keys required).
+        List,
+        /// Current gas prices for one or more EVM chains (no keys required).
+        Gas(GasArgs),
+        /// Top chains by TVL.
+        Top(TopArgs),
+        /// TVL by asset for a chain (DefiLlama key required).
+        Assets(AssetsArgs),
+    }
+
+    impl ChainsCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                ChainsCmd::List => "list",
+                ChainsCmd::Gas(_) => "gas",
+                ChainsCmd::Top(_) => "top",
+                ChainsCmd::Assets(_) => "assets",
+            }
+        }
+    }
+
+    /// `chains gas` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct GasArgs {
+        /// Chain id/name/CAIP-2 (comma-separated for multiple).
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// RPC URL override (single chain only).
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+    }
+
+    /// `chains top` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct TopArgs {
+        /// Number of chains to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+    }
+
+    /// `chains assets` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct AssetsArgs {
+        /// Chain id/name/CAIP-2.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset filter (symbol/address/CAIP-19).
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Number of assets to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+    }
+
+    /// Handle `chains <sub>`.
+    pub async fn handle(ctx: &AppCtx, cmd: ChainsCmd) -> Result<Envelope, Error> {
+        match cmd {
+            ChainsCmd::List => Ok(list_envelope(ctx)),
+            ChainsCmd::Gas(args) => gas(ctx, args).await,
+            ChainsCmd::Top(_) => Err(AppCtx::unimplemented("chains top", "WS2")),
+            ChainsCmd::Assets(_) => Err(AppCtx::unimplemented("chains assets", "WS2")),
+        }
+    }
+
+    /// Build the `chains list` success envelope (metadata, cache bypassed).
+    fn list_envelope(ctx: &AppCtx) -> Envelope {
+        let data =
+            serde_json::to_value(super::list_chains_data()).unwrap_or(serde_json::Value::Null);
+        ctx.metadata_envelope("chains list", data, Vec::new())
+    }
+
+    /// Run `chains gas`: live EVM gas prices (no keys, cache bypassed). Returns
+    /// an array of [`defi_model::GasPrice`] even for a single chain.
+    async fn gas(ctx: &AppCtx, args: GasArgs) -> Result<Envelope, Error> {
+        let targets = super::resolve_gas_targets(
+            args.chain.as_deref().unwrap_or_default(),
+            args.rpc_url.as_deref().unwrap_or_default(),
+        )?;
+        let outcome = super::run_gas(&targets, ctx.now()).await?;
+
+        if outcome.partial && ctx.settings.strict {
+            return Err(Error::new(
+                defi_errors::Code::PartialStrict,
+                "partial results returned in strict mode",
+            ));
+        }
+
+        let data = serde_json::to_value(&outcome.prices)
+            .map_err(|e| Error::wrap(defi_errors::Code::Internal, "serialize gas prices", e))?;
+        let mut env = Envelope::success(
+            "chains gas",
+            data,
+            outcome.warnings,
+            CacheStatus::bypass(),
+            Vec::new(),
+            outcome.partial,
+        );
+        env.meta.timestamp = ctx.now();
+        Ok(env)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::chains_cmd` (Go: `internal/app` chains)

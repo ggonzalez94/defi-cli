@@ -68,6 +68,19 @@ pub fn render(long: bool) -> String {
     }
 }
 
+/// clap parsing + handler for the `version` command.
+pub mod cli {
+    use clap::Args;
+
+    /// `version` flags (Go `newVersionCommand`).
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct VersionArgs {
+        /// Include build metadata (commit + build date).
+        #[arg(long)]
+        pub long: bool,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::version` (Go: `internal/version` +

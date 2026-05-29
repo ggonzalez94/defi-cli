@@ -144,6 +144,78 @@ pub fn ensure_approve_intent(intent_type: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// clap parsing + handler for the `approvals` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+
+    /// `approvals` subcommands (Go `newApprovalsCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum ApprovalsCmd {
+        /// Create and persist an approval action plan.
+        Plan(PlanArgs),
+        /// Execute an existing approval action.
+        Submit(SubmitArgs),
+        /// Get approval action status.
+        Status(StatusArgs),
+    }
+
+    impl ApprovalsCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                ApprovalsCmd::Plan(_) => "plan",
+                ApprovalsCmd::Submit(_) => "submit",
+                ApprovalsCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `approvals plan` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct PlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol/address/CAIP-19.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Spender address.
+        #[arg(long)]
+        pub spender: Option<String>,
+        /// Amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `approvals <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: ApprovalsCmd) -> Result<Envelope, Error> {
+        let path = format!("approvals {}", cmd.path());
+        let ws = match cmd {
+            ApprovalsCmd::Plan(_) => "WS3",
+            ApprovalsCmd::Submit(_) | ApprovalsCmd::Status(_) => "WS4",
+        };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::approvals` (Go: `internal/app` approvals

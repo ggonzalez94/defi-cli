@@ -86,6 +86,56 @@ pub fn run(chain_arg: &str, symbol: &str, asset: &str) -> Result<Envelope, Error
     ))
 }
 
+/// clap parsing + handler for the `assets` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+
+    /// `assets` subcommands (Go `newAssetsCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum AssetsCmd {
+        /// Resolve an asset symbol/address/CAIP-19 to canonical asset ID.
+        Resolve(ResolveArgs),
+    }
+
+    impl AssetsCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                AssetsCmd::Resolve(_) => "resolve",
+            }
+        }
+    }
+
+    /// `assets resolve` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct ResolveArgs {
+        /// Chain identifier (CAIP-2, chain ID, or slug).
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol (e.g., USDC).
+        #[arg(long)]
+        pub symbol: Option<String>,
+        /// Asset as CAIP-19 or token address.
+        #[arg(long)]
+        pub asset: Option<String>,
+    }
+
+    /// Handle `assets <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: AssetsCmd) -> Result<Envelope, Error> {
+        match cmd {
+            AssetsCmd::Resolve(args) => super::run(
+                args.chain.as_deref().unwrap_or_default(),
+                args.symbol.as_deref().unwrap_or_default(),
+                args.asset.as_deref().unwrap_or_default(),
+            ),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::assets` (Go: `newAssetsCommand`)

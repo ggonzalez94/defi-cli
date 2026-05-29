@@ -184,6 +184,156 @@ pub fn ensure_bridge_intent(intent_type: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// clap parsing + handler for the `bridge` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, SubmitArgs};
+
+    /// `bridge` subcommands (Go `newBridgeCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum BridgeCmd {
+        /// Get bridge quote.
+        Quote(QuoteArgs),
+        /// List bridge volumes and coverage (DefiLlama key required).
+        List(ListArgs),
+        /// Get bridge volume details and chain breakdown (DefiLlama key required).
+        Details(DetailsArgs),
+        /// Create and persist a bridge action plan.
+        Plan(PlanArgs),
+        /// Execute an existing bridge action.
+        Submit(SubmitArgs),
+        /// Get bridge action status.
+        Status(StatusArgs),
+    }
+
+    impl BridgeCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                BridgeCmd::Quote(_) => "quote",
+                BridgeCmd::List(_) => "list",
+                BridgeCmd::Details(_) => "details",
+                BridgeCmd::Plan(_) => "plan",
+                BridgeCmd::Submit(_) => "submit",
+                BridgeCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `bridge quote` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct QuoteArgs {
+        /// Source chain.
+        #[arg(long)]
+        pub from: Option<String>,
+        /// Destination chain.
+        #[arg(long)]
+        pub to: Option<String>,
+        /// Asset (symbol/address/CAIP-19) on source chain.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Destination asset override (symbol/address/CAIP-19).
+        #[arg(long = "to-asset")]
+        pub to_asset: Option<String>,
+        /// Bridge provider (across|lifi|bungee; no API key required).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// Optional source token base units reserved for destination native gas (LiFi).
+        #[arg(long = "from-amount-for-gas")]
+        pub from_amount_for_gas: Option<String>,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// `bridge list` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct ListArgs {
+        /// Include chain coverage for each bridge.
+        #[arg(long = "include-chains", default_value_t = true, action = clap::ArgAction::Set)]
+        pub include_chains: bool,
+        /// Maximum bridges to return.
+        #[arg(long, default_value_t = 20)]
+        pub limit: i64,
+    }
+
+    /// `bridge details` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct DetailsArgs {
+        /// Bridge identifier (id, slug, or name).
+        #[arg(long)]
+        pub bridge: Option<String>,
+        /// Include per-chain bridge stats.
+        #[arg(long = "include-chain-breakdown", default_value_t = true, action = clap::ArgAction::Set)]
+        pub include_chain_breakdown: bool,
+    }
+
+    /// `bridge plan` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct PlanArgs {
+        /// Source chain.
+        #[arg(long)]
+        pub from: Option<String>,
+        /// Destination chain.
+        #[arg(long)]
+        pub to: Option<String>,
+        /// Asset on source chain.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Destination asset override.
+        #[arg(long = "to-asset")]
+        pub to_asset: Option<String>,
+        /// Bridge provider (across|lifi).
+        #[arg(long)]
+        pub provider: Option<String>,
+        /// Amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// Optional source token base units reserved for destination native gas (LiFi).
+        #[arg(long = "from-amount-for-gas")]
+        pub from_amount_for_gas: Option<String>,
+        /// Recipient address (defaults to the resolved sender address).
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Max slippage in basis points.
+        #[arg(long = "slippage-bps", default_value_t = 50)]
+        pub slippage_bps: i64,
+        /// RPC URL override for source chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `bridge <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: BridgeCmd) -> Result<Envelope, Error> {
+        let path = format!("bridge {}", cmd.path());
+        let ws = match cmd {
+            BridgeCmd::Quote(_) | BridgeCmd::List(_) | BridgeCmd::Details(_) => "WS2",
+            BridgeCmd::Plan(_) => "WS3",
+            BridgeCmd::Submit(_) | BridgeCmd::Status(_) => "WS4",
+        };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::bridge` (Go: `internal/app` bridge command

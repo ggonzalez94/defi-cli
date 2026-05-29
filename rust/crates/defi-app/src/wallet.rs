@@ -321,6 +321,55 @@ fn encode_balance_of(_holder: &Address) -> Vec<u8> {
     ERC20_BALANCE_OF_SELECTOR.to_vec()
 }
 
+/// clap parsing + handler for the `wallet` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+
+    /// `wallet` subcommands (Go `newWalletCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum WalletCmd {
+        /// Query native or ERC-20 token balance for an address.
+        Balance(BalanceArgs),
+    }
+
+    impl WalletCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                WalletCmd::Balance(_) => "balance",
+            }
+        }
+    }
+
+    /// `wallet balance` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct BalanceArgs {
+        /// Chain identifier (CAIP-2, chain ID, or slug).
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Wallet address to query.
+        #[arg(long)]
+        pub address: Option<String>,
+        /// ERC-20 token (symbol, address, or CAIP-19); omit for native balance.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Override chain default RPC endpoint.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+    }
+
+    /// Handle `wallet <sub>` (WS2 — not yet ported).
+    pub async fn handle(_ctx: &AppCtx, cmd: WalletCmd) -> Result<Envelope, Error> {
+        match cmd {
+            WalletCmd::Balance(_) => Err(AppCtx::unimplemented("wallet balance", "WS2")),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::wallet_cmd` (Go: `internal/app/wallet_command.go`)

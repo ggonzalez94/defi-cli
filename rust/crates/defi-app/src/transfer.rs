@@ -144,6 +144,78 @@ pub fn ensure_transfer_intent(intent_type: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// clap parsing + handler for the `transfer` command group.
+pub mod cli {
+    use clap::{Args, Subcommand};
+    use defi_errors::Error;
+    use defi_model::Envelope;
+
+    use crate::ctx::AppCtx;
+    use crate::execflags::{PlanIdentityFlags, StatusArgs, TransferSubmitArgs};
+
+    /// `transfer` subcommands (Go `newTransferCommand`).
+    #[derive(Subcommand, Debug)]
+    pub enum TransferCmd {
+        /// Create and persist an ERC-20 transfer action plan.
+        Plan(PlanArgs),
+        /// Execute an existing ERC-20 transfer action.
+        Submit(TransferSubmitArgs),
+        /// Get transfer action status.
+        Status(StatusArgs),
+    }
+
+    impl TransferCmd {
+        /// The leaf path token (for `meta.command`).
+        pub fn path(&self) -> &'static str {
+            match self {
+                TransferCmd::Plan(_) => "plan",
+                TransferCmd::Submit(_) => "submit",
+                TransferCmd::Status(_) => "status",
+            }
+        }
+    }
+
+    /// `transfer plan` flags.
+    #[derive(Args, Debug, Clone, Default)]
+    pub struct PlanArgs {
+        /// Chain identifier.
+        #[arg(long)]
+        pub chain: Option<String>,
+        /// Asset symbol/address/CAIP-19.
+        #[arg(long)]
+        pub asset: Option<String>,
+        /// Recipient EOA address.
+        #[arg(long)]
+        pub recipient: Option<String>,
+        /// Amount in base units.
+        #[arg(long)]
+        pub amount: Option<String>,
+        /// Amount in decimal units.
+        #[arg(long = "amount-decimal")]
+        pub amount_decimal: Option<String>,
+        /// RPC URL override for the selected chain.
+        #[arg(long = "rpc-url")]
+        pub rpc_url: Option<String>,
+        /// Include simulation checks during execution.
+        #[arg(long, default_value_t = true, action = clap::ArgAction::Set)]
+        pub simulate: bool,
+        #[command(flatten)]
+        pub identity: PlanIdentityFlags,
+        #[command(flatten)]
+        pub input: crate::execflags::InputFlags,
+    }
+
+    /// Handle `transfer <sub>`.
+    pub async fn handle(_ctx: &AppCtx, cmd: TransferCmd) -> Result<Envelope, Error> {
+        let path = format!("transfer {}", cmd.path());
+        let ws = match cmd {
+            TransferCmd::Plan(_) => "WS3",
+            TransferCmd::Submit(_) | TransferCmd::Status(_) => "WS4",
+        };
+        Err(AppCtx::unimplemented(&path, ws))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     //! # Success criteria — `defi-app::transfer` (Go: `internal/app` transfer
