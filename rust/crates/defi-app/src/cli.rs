@@ -575,19 +575,17 @@ mod tests {
     /// `Unsupported` "not yet implemented" error). The complement of these
     /// within `all_real_commands` is the already-wired surface (`version`,
     /// `schema`, `providers list`, `assets resolve`, `chains list`,
-    /// `chains gas`, the `protocols`/`stablecoins`/`dexes` market data, and the
-    /// `lend markets`/`lend rates`/`lend positions` reads), which we route-check
-    /// by parse + `command_path` only (dispatching them would do real
-    /// provider/cache I/O, or — for the lend reads — require `--provider`).
+    /// `chains gas`, the `protocols`/`stablecoins`/`dexes` market data, the
+    /// `lend markets`/`lend rates`/`lend positions` reads, and the
+    /// `yield opportunities`/`yield positions`/`yield history` reads), which we
+    /// route-check by parse + `command_path` only (dispatching them would do
+    /// real provider/cache I/O, or — for the lend reads — require `--provider`).
     fn is_stub(path: &str) -> bool {
         matches!(
             path,
             "wallet balance"
                 | "chains top"
                 | "chains assets"
-                | "yield opportunities"
-                | "yield positions"
-                | "yield history"
                 | "swap quote"
                 | "bridge quote"
                 | "bridge list"

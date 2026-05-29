@@ -26,12 +26,25 @@
 use chrono::{DateTime, Utc};
 use defi_errors::{Code, Error};
 use defi_execution::builder::YieldVerb;
-use defi_id::Chain;
-use defi_model::{YieldHistorySeries, YieldOpportunity, YieldPosition};
+use defi_id::{Asset, Chain};
+use defi_model::{ProviderStatus, YieldHistorySeries, YieldOpportunity, YieldPosition};
 use defi_providers::{
-    YieldHistoryInterval, YieldHistoryMetric, YieldHistoryProvider, YieldPositionsProvider,
-    YieldPositionsRequest,
+    YieldHistoryInterval, YieldHistoryMetric, YieldHistoryProvider, YieldHistoryRequest,
+    YieldPositionsProvider, YieldPositionsRequest, YieldProvider, YieldRequest,
 };
+
+use crate::protocols::status_from_result;
+use crate::runner::FetchOutcome;
+
+/// The registered yield providers (Go `s.yieldProviders` map keys).
+const YIELD_PROVIDERS: [&str; 4] = ["aave", "morpho", "kamino", "moonwell"];
+
+/// Cache TTL for `yield opportunities` (Go: `60 * time.Second`).
+pub const YIELD_OPPORTUNITIES_TTL_SECS: u64 = 60;
+/// Cache TTL for `yield positions` (Go: `30 * time.Second`).
+pub const YIELD_POSITIONS_TTL_SECS: u64 = 30;
+/// Cache TTL for `yield history` (Go: `5 * time.Minute`).
+pub const YIELD_HISTORY_TTL_SECS: u64 = 5 * 60;
 
 /// The persisted action intent type for a yield execution verb.
 ///
@@ -474,6 +487,495 @@ pub fn require_yield_history_capability<'a>(
     })
 }
 
+// ---------------------------------------------------------------------------
+// provider construction (capability-aware boxed trait objects).
+// ---------------------------------------------------------------------------
+
+/// Construct a [`YieldProvider`] for a registered provider name, applying the
+/// `--rpc-url` override to the on-chain reader (Moonwell). Mirrors Go
+/// `s.yieldProviders[name]` + `applyRPCOverride(provider, rpcURL)`.
+fn yield_provider(
+    ctx: &crate::ctx::AppCtx,
+    provider_name: &str,
+    rpc_url: &str,
+) -> Result<Box<dyn YieldProvider>, Error> {
+    let http = ctx.http_client();
+    let provider: Box<dyn YieldProvider> = match provider_name {
+        "aave" => Box::new(defi_providers::aave::Client::new(http)),
+        "morpho" => Box::new(defi_providers::morpho::Client::new(http)),
+        "kamino" => Box::new(defi_providers::kamino::Client::new(http)),
+        "moonwell" => {
+            let mut client = defi_providers::moonwell::Client::new();
+            let trimmed = rpc_url.trim();
+            if !trimmed.is_empty() {
+                client.set_rpc_override(trimmed);
+            }
+            Box::new(client)
+        }
+        _ => {
+            return Err(Error::new(
+                Code::Unsupported,
+                format!("unsupported yield provider: {provider_name}"),
+            ))
+        }
+    };
+    Ok(provider)
+}
+
+/// Construct a [`YieldPositionsProvider`] for a registered name, or `None` when
+/// the provider does not implement positions (Kamino). Mirrors the Go
+/// `provider.(providers.YieldPositionsProvider)` interface assertion. The
+/// on-chain reader (Moonwell) reads its RPC override from the per-request
+/// `rpc_url` field, so no client-side override is applied here.
+fn yield_positions_provider(
+    ctx: &crate::ctx::AppCtx,
+    provider_name: &str,
+) -> Result<Option<Box<dyn YieldPositionsProvider>>, Error> {
+    let http = ctx.http_client();
+    let provider: Option<Box<dyn YieldPositionsProvider>> = match provider_name {
+        "aave" => Some(Box::new(defi_providers::aave::Client::new(http))),
+        "morpho" => Some(Box::new(defi_providers::morpho::Client::new(http))),
+        // Kamino implements YieldProvider but NOT positions (Go capability gate).
+        "kamino" => None,
+        "moonwell" => Some(Box::new(defi_providers::moonwell::Client::new())),
+        _ => {
+            return Err(Error::new(
+                Code::Unsupported,
+                format!("unsupported yield provider: {provider_name}"),
+            ))
+        }
+    };
+    Ok(provider)
+}
+
+/// Construct a [`YieldHistoryProvider`] for a registered name, or `None` when
+/// the provider does not implement history (Moonwell). Mirrors the Go
+/// `provider.(providers.YieldHistoryProvider)` interface assertion.
+fn yield_history_provider(
+    ctx: &crate::ctx::AppCtx,
+    provider_name: &str,
+) -> Result<Option<Box<dyn YieldHistoryProvider>>, Error> {
+    let http = ctx.http_client();
+    let provider: Option<Box<dyn YieldHistoryProvider>> = match provider_name {
+        "aave" => Some(Box::new(defi_providers::aave::Client::new(http))),
+        "morpho" => Some(Box::new(defi_providers::morpho::Client::new(http))),
+        "kamino" => Some(Box::new(defi_providers::kamino::Client::new(http))),
+        // Moonwell implements YieldProvider + positions but NOT history.
+        "moonwell" => None,
+        _ => {
+            return Err(Error::new(
+                Code::Unsupported,
+                format!("unsupported yield provider: {provider_name}"),
+            ))
+        }
+    };
+    Ok(provider)
+}
+
+/// The canonical [`ProviderInfo::name`] for a yield provider (used for status
+/// rows when the boxed trait object is `None`, mirroring `provider.Info().Name`).
+fn yield_provider_label(ctx: &crate::ctx::AppCtx, provider_name: &str) -> String {
+    yield_provider(ctx, provider_name, "")
+        .map(|p| {
+            use defi_providers::Provider;
+            p.info().name
+        })
+        .unwrap_or_else(|_| provider_name.to_string())
+}
+
+/// A provider error captured as a typed [`Error`] for `firstErr` parity (Go
+/// keeps the first provider error and falls back to a `CodeUnavailable`
+/// "no ... returned by selected providers" if every provider yielded zero rows
+/// without erroring).
+type FetchErr = (Vec<ProviderStatus>, Vec<String>, bool, Error);
+
+// ---------------------------------------------------------------------------
+// read-command orchestration (multi-provider aggregation loops).
+// ---------------------------------------------------------------------------
+
+/// Run `yield opportunities`: select providers, fetch from each, aggregate,
+/// dedupe, sort, and truncate (Go `opportunitiesCmd` fetch closure).
+async fn run_opportunities(
+    ctx: &crate::ctx::AppCtx,
+    req: &YieldRequest,
+    chain: &Chain,
+    rpc_url: &str,
+) -> Result<FetchOutcome, FetchErr> {
+    let selected =
+        match crate::runner::select_yield_providers(&YIELD_PROVIDERS, &req.providers, chain) {
+            Ok(s) => s,
+            Err(err) => return Err((Vec::new(), Vec::new(), false, err)),
+        };
+
+    let mut statuses: Vec<ProviderStatus> = Vec::with_capacity(selected.len());
+    let mut warnings: Vec<String> = Vec::new();
+    let mut combined: Vec<YieldOpportunity> = Vec::new();
+    let mut partial = false;
+    let mut first_err: Option<Error> = None;
+
+    for provider_name in &selected {
+        let provider = match yield_provider(ctx, provider_name, rpc_url) {
+            Ok(p) => p,
+            Err(err) => return Err((statuses, warnings, partial, err)),
+        };
+        let name = {
+            use defi_providers::Provider;
+            provider.info().name
+        };
+        // Per-provider request: clear the providers filter (Go `reqCopy.Providers
+        // = nil`) so the adapter does not re-filter.
+        let mut req_copy = req.clone();
+        req_copy.providers = Vec::new();
+        let res = provider.yield_opportunities(req_copy).await;
+        statuses.push(ProviderStatus {
+            name: name.clone(),
+            status: status_from_result(&res),
+            latency_ms: 0,
+        });
+        match res {
+            Ok(items) => combined.extend(items),
+            Err(err) => {
+                partial = true;
+                warnings.push(format!("provider {name} failed: {err}"));
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+    }
+
+    if req.include_incomplete {
+        warnings.push(
+            "include_incomplete enabled: opportunities with missing APY/TVL may be present"
+                .to_string(),
+        );
+    }
+
+    if combined.is_empty() {
+        let err = first_err.unwrap_or_else(|| {
+            Error::new(
+                Code::Unavailable,
+                "no yield opportunities returned by selected providers",
+            )
+        });
+        return Err((statuses, warnings, partial, err));
+    }
+
+    combined = dedupe_yield_by_opportunity_id(combined);
+    sort_yield_opportunities(&mut combined, &req.sort_by);
+    combined = apply_yield_opportunity_limit(combined, req.limit);
+    if req.include_incomplete {
+        warnings.push(format!(
+            "returned {} combined opportunities across {} provider(s)",
+            combined.len(),
+            selected.len()
+        ));
+    }
+
+    let data = serde_json::to_value(&combined).map_err(|e| {
+        (
+            Vec::new(),
+            Vec::new(),
+            false,
+            Error::wrap(Code::Internal, "serialize yield opportunities", e),
+        )
+    })?;
+    Ok(FetchOutcome {
+        data,
+        providers: statuses,
+        warnings,
+        partial,
+    })
+}
+
+/// Run `yield positions`: select providers, gate each on the positions
+/// capability, fetch, aggregate, sort, truncate (Go `positionsCmd` closure).
+#[allow(clippy::too_many_arguments)]
+async fn run_positions(
+    ctx: &crate::ctx::AppCtx,
+    chain: &Chain,
+    account: &str,
+    asset: &Asset,
+    provider_filter: &[String],
+    limit: i64,
+    rpc_url: &str,
+) -> Result<FetchOutcome, FetchErr> {
+    let selected =
+        match crate::runner::select_yield_providers(&YIELD_PROVIDERS, provider_filter, chain) {
+            Ok(s) => s,
+            Err(err) => return Err((Vec::new(), Vec::new(), false, err)),
+        };
+
+    let mut statuses: Vec<ProviderStatus> = Vec::with_capacity(selected.len());
+    let mut warnings: Vec<String> = Vec::new();
+    let mut combined: Vec<YieldPosition> = Vec::new();
+    let mut partial = false;
+    let mut first_err: Option<Error> = None;
+
+    for provider_name in &selected {
+        let label = yield_provider_label(ctx, provider_name);
+        let provider = match yield_positions_provider(ctx, provider_name) {
+            Ok(p) => p,
+            Err(err) => return Err((statuses, warnings, partial, err)),
+        };
+        let req = YieldPositionsRequest {
+            chain: chain.clone(),
+            account: account.to_string(),
+            asset: asset.clone(),
+            limit,
+            rpc_url: rpc_url.trim().to_string(),
+        };
+        let res = fetch_yield_positions(provider_name, provider.as_deref(), req).await;
+        statuses.push(ProviderStatus {
+            name: label.clone(),
+            status: status_from_result(&res),
+            latency_ms: 0,
+        });
+        match res {
+            Ok(items) => combined.extend(items),
+            Err(err) => {
+                partial = true;
+                if matches!(err.code, Code::Unsupported) {
+                    warnings.push(format!("provider {label} does not support yield positions"));
+                } else {
+                    warnings.push(format!("provider {label} failed: {err}"));
+                }
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+            }
+        }
+    }
+
+    if combined.is_empty() {
+        let err = first_err.unwrap_or_else(|| {
+            Error::new(
+                Code::Unavailable,
+                "no yield positions returned by selected providers",
+            )
+        });
+        return Err((statuses, warnings, partial, err));
+    }
+
+    sort_yield_positions(&mut combined);
+    combined = apply_yield_position_limit(combined, limit);
+
+    let data = serde_json::to_value(&combined).map_err(|e| {
+        (
+            Vec::new(),
+            Vec::new(),
+            false,
+            Error::wrap(Code::Internal, "serialize yield positions", e),
+        )
+    })?;
+    Ok(FetchOutcome {
+        data,
+        providers: statuses,
+        warnings,
+        partial,
+    })
+}
+
+/// Run `yield history`: select providers, gate each on the history capability,
+/// discover opportunities, fetch per-opportunity series, aggregate, sort (Go
+/// `historyCmd` closure).
+#[allow(clippy::too_many_arguments)]
+async fn run_history(
+    ctx: &crate::ctx::AppCtx,
+    chain: &Chain,
+    asset: &Asset,
+    provider_filter: &[String],
+    metrics: &[YieldHistoryMetric],
+    interval: YieldHistoryInterval,
+    start_time: DateTime<Utc>,
+    end_time: DateTime<Utc>,
+    opportunity_ids: &[String],
+    limit: i64,
+) -> Result<FetchOutcome, FetchErr> {
+    let selected =
+        match crate::runner::select_yield_providers(&YIELD_PROVIDERS, provider_filter, chain) {
+            Ok(s) => s,
+            Err(err) => return Err((Vec::new(), Vec::new(), false, err)),
+        };
+
+    let mut statuses: Vec<ProviderStatus> = Vec::with_capacity(selected.len());
+    let mut warnings: Vec<String> = Vec::new();
+    let mut combined: Vec<YieldHistorySeries> = Vec::new();
+    let mut partial = false;
+    let mut first_err: Option<Error> = None;
+
+    let has_id_filter = !opportunity_ids.is_empty();
+
+    for provider_name in &selected {
+        let label = yield_provider_label(ctx, provider_name);
+        let history_provider = match yield_history_provider(ctx, provider_name) {
+            Ok(p) => p,
+            Err(err) => return Err((statuses, warnings, partial, err)),
+        };
+        let Some(history_provider) = history_provider else {
+            let err = Error::new(
+                Code::Unsupported,
+                format!("yield provider {provider_name} does not support history"),
+            );
+            statuses.push(ProviderStatus {
+                name: label.clone(),
+                status: status_from_result::<()>(&Err(Error::new(err.code, ""))),
+                latency_ms: 0,
+            });
+            warnings.push(format!("provider {label} does not support yield history"));
+            partial = true;
+            if first_err.is_none() {
+                first_err = Some(err);
+            }
+            continue;
+        };
+
+        // Discover opportunities (the history provider is also a YieldProvider).
+        let discovery_provider = match yield_provider(ctx, provider_name, "") {
+            Ok(p) => p,
+            Err(err) => return Err((statuses, warnings, partial, err)),
+        };
+        let mut discovery_req = YieldRequest {
+            chain: chain.clone(),
+            asset: asset.clone(),
+            limit,
+            min_tvl_usd: 0.0,
+            min_apy: 0.0,
+            providers: Vec::new(),
+            sort_by: "apy_total".to_string(),
+            include_incomplete: true,
+        };
+        if has_id_filter {
+            discovery_req.limit = 0;
+        }
+        let discovery = discovery_provider.yield_opportunities(discovery_req).await;
+        let mut opportunities = match discovery {
+            Ok(o) => o,
+            Err(err) => {
+                statuses.push(ProviderStatus {
+                    name: label.clone(),
+                    status: status_from_result::<()>(&Err(Error::new(err.code, ""))),
+                    latency_ms: 0,
+                });
+                warnings.push(format!(
+                    "provider {label} failed during opportunity lookup: {err}"
+                ));
+                partial = true;
+                if first_err.is_none() {
+                    first_err = Some(err);
+                }
+                continue;
+            }
+        };
+
+        if has_id_filter {
+            opportunities = filter_yield_opportunities_by_id(opportunities, opportunity_ids);
+        }
+        if limit > 0 && (opportunities.len() as i64) > limit {
+            opportunities.truncate(limit as usize);
+        }
+        if opportunities.is_empty() {
+            let err = Error::new(
+                Code::Unavailable,
+                format!("provider {provider_name} returned no matching opportunities"),
+            );
+            statuses.push(ProviderStatus {
+                name: label.clone(),
+                status: status_from_result::<()>(&Err(Error::new(err.code, ""))),
+                latency_ms: 0,
+            });
+            warnings.push(format!(
+                "provider {label} returned no matching opportunities"
+            ));
+            partial = true;
+            if first_err.is_none() {
+                first_err = Some(err);
+            }
+            continue;
+        }
+
+        let mut provider_series: Vec<YieldHistorySeries> = Vec::new();
+        let mut provider_history_err: Option<Error> = None;
+        for opportunity in opportunities {
+            let series_res = history_provider
+                .yield_history(YieldHistoryRequest {
+                    opportunity: opportunity.clone(),
+                    start_time,
+                    end_time,
+                    interval,
+                    metrics: metrics.to_vec(),
+                })
+                .await;
+            match series_res {
+                Ok(series) => provider_series.extend(series),
+                Err(err) => {
+                    partial = true;
+                    warnings.push(format!(
+                        "provider {label} failed history for opportunity {}: {err}",
+                        opportunity.opportunity_id
+                    ));
+                    if provider_history_err.is_none() {
+                        provider_history_err = Some(err);
+                    }
+                }
+            }
+        }
+
+        let status_err = if let Some(err) = provider_history_err {
+            Some(err)
+        } else if provider_series.is_empty() {
+            Some(Error::new(
+                Code::Unavailable,
+                format!("provider {provider_name} returned no historical points"),
+            ))
+        } else {
+            None
+        };
+        let status_str = match &status_err {
+            Some(err) => status_from_result::<()>(&Err(Error::new(err.code, ""))),
+            None => "ok".to_string(),
+        };
+        statuses.push(ProviderStatus {
+            name: label.clone(),
+            status: status_str,
+            latency_ms: 0,
+        });
+        if let Some(err) = status_err {
+            if first_err.is_none() {
+                first_err = Some(err);
+            }
+        }
+        combined.extend(provider_series);
+    }
+
+    if combined.is_empty() {
+        let err = first_err.unwrap_or_else(|| {
+            Error::new(
+                Code::Unavailable,
+                "no yield history returned by selected providers",
+            )
+        });
+        return Err((statuses, warnings, partial, err));
+    }
+
+    sort_yield_history_series(&mut combined);
+
+    let data = serde_json::to_value(&combined).map_err(|e| {
+        (
+            Vec::new(),
+            Vec::new(),
+            false,
+            Error::wrap(Code::Internal, "serialize yield history", e),
+        )
+    })?;
+    Ok(FetchOutcome {
+        data,
+        providers: statuses,
+        warnings,
+        partial,
+    })
+}
+
 /// clap parsing + handler for the `yield` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
@@ -671,19 +1173,197 @@ pub mod cli {
     }
 
     /// Handle `yield <sub>`.
-    pub async fn handle(_ctx: &AppCtx, cmd: YieldCmd) -> Result<Envelope, Error> {
-        let path = format!("yield {}", cmd.path());
-        let ws = if matches!(
-            cmd,
-            YieldCmd::Opportunities(_) | YieldCmd::Positions(_) | YieldCmd::History(_)
-        ) {
-            "WS2"
-        } else if path.ends_with("plan") {
-            "WS3"
-        } else {
-            "WS4"
+    ///
+    /// Reads (`opportunities`/`positions`/`history`) are WS2 (wired here);
+    /// execution verbs are WS3 (`plan`) / WS4 (`submit`/`status`). All route
+    /// here; unimplemented leaves return a typed `Unsupported` error (never
+    /// `unknown command`).
+    pub async fn handle(ctx: &AppCtx, cmd: YieldCmd) -> Result<Envelope, Error> {
+        match cmd {
+            YieldCmd::Opportunities(args) => handle_opportunities(ctx, args).await,
+            YieldCmd::Positions(args) => handle_positions(ctx, args).await,
+            YieldCmd::History(args) => handle_history(ctx, args).await,
+            other => {
+                let path = format!("yield {}", other.path());
+                let ws = if path.ends_with("plan") { "WS3" } else { "WS4" };
+                Err(AppCtx::unimplemented(&path, ws))
+            }
+        }
+    }
+
+    /// Cache-key request payload for `yield opportunities`.
+    ///
+    /// Field declaration order is ALPHABETICAL so the serde JSON matches the Go
+    /// `map[string]any` payload (Go `json.Marshal` of a map sorts keys), keeping
+    /// cache keys cross-binary stable.
+    #[derive(serde::Serialize)]
+    struct OpportunitiesCacheReq {
+        asset: String,
+        chain: String,
+        include_incomplete: bool,
+        limit: i64,
+        min_apy: f64,
+        min_tvl_usd: f64,
+        providers: Vec<String>,
+        rpc_url: String,
+        sort: String,
+    }
+
+    /// Cache-key request payload for `yield positions` (alphabetical order).
+    #[derive(serde::Serialize)]
+    struct PositionsCacheReq {
+        address: String,
+        asset: String,
+        chain: String,
+        limit: i64,
+        providers: Vec<String>,
+        rpc_url: String,
+    }
+
+    /// Cache-key request payload for `yield history` (alphabetical order).
+    #[derive(serde::Serialize)]
+    struct HistoryCacheReq {
+        asset: String,
+        chain: String,
+        end_time: String,
+        interval: String,
+        metrics: Vec<String>,
+        opportunity_ids: Vec<String>,
+        opportunity_limit: i64,
+        providers: Vec<String>,
+        start_time: String,
+    }
+
+    /// Handle `yield opportunities`: required `--chain`/`--asset` → cache flow.
+    async fn handle_opportunities(
+        ctx: &AppCtx,
+        args: OpportunitiesArgs,
+    ) -> Result<Envelope, Error> {
+        let path = "yield opportunities";
+        let chain_arg = args.chain.clone().unwrap_or_default();
+        let asset_arg = args.asset.clone().unwrap_or_default();
+        let (chain, asset) = crate::lend::parse_chain_asset(&chain_arg, &asset_arg)?;
+        let rpc_url = args.rpc_url.clone().unwrap_or_default();
+        let provider_filter = crate::runner::split_csv(&args.providers.clone().unwrap_or_default());
+
+        let req = super::YieldRequest {
+            chain: chain.clone(),
+            asset: asset.clone(),
+            limit: args.limit,
+            min_tvl_usd: args.min_tvl_usd.unwrap_or(0.0),
+            min_apy: args.min_apy.unwrap_or(0.0),
+            providers: provider_filter.clone(),
+            sort_by: args.sort.clone(),
+            include_incomplete: args.include_incomplete,
         };
-        Err(AppCtx::unimplemented(&path, ws))
+        let cache_req = OpportunitiesCacheReq {
+            asset: asset.asset_id.clone(),
+            chain: chain.caip2.clone(),
+            include_incomplete: args.include_incomplete,
+            limit: args.limit,
+            min_apy: req.min_apy,
+            min_tvl_usd: req.min_tvl_usd,
+            providers: provider_filter.clone(),
+            rpc_url: rpc_url.trim().to_string(),
+            sort: args.sort.clone(),
+        };
+        let key = crate::protocols::cache_key(path, &cache_req);
+        let ttl = std::time::Duration::from_secs(super::YIELD_OPPORTUNITIES_TTL_SECS);
+        ctx.run_cached_command(path, &key, ttl, || {
+            crate::ctx::block_on_fetch(super::run_opportunities(ctx, &req, &chain, &rpc_url))
+        })
+    }
+
+    /// Handle `yield positions`: input validation (chain/address) → cache flow.
+    async fn handle_positions(ctx: &AppCtx, args: PositionsArgs) -> Result<Envelope, Error> {
+        let path = "yield positions";
+        let chain_arg = args.chain.clone().unwrap_or_default();
+        let address = args.address.clone().unwrap_or_default();
+        let asset_arg = args.asset.clone().unwrap_or_default();
+
+        let validated = super::validate_yield_positions_input(&chain_arg, &address)?;
+        let chain = validated.chain;
+        let account = validated.account;
+
+        let asset = crate::lend::parse_optional_chain_asset(&chain, &asset_arg)?;
+        let rpc_url = args.rpc_url.clone().unwrap_or_default();
+        let provider_filter = crate::runner::split_csv(&args.providers.clone().unwrap_or_default());
+
+        let cache_account = if chain.is_evm() {
+            account.to_ascii_lowercase()
+        } else {
+            account.clone()
+        };
+        let cache_req = PositionsCacheReq {
+            address: cache_account,
+            asset: crate::lend::chain_asset_filter_cache_value(&asset, &asset_arg),
+            chain: chain.caip2.clone(),
+            limit: args.limit,
+            providers: provider_filter.clone(),
+            rpc_url: rpc_url.trim().to_string(),
+        };
+        let key = crate::protocols::cache_key(path, &cache_req);
+        let ttl = std::time::Duration::from_secs(super::YIELD_POSITIONS_TTL_SECS);
+        ctx.run_cached_command(path, &key, ttl, || {
+            crate::ctx::block_on_fetch(super::run_positions(
+                ctx,
+                &chain,
+                &account,
+                &asset,
+                &provider_filter,
+                args.limit,
+                &rpc_url,
+            ))
+        })
+    }
+
+    /// Handle `yield history`: required `--chain`/`--asset`, metric/interval/
+    /// range parsing → cache flow.
+    async fn handle_history(ctx: &AppCtx, args: HistoryArgs) -> Result<Envelope, Error> {
+        let path = "yield history";
+        let chain_arg = args.chain.clone().unwrap_or_default();
+        let asset_arg = args.asset.clone().unwrap_or_default();
+        let (chain, asset) = crate::lend::parse_chain_asset(&chain_arg, &asset_arg)?;
+
+        let metrics = super::parse_yield_history_metrics(&args.metrics)?;
+        let interval = super::parse_yield_history_interval(&args.interval)?;
+        let (start_time, end_time) = super::resolve_yield_history_range(
+            args.from.as_deref().unwrap_or_default(),
+            args.to.as_deref().unwrap_or_default(),
+            &args.window,
+            ctx.now(),
+        )?;
+        let opportunity_ids =
+            crate::runner::split_csv(&args.opportunity_ids.clone().unwrap_or_default());
+        let provider_filter = crate::runner::split_csv(&args.providers.clone().unwrap_or_default());
+
+        let cache_req = HistoryCacheReq {
+            asset: asset.asset_id.clone(),
+            chain: chain.caip2.clone(),
+            end_time: end_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            interval: interval.as_str().to_string(),
+            metrics: metrics.iter().map(|m| m.as_str().to_string()).collect(),
+            opportunity_ids: opportunity_ids.clone(),
+            opportunity_limit: args.limit,
+            providers: provider_filter.clone(),
+            start_time: start_time.to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        };
+        let key = crate::protocols::cache_key(path, &cache_req);
+        let ttl = std::time::Duration::from_secs(super::YIELD_HISTORY_TTL_SECS);
+        ctx.run_cached_command(path, &key, ttl, || {
+            crate::ctx::block_on_fetch(super::run_history(
+                ctx,
+                &chain,
+                &asset,
+                &provider_filter,
+                &metrics,
+                interval,
+                start_time,
+                end_time,
+                &opportunity_ids,
+                args.limit,
+            ))
+        })
     }
 }
 
@@ -1335,4 +2015,979 @@ mod tests {
             "got: {err}"
         );
     }
+}
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — app-level `yield {opportunities,positions,history}`
+    //! (WS2, read; Go: `internal/app` `newYieldCommand` in `runner.go`)
+    //!
+    //! These tests exercise the **wired command-group handler**
+    //! ([`cli::handle`]) end-to-end, asserting the full machine contract the
+    //! handler is responsible for — NOT the provider's ranking/normalization
+    //! (owned/tested by `defi-providers::{aave,morpho,moonwell}`) nor the
+    //! cache-flow state machine internals (owned/tested by `defi-app::runner`),
+    //! nor the pure ranking/parsing helpers (asserted in this module's sibling
+    //! `tests`). These tests are RED until WS2 wires the `yield` handler:
+    //! `cli::handle` currently returns the typed `unimplemented` stub
+    //! ([`Code::Unsupported`] with `"not yet implemented"`), so every assertion
+    //! that expects a real envelope / a Go-semantic error fails.
+    //!
+    //! ## Provider seam (offline determinism)
+    //!
+    //! `yield`'s read providers are the SAME set as `lend` (aave/morpho via
+    //! GraphQL, moonwell via on-chain RPC). The only one injectable through the
+    //! already-present `--rpc-url` flag with no `AppCtx` change is **Moonwell**
+    //! (on-chain reads on Base `eip155:8453`, the chain `yield_provider_supports_chain`
+    //! whitelists). Success-path envelopes are therefore asserted via Moonwell on
+    //! Base, reusing the same JSON-RPC multicall mock the provider crate + the
+    //! `lend` app tests use. Aave/Morpho GraphQL success envelopes have no
+    //! app-level base-URL seam yet (deferred to a later GREEN seam + the WS5
+    //! sweep), exactly as documented for `lend`.
+    //!
+    //! ## Success path (wiremock, Moonwell via `--rpc-url`)
+    //!
+    //! Y-A1. **`yield opportunities` success envelope.** `yield opportunities
+    //!       --chain base --asset USDC --providers moonwell --rpc-url <mock>`
+    //!       resolves a success [`Envelope`]: `version="v1"`, `success=true`,
+    //!       `error=None`, `meta.command="yield opportunities"`, `data` is a
+    //!       non-empty array of `YieldOpportunity` whose `provider == protocol ==
+    //!       "moonwell"`, `apy_total` is a percentage point (spec §2.5: positive,
+    //!       not a sub-1 ratio), and `partial=false`. (Go `opportunitiesCmd`
+    //!       success path.)
+    //! Y-A2. **`yield opportunities` reports the provider status.**
+    //!       `meta.providers` contains exactly one entry `{name:"moonwell",
+    //!       status:"ok"}` (Go appends one `ProviderStatus` per selected provider
+    //!       with `statusFromErr(nil)=="ok"`).
+    //! Y-A3. **`yield opportunities` cache transition.** With caching ENABLED the
+    //!       first invocation writes the cache (`meta.cache.status=="write"`,
+    //!       `stale=false`); a SECOND identical invocation serves the cache
+    //!       WITHOUT a second provider call (`meta.cache.status=="hit"`,
+    //!       `stale=false`, `meta.providers` empty). With caching DISABLED the
+    //!       status is `"miss"`. (`yield opportunities` is a data route, NOT
+    //!       bypassed — `should_open_cache` is true; TTL is 60s in Go.)
+    //! Y-A4. **`yield opportunities --limit` truncates the envelope payload.** The
+    //!       `data` array length is `min(combined_rows, limit)` (Go
+    //!       `combined[:req.Limit]`); `--limit 1` keeps at most one row.
+    //! Y-A5. **`yield opportunities --min-tvl-usd` is threaded to the provider.**
+    //!       An impossibly high `--min-tvl-usd` filters out every Moonwell market,
+    //!       so the provider returns nothing and the command surfaces the
+    //!       Go-semantic `Code::Unavailable` (no opportunities) rather than a
+    //!       success envelope — proving the flag reaches the provider request.
+    //! Y-A6. **`yield positions` success envelope.** `yield positions --chain base
+    //!       --address <dead> --providers moonwell --rpc-url <mock>` → success
+    //!       envelope, `meta.command="yield positions"`, a non-empty
+    //!       `YieldPosition` array (`provider=="moonwell"`), one
+    //!       `{name:"moonwell",status:"ok"}` provider status. (Go `positionsCmd`
+    //!       success path; TTL 30s.)
+    //!
+    //! ## Error paths (Go-semantic)
+    //!
+    //! Y-E1. **`yield positions` requires `--address`.** `yield positions --chain
+    //!       1` (no address) → exit 2 (usage). (Go `MarkFlagRequired("address")`
+    //!       / in-handler `--address is required`.)
+    //! Y-E2. **`yield positions` invalid EVM address** → exit 2 (usage). (Go
+    //!       `--address must be a valid EVM hex address`.)
+    //! Y-E3. **`yield opportunities` requires `--chain`/`--asset`.** Omitting the
+    //!       required `--asset` → exit 2 (usage). (Go `MarkFlagRequired`.)
+    //! Y-E4. **`yield history` requires `--chain`/`--asset`.** Omitting `--asset`
+    //!       → exit 2 (usage). (Go `MarkFlagRequired`.)
+    //! Y-E5. **Unknown `--providers` is a usage error.** `yield opportunities
+    //!       --chain 1 --asset USDC --providers bogus` → exit 2 (usage), matching
+    //!       Go `selectYieldProviders` (`unsupported yield provider`).
+    //! Y-E6. **`yield positions --providers kamino` (EVM chain) is unsupported.**
+    //!       Kamino is not selected on an EVM chain, BUT an explicit
+    //!       `--providers kamino` is validated against the registered set and then
+    //!       gated: Kamino implements `YieldProvider` but NOT
+    //!       `YieldPositionsProvider`, so the command surfaces the capability gate
+    //!       (`Code::Unsupported`, `"does not support positions"`), NOT the WS2
+    //!       placeholder stub. (Go `provider.(providers.YieldPositionsProvider)`
+    //!       assertion.)
+    //! Y-E7. **`yield history --providers moonwell` is unsupported.** Moonwell
+    //!       implements `YieldProvider` + positions but NOT
+    //!       `YieldHistoryProvider`, so `yield history --chain base --asset USDC
+    //!       --providers moonwell` surfaces `Code::Unsupported` (exit 13) with
+    //!       `"does not support history"`. (Go
+    //!       `provider.(providers.YieldHistoryProvider)` assertion; ported from
+    //!       `TestYieldHistoryCommandFailsWhenProviderHasNoHistorySupport`.)
+    //! Y-E8. **`yield history` rejects invalid `--metrics`/`--interval`.** A bogus
+    //!       `--metrics`/`--interval` value is a usage error (exit 2) BEFORE any
+    //!       provider call. (Go `parseYieldHistoryMetrics` /
+    //!       `parseYieldHistoryInterval`.)
+    //! Y-E9. **`yield history` rejects a future `--to`.** A `--to` more than 5m in
+    //!       the future is a usage error (exit 2). (Go `resolveYieldHistoryRange`.)
+    //!
+    //! ## Flag parsing
+    //!
+    //! Y-F1. **Defaults parse.** `yield opportunities --chain 1 --asset USDC`
+    //!       parses with `limit==20`, `sort=="apy_total"`,
+    //!       `include_incomplete==false`. `yield history` defaults
+    //!       `metrics=="apy_total"`, `interval=="day"`, `window=="7d"`,
+    //!       `limit==20`. `yield positions` defaults `limit==20`.
+    //! Y-F2. **`--providers` (multi) + `--min-tvl-usd` + `--rpc-url` parse and are
+    //!       forwarded.** `yield opportunities ... --providers aave,morpho
+    //!       --min-tvl-usd 1000000 --rpc-url http://x` parses into the typed args.
+    //!
+    //! SKIPPED here (covered elsewhere): per-row field/format byte parity
+    //! (provider goldens + WS5 sweep), Aave/Morpho GraphQL success envelopes (no
+    //! app-level base-URL seam yet), and the exact cobra-vs-clap required-flag
+    //! phrasing (asserted at the exit-code level only).
+
+    use super::cli::{handle, HistoryArgs, OpportunitiesArgs, PositionsArgs, YieldCmd};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::Code;
+    use serde_json::{json, Value};
+    use std::path::PathBuf;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use alloy::dyn_abi::DynSolValue;
+    use alloy::json_abi::JsonAbi;
+    use alloy::primitives::{Address as AlloyAddress, U256};
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // ---- canonical Moonwell-on-Base test addresses (mirror the provider mock) -
+    const TEST_COMPTROLLER: &str = "0xfBb21d0380beE3312B33c4353c8936a0F13EF26C";
+    const TEST_ORACLE: &str = "0xEC942bE8A8114bFD0396A5052c36027f2cA6a9d0";
+    const TEST_MTOKEN_USDC: &str = "0xEdc817A28E8B93B03976FBd4a3dDBc9f7D176c22";
+    const TEST_USDC: &str = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913";
+    const DEAD: &str = "0x000000000000000000000000000000000000dEaD";
+    const MULTICALL3_ADDR: &str = "0xca11bde05977b3631167028862be2a173976ca11";
+
+    // ---- settings + env helpers ------------------------------------------
+
+    /// JSON-output settings with caching toggled per `cache_enabled`. Cache /
+    /// action store paths live in the supplied temp dir so a cache-enabled
+    /// variant can open sqlite without touching the real home.
+    fn settings_in(tmp: &std::path::Path, cache_enabled: bool) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled,
+            cache_path: tmp.join("cache.sqlite"),
+            cache_lock_path: tmp.join("cache.lock"),
+            action_store_path: tmp.join("actions.sqlite"),
+            action_lock_path: tmp.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `MapEnv` whose HOME points at a temp dir so `Settings::load` resolves
+    /// cache/config paths without touching the real home.
+    fn env_with_home() -> (MapEnv, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    fn opportunities_args(rpc: &str) -> OpportunitiesArgs {
+        OpportunitiesArgs {
+            chain: Some("base".to_string()),
+            asset: Some("USDC".to_string()),
+            providers: Some("moonwell".to_string()),
+            sort: "apy_total".to_string(),
+            min_apy: None,
+            min_tvl_usd: None,
+            include_incomplete: false,
+            limit: 20,
+            rpc_url: Some(rpc.to_string()),
+        }
+    }
+
+    fn positions_args(rpc: &str) -> PositionsArgs {
+        PositionsArgs {
+            chain: Some("base".to_string()),
+            address: Some(DEAD.to_string()),
+            asset: None,
+            providers: Some("moonwell".to_string()),
+            limit: 20,
+            rpc_url: Some(rpc.to_string()),
+        }
+    }
+
+    fn history_args() -> HistoryArgs {
+        HistoryArgs {
+            chain: Some("base".to_string()),
+            asset: Some("USDC".to_string()),
+            providers: Some("moonwell".to_string()),
+            opportunity_ids: None,
+            metrics: "apy_total".to_string(),
+            window: "7d".to_string(),
+            interval: "day".to_string(),
+            from: None,
+            to: None,
+            limit: 20,
+        }
+    }
+
+    fn data_array(env: &defi_model::Envelope) -> Vec<Value> {
+        env.data
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("data is an array")
+    }
+
+    // ---- Moonwell JSON-RPC multicall mock (ported from the lend app tests) -
+
+    fn addr(s: &str) -> AlloyAddress {
+        s.parse().expect("valid test address")
+    }
+
+    fn selector_for(abi_json: &str, name: &str) -> String {
+        let abi: JsonAbi = serde_json::from_str(abi_json).expect("parse abi");
+        let f = abi
+            .function(name)
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("function present");
+        hex::encode(f.selector().0)
+    }
+
+    fn encode_output(values: &[DynSolValue]) -> Vec<u8> {
+        DynSolValue::Tuple(values.to_vec()).abi_encode_params()
+    }
+
+    fn aggregate3_json() -> alloy::json_abi::Function {
+        let abi: JsonAbi = serde_json::from_str(defi_registry::MULTICALL3_ABI).expect("parse mc3");
+        abi.function("aggregate3")
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("aggregate3 present")
+    }
+
+    fn lower_hex(a: &AlloyAddress) -> String {
+        format!("0x{}", hex::encode(a.as_slice()))
+    }
+
+    /// Per-call dispatcher resolving `(target, selector)` to an ABI return blob,
+    /// mirroring the provider-crate + lend-app Moonwell mock fixtures one-to-one.
+    struct Dispatcher {
+        get_all_markets_sel: String,
+        oracle_sel: String,
+        get_assets_in_sel: String,
+        m_underlying_sel: String,
+        m_supply_rate_sel: String,
+        m_borrow_rate_sel: String,
+        m_total_supply_sel: String,
+        m_exchange_rate_sel: String,
+        m_total_borrows_sel: String,
+        m_get_cash_sel: String,
+        m_snapshot_sel: String,
+        e_symbol_sel: String,
+        e_decimals_sel: String,
+        o_price_sel: String,
+        supply_rate: U256,
+        borrow_rate: U256,
+        total_supply: U256,
+        exchange_rate: U256,
+        total_borrows: U256,
+        cash: U256,
+        price: U256,
+        m_token_bal: U256,
+        borrow_bal: U256,
+    }
+
+    impl Dispatcher {
+        fn new() -> Self {
+            let pow = |base: u128, exp: u32| U256::from(base).pow(U256::from(exp));
+            let comptroller_abi = defi_registry::MOONWELL_COMPTROLLER_ABI;
+            let mtoken_abi = defi_registry::MOONWELL_MTOKEN_ABI;
+            let erc20_abi = defi_registry::MOONWELL_ERC20_MINIMAL_ABI;
+            let oracle_abi = defi_registry::MOONWELL_ORACLE_ABI;
+            Dispatcher {
+                get_all_markets_sel: selector_for(comptroller_abi, "getAllMarkets"),
+                oracle_sel: selector_for(comptroller_abi, "oracle"),
+                get_assets_in_sel: selector_for(comptroller_abi, "getAssetsIn"),
+                m_underlying_sel: selector_for(mtoken_abi, "underlying"),
+                m_supply_rate_sel: selector_for(mtoken_abi, "supplyRatePerTimestamp"),
+                m_borrow_rate_sel: selector_for(mtoken_abi, "borrowRatePerTimestamp"),
+                m_total_supply_sel: selector_for(mtoken_abi, "totalSupply"),
+                m_exchange_rate_sel: selector_for(mtoken_abi, "exchangeRateCurrent"),
+                m_total_borrows_sel: selector_for(mtoken_abi, "totalBorrowsCurrent"),
+                m_get_cash_sel: selector_for(mtoken_abi, "getCash"),
+                m_snapshot_sel: selector_for(mtoken_abi, "getAccountSnapshot"),
+                e_symbol_sel: selector_for(erc20_abi, "symbol"),
+                e_decimals_sel: selector_for(erc20_abi, "decimals"),
+                o_price_sel: selector_for(oracle_abi, "getUnderlyingPrice"),
+                supply_rate: U256::from(951293759u64),
+                borrow_rate: U256::from(1585489599u64),
+                total_supply: U256::from(100_000_000u128) * pow(10, 8),
+                exchange_rate: U256::from(2u128) * pow(10, 14),
+                total_borrows: U256::from(500_000u128) * pow(10, 6),
+                cash: U256::from(500_000u128) * pow(10, 6),
+                price: pow(10, 30),
+                m_token_bal: U256::from(10_000u128) * pow(10, 8),
+                borrow_bal: U256::from(1_000u128) * pow(10, 6),
+            }
+        }
+
+        fn dispatch(&self, to: &str, data_hex: &str) -> Option<Vec<u8>> {
+            let selector = data_hex.get(..8).unwrap_or("");
+            let to = to.to_ascii_lowercase();
+
+            if to == TEST_COMPTROLLER.to_ascii_lowercase() {
+                if selector == self.get_all_markets_sel {
+                    return Some(encode_output(&[DynSolValue::Array(vec![
+                        DynSolValue::Address(addr(TEST_MTOKEN_USDC)),
+                    ])]));
+                }
+                if selector == self.oracle_sel {
+                    return Some(encode_output(&[DynSolValue::Address(addr(TEST_ORACLE))]));
+                }
+                if selector == self.get_assets_in_sel {
+                    return Some(encode_output(&[DynSolValue::Array(vec![
+                        DynSolValue::Address(addr(TEST_MTOKEN_USDC)),
+                    ])]));
+                }
+            } else if to == TEST_ORACLE.to_ascii_lowercase() {
+                if selector == self.o_price_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.price, 256)]));
+                }
+            } else if to == TEST_MTOKEN_USDC.to_ascii_lowercase() {
+                if selector == self.m_underlying_sel {
+                    return Some(encode_output(&[DynSolValue::Address(addr(TEST_USDC))]));
+                }
+                if selector == self.m_supply_rate_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.supply_rate, 256)]));
+                }
+                if selector == self.m_borrow_rate_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.borrow_rate, 256)]));
+                }
+                if selector == self.m_total_supply_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.total_supply, 256)]));
+                }
+                if selector == self.m_exchange_rate_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.exchange_rate, 256)]));
+                }
+                if selector == self.m_total_borrows_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.total_borrows, 256)]));
+                }
+                if selector == self.m_get_cash_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(self.cash, 256)]));
+                }
+                if selector == self.m_snapshot_sel {
+                    return Some(encode_output(&[
+                        DynSolValue::Uint(U256::ZERO, 256),
+                        DynSolValue::Uint(self.m_token_bal, 256),
+                        DynSolValue::Uint(self.borrow_bal, 256),
+                        DynSolValue::Uint(self.exchange_rate, 256),
+                    ]));
+                }
+            } else if to == TEST_USDC.to_ascii_lowercase() {
+                if selector == self.e_symbol_sel {
+                    return Some(encode_output(&[DynSolValue::String("USDC".to_string())]));
+                }
+                if selector == self.e_decimals_sel {
+                    return Some(encode_output(&[DynSolValue::Uint(U256::from(6u8), 8)]));
+                }
+            }
+            None
+        }
+    }
+
+    struct RpcResponder {
+        dispatcher: Arc<Dispatcher>,
+    }
+
+    impl Respond for RpcResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let body: Value = match serde_json::from_slice(&request.body) {
+                Ok(v) => v,
+                Err(_) => return ResponseTemplate::new(400),
+            };
+            let id = body.get("id").cloned().unwrap_or(json!(1));
+            let method_name = body.get("method").and_then(Value::as_str).unwrap_or("");
+            if method_name != "eth_call" {
+                return ok_response(&id, "0x");
+            }
+            let params = match body.get("params").and_then(|p| p.get(0)) {
+                Some(p) => p,
+                None => return ok_response(&id, "0x"),
+            };
+            let to = params
+                .get("to")
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .to_string();
+            let data_hex = params
+                .get("data")
+                .or_else(|| params.get("input"))
+                .and_then(Value::as_str)
+                .unwrap_or("")
+                .trim_start_matches("0x")
+                .to_string();
+            let selector = data_hex.get(..8).unwrap_or("");
+
+            let mc3_sel = selector_for(defi_registry::MULTICALL3_ABI, "aggregate3");
+            if to.to_ascii_lowercase() == MULTICALL3_ADDR && selector == mc3_sel {
+                let result = self.handle_aggregate3(&data_hex);
+                return ok_response(&id, &result);
+            }
+
+            let result = match self.dispatcher.dispatch(&to, &data_hex) {
+                Some(bytes) => format!("0x{}", hex::encode(bytes)),
+                None => "0x".to_string(),
+            };
+            ok_response(&id, &result)
+        }
+    }
+
+    impl RpcResponder {
+        fn handle_aggregate3(&self, data_hex: &str) -> String {
+            use alloy::dyn_abi::{FunctionExt, JsonAbiExt};
+            let raw = match hex::decode(data_hex) {
+                Ok(b) => b,
+                Err(_) => return "0x".to_string(),
+            };
+            if raw.len() < 4 {
+                return "0x".to_string();
+            }
+            let agg = aggregate3_json();
+            let decoded = match agg.abi_decode_input(&raw[4..]) {
+                Ok(v) => v,
+                Err(_) => return "0x".to_string(),
+            };
+            let calls = match decoded.first().and_then(|v| v.as_array()) {
+                Some(c) => c,
+                None => return "0x".to_string(),
+            };
+
+            let mut results: Vec<DynSolValue> = Vec::with_capacity(calls.len());
+            for call in calls {
+                let tuple = match call.as_tuple() {
+                    Some(t) if t.len() == 3 => t,
+                    _ => {
+                        results.push(failed_result());
+                        continue;
+                    }
+                };
+                let target = tuple[0]
+                    .as_address()
+                    .map(|a| lower_hex(&a))
+                    .unwrap_or_default();
+                let sub_data = tuple[2].as_bytes().map(hex::encode).unwrap_or_default();
+                match self.dispatcher.dispatch(&target, &sub_data) {
+                    Some(bytes) => results.push(DynSolValue::Tuple(vec![
+                        DynSolValue::Bool(true),
+                        DynSolValue::Bytes(bytes),
+                    ])),
+                    None => results.push(failed_result()),
+                }
+            }
+
+            match agg.abi_encode_output(&[DynSolValue::Array(results)]) {
+                Ok(bytes) => format!("0x{}", hex::encode(bytes)),
+                Err(_) => "0x".to_string(),
+            }
+        }
+    }
+
+    fn failed_result() -> DynSolValue {
+        DynSolValue::Tuple(vec![
+            DynSolValue::Bool(false),
+            DynSolValue::Bytes(Vec::new()),
+        ])
+    }
+
+    fn ok_response(id: &Value, result: &str) -> ResponseTemplate {
+        ResponseTemplate::new(200).set_body_json(json!({
+            "jsonrpc": "2.0",
+            "id": id,
+            "result": result,
+        }))
+    }
+
+    async fn moonwell_rpc_server() -> MockServer {
+        let server = MockServer::start().await;
+        let responder = RpcResponder {
+            dispatcher: Arc::new(Dispatcher::new()),
+        };
+        Mock::given(method("POST"))
+            .respond_with(responder)
+            .mount(&server)
+            .await;
+        server
+    }
+
+    // ---- Y-A1 / Y-A2: opportunities success envelope + provider status ----
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_success_envelope_and_provider_status() {
+        let server = moonwell_rpc_server().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let env = handle(
+            &ctx,
+            YieldCmd::Opportunities(opportunities_args(&server.uri())),
+        )
+        .await
+        .expect("yield opportunities should succeed against the mock RPC");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "yield opportunities");
+        assert!(!env.meta.partial);
+
+        let rows = data_array(&env);
+        assert!(!rows.is_empty(), "expected at least one opportunity");
+        assert_eq!(rows[0]["provider"], json!("moonwell"));
+        assert_eq!(rows[0]["protocol"], json!("moonwell"));
+        // APY = percentage points (spec §2.5): positive, not a sub-1 ratio.
+        let apy = rows[0]["apy_total"].as_f64().expect("apy_total f64");
+        assert!(apy > 0.0, "apy_total should be positive: {apy}");
+
+        // Y-A2: one provider status, status "ok".
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "moonwell");
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // ---- Y-A3: cache transition write -> hit ------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_cache_write_then_hit() {
+        let server = moonwell_rpc_server().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), true));
+
+        let first = handle(
+            &ctx,
+            YieldCmd::Opportunities(opportunities_args(&server.uri())),
+        )
+        .await
+        .expect("first yield opportunities");
+        assert_eq!(
+            first.meta.cache.status, "write",
+            "first cache-enabled fetch should write the cache"
+        );
+        assert!(!first.meta.cache.stale);
+
+        let second = handle(
+            &ctx,
+            YieldCmd::Opportunities(opportunities_args(&server.uri())),
+        )
+        .await
+        .expect("second yield opportunities");
+        assert_eq!(
+            second.meta.cache.status, "hit",
+            "second identical fetch should hit the cache"
+        );
+        assert!(!second.meta.cache.stale);
+        assert!(
+            second.meta.providers.is_empty(),
+            "fresh hit must not call the provider"
+        );
+    }
+
+    // ---- Y-A3 (disabled cache): status "miss" -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_cache_disabled_status_miss() {
+        let server = moonwell_rpc_server().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let env = handle(
+            &ctx,
+            YieldCmd::Opportunities(opportunities_args(&server.uri())),
+        )
+        .await
+        .expect("yield opportunities");
+        assert_eq!(
+            env.meta.cache.status, "miss",
+            "cache-disabled fetch keeps the initial miss status"
+        );
+    }
+
+    // ---- Y-A4: --limit threads into the handler ---------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_limit_caps_payload() {
+        let server = moonwell_rpc_server().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let mut args = opportunities_args(&server.uri());
+        args.limit = 1;
+        let env = handle(&ctx, YieldCmd::Opportunities(args))
+            .await
+            .expect("yield opportunities --limit 1");
+        let rows = data_array(&env);
+        assert!(
+            rows.len() <= 1,
+            "--limit 1 must cap rows to 1, got {}",
+            rows.len()
+        );
+    }
+
+    // ---- Y-A5: --min-tvl-usd is forwarded to the provider request ---------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_min_tvl_filters_everything_to_unavailable() {
+        let server = moonwell_rpc_server().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let mut args = opportunities_args(&server.uri());
+        // Impossibly large TVL floor: the single mock market is filtered out, so
+        // the provider returns nothing -> Go-semantic Unavailable (NOT success).
+        args.min_tvl_usd = Some(1e30);
+        let err = handle(&ctx, YieldCmd::Opportunities(args))
+            .await
+            .expect_err("an impossible --min-tvl-usd must filter out all rows");
+        assert_eq!(
+            err.code,
+            Code::Unavailable,
+            "no opportunities after filtering must be Unavailable, got {:?}",
+            err.code
+        );
+        // Must NOT be the WS2 placeholder stub error.
+        assert!(
+            !err.to_string()
+                .to_lowercase()
+                .contains("not yet implemented"),
+            "must route to the real handler, got: {err}"
+        );
+    }
+
+    // ---- Y-A6: positions success envelope ---------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_positions_success_envelope_and_provider_status() {
+        let server = moonwell_rpc_server().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let env = handle(&ctx, YieldCmd::Positions(positions_args(&server.uri())))
+            .await
+            .expect("yield positions should succeed against the mock RPC");
+
+        assert_eq!(env.meta.command, "yield positions");
+        assert!(env.success);
+        let rows = data_array(&env);
+        assert!(!rows.is_empty(), "expected at least one position");
+        assert_eq!(rows[0]["provider"], json!("moonwell"));
+
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "moonwell");
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // ---- Y-E6: kamino yield positions is unsupported (via handle) ---------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_positions_kamino_is_unsupported_typed_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let mut args = positions_args("");
+        args.providers = Some("kamino".to_string());
+        // Kamino is Solana-only; use a Solana address + chain so selection passes.
+        args.chain = Some("solana".to_string());
+        args.address = Some("6dM4QgP1VnRfx6TVV1t5hBf3ytA5Qn2ATqNnSboP8qz5".to_string());
+
+        let err = handle(&ctx, YieldCmd::Positions(args))
+            .await
+            .expect_err("kamino yield positions must be unsupported");
+        assert_eq!(err.code, Code::Unsupported);
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            msg.contains("does not support positions"),
+            "expected capability-gate message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("not yet implemented"),
+            "kamino positions must route to the real capability gate, got: {msg}"
+        );
+    }
+
+    // ---- Y-E7: moonwell yield history is unsupported (via handle) ----------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_history_moonwell_is_unsupported_typed_error() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        // Moonwell implements YieldProvider + positions but NOT history.
+        let env_err = handle(&ctx, YieldCmd::History(history_args()))
+            .await
+            .expect_err("moonwell yield history must be unsupported");
+        assert_eq!(env_err.code, Code::Unsupported);
+        let msg = env_err.to_string().to_lowercase();
+        assert!(
+            msg.contains("does not support history"),
+            "expected history capability-gate message, got: {msg}"
+        );
+        assert!(
+            !msg.contains("not yet implemented"),
+            "must route to the real capability gate, got: {msg}"
+        );
+    }
+
+    // ---- Y-E1..E5, E8, E9: usage error paths via run_with_args ------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_positions_missing_address_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "yield", "positions", "--chain", "1"], &env).await;
+        assert_eq!(code, 2, "missing --address must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_positions_invalid_evm_address_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "yield",
+                "positions",
+                "--chain",
+                "1",
+                "--address",
+                "notanaddress",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "invalid EVM address must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_missing_asset_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "yield", "opportunities", "--chain", "1"], &env).await;
+        assert_eq!(code, 2, "missing --asset must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_history_missing_asset_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "yield", "history", "--chain", "1"], &env).await;
+        assert_eq!(code, 2, "missing --asset must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_opportunities_unknown_provider_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "yield",
+                "opportunities",
+                "--chain",
+                "1",
+                "--asset",
+                "USDC",
+                "--providers",
+                "bogusprovider",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "unknown --providers must be a usage error (exit 2), matching selectYieldProviders"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_history_invalid_metrics_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "yield",
+                "history",
+                "--chain",
+                "1",
+                "--asset",
+                "USDC",
+                "--metrics",
+                "bogus_metric",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 2, "invalid --metrics must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_history_invalid_interval_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "yield",
+                "history",
+                "--chain",
+                "1",
+                "--asset",
+                "USDC",
+                "--interval",
+                "fortnight",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 2, "invalid --interval must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn yield_history_future_to_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "yield",
+                "history",
+                "--chain",
+                "1",
+                "--asset",
+                "USDC",
+                "--to",
+                "2999-01-01T00:00:00Z",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "a --to far in the future must be a usage error (exit 2)"
+        );
+    }
+
+    // (Y-E7's full-binary exit-13 variant is intentionally omitted: the WS2
+    // `unimplemented` stub ALSO returns exit 13 (Code::Unsupported), so an
+    // exit-code-only assertion through `run_with_args` cannot distinguish the
+    // real capability gate from the stub. Y-E7 is asserted strongly above via
+    // `yield_history_moonwell_is_unsupported_typed_error`, which checks the
+    // gate's `"does not support history"` message and that it is NOT the
+    // `"not yet implemented"` placeholder.)
+
+    // ---- Y-F1 / Y-F2: flag parsing ---------------------------------------
+
+    #[test]
+    fn yield_opportunities_flag_defaults_and_forwarding_parse() {
+        use clap::Parser;
+        // Defaults.
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi",
+            "yield",
+            "opportunities",
+            "--chain",
+            "1",
+            "--asset",
+            "USDC",
+        ])
+        .expect("yield opportunities parses");
+        if let crate::cli::TopCommand::Yield {
+            cmd: YieldCmd::Opportunities(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 20, "default --limit is 20");
+            assert_eq!(args.sort, "apy_total", "default --sort is apy_total");
+            assert!(
+                !args.include_incomplete,
+                "default --include-incomplete false"
+            );
+        } else {
+            panic!("expected yield opportunities command");
+        }
+
+        // Multi --providers + --min-tvl-usd + --rpc-url forwarding.
+        let cli2 = crate::cli::Cli::try_parse_from([
+            "defi",
+            "yield",
+            "opportunities",
+            "--chain",
+            "1",
+            "--asset",
+            "USDC",
+            "--providers",
+            "aave,morpho",
+            "--min-tvl-usd",
+            "1000000",
+            "--rpc-url",
+            "http://x",
+        ])
+        .expect("yield opportunities with filters parses");
+        if let crate::cli::TopCommand::Yield {
+            cmd: YieldCmd::Opportunities(args),
+        } = cli2.command
+        {
+            assert_eq!(args.providers.as_deref(), Some("aave,morpho"));
+            assert_eq!(args.min_tvl_usd, Some(1_000_000.0));
+            assert_eq!(args.rpc_url.as_deref(), Some("http://x"));
+        } else {
+            panic!("expected yield opportunities command");
+        }
+    }
+
+    #[test]
+    fn yield_history_flag_defaults_parse() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi", "yield", "history", "--chain", "1", "--asset", "USDC",
+        ])
+        .expect("yield history parses");
+        if let crate::cli::TopCommand::Yield {
+            cmd: YieldCmd::History(args),
+        } = cli.command
+        {
+            assert_eq!(args.metrics, "apy_total");
+            assert_eq!(args.interval, "day");
+            assert_eq!(args.window, "7d");
+            assert_eq!(args.limit, 20);
+        } else {
+            panic!("expected yield history command");
+        }
+    }
+
+    #[test]
+    fn yield_positions_flag_defaults_parse() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi",
+            "yield",
+            "positions",
+            "--chain",
+            "1",
+            "--address",
+            DEAD,
+        ])
+        .expect("yield positions parses");
+        if let crate::cli::TopCommand::Yield {
+            cmd: YieldCmd::Positions(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 20, "default --limit is 20");
+        } else {
+            panic!("expected yield positions command");
+        }
+    }
+
+    // ---- silence unused-import lint on PathBuf in some build configs ------
+    #[allow(dead_code)]
+    fn _assert_pathbuf_used(_p: PathBuf) {}
 }
