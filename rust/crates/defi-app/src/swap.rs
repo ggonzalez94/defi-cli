@@ -392,6 +392,151 @@ pub fn ensure_swap_intent(intent_type: &str) -> Result<(), Error> {
     Ok(())
 }
 
+/// The cache-key payload for `swap quote` (mirrors the Go `quoteCmd` cache-key
+/// map at `runner.go` ~L1238). Field declaration/serialization order matches the
+/// Go `map[string]any` rendered to canonical JSON; identical inputs MUST yield an
+/// identical key (the runner hashes the canonical JSON). Built only AFTER the
+/// request has been resolved so every field is the canonical normalized form.
+#[derive(serde::Serialize)]
+struct SwapQuoteCacheKey<'a> {
+    provider: &'a str,
+    chain: &'a str,
+    from: &'a str,
+    to: &'a str,
+    trade_type: &'a str,
+    amount: &'a str,
+    slippage_mode: &'a str,
+    slippage_pct: Option<f64>,
+    /// Lowercased swapper (Go `strings.ToLower(reqStruct.Swapper)`).
+    swapper: String,
+    rpc_url: &'a str,
+}
+
+/// `swap quote` time-to-live (Go `runCachedCommand(..., 15*time.Second, ...)`).
+const SWAP_QUOTE_TTL_SECS: u64 = 15;
+
+/// Apply a parsed structured-input JSON map onto the raw `swap quote` flag
+/// values, mirroring the Go `applyStructuredFlagInput` merge order:
+/// * an explicitly-set flag (already `Some`/non-default) is never overridden;
+/// * an unknown JSON key is a [`defi_errors::Code::Usage`] error
+///   (`structured input field "<k>" is not supported by swap quote`);
+/// * a `null` JSON value is a usage error (`... cannot be null`);
+/// * otherwise the JSON value fills the unset flag.
+///
+/// `slippage_changed` reports whether `slippage-pct` was set (explicitly OR via
+/// JSON), feeding the runner's `cmd.Flags().Changed("slippage-pct")` guard.
+struct QuoteFlagValues {
+    provider: String,
+    chain: String,
+    from_asset: String,
+    to_asset: String,
+    trade_type: String,
+    amount: String,
+    amount_decimal: String,
+    amount_out: String,
+    amount_out_decimal: String,
+    from_address: String,
+    slippage_pct: f64,
+    slippage_changed: bool,
+    rpc_url: String,
+}
+
+/// JSON keys the `swap quote` command accepts (flag-name `_`→`-` already
+/// resolved; the field on the right is the canonical flag name). Mirrors the Go
+/// local-flag set the `applyStructuredFlagInput` PreRunE merges into.
+fn quote_set_flag(
+    values: &mut QuoteFlagValues,
+    key: &str,
+    raw: &serde_json::Value,
+) -> Result<(), Error> {
+    // null is rejected for any recognized key (Go: cannot be null).
+    if raw.is_null() {
+        return Err(Error::new(
+            Code::Usage,
+            format!("structured input field {key:?} cannot be null"),
+        ));
+    }
+    // Decode a scalar to its flag-string form (Go decodeRawFlagValue).
+    let as_string = |v: &serde_json::Value| -> Option<String> {
+        match v {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Number(n) => Some(n.to_string()),
+            serde_json::Value::Bool(b) => Some(b.to_string()),
+            _ => None,
+        }
+    };
+    let canonical = key.replace('_', "-");
+    match canonical.as_str() {
+        "provider" => values.provider = as_string(raw).unwrap_or_default(),
+        "chain" => values.chain = as_string(raw).unwrap_or_default(),
+        "from-asset" => values.from_asset = as_string(raw).unwrap_or_default(),
+        "to-asset" => values.to_asset = as_string(raw).unwrap_or_default(),
+        "type" => values.trade_type = as_string(raw).unwrap_or_default(),
+        "amount" => values.amount = as_string(raw).unwrap_or_default(),
+        "amount-decimal" => values.amount_decimal = as_string(raw).unwrap_or_default(),
+        "amount-out" => values.amount_out = as_string(raw).unwrap_or_default(),
+        "amount-out-decimal" => values.amount_out_decimal = as_string(raw).unwrap_or_default(),
+        "from-address" => values.from_address = as_string(raw).unwrap_or_default(),
+        "rpc-url" => values.rpc_url = as_string(raw).unwrap_or_default(),
+        "slippage-pct" => {
+            let f = raw.as_f64().ok_or_else(|| {
+                Error::new(
+                    Code::Usage,
+                    format!("decode structured input field {key:?}"),
+                )
+            })?;
+            values.slippage_pct = f;
+            values.slippage_changed = true;
+        }
+        _ => {
+            return Err(Error::new(
+                Code::Usage,
+                format!("structured input field {key:?} is not supported by swap quote"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Map a swap-quote fetch result to the Go `statusFromErr` provider-status
+/// string: `Ok` → `"ok"`; `Auth` → `"auth_error"`; `RateLimited` →
+/// `"rate_limited"`; `Unavailable` → `"unavailable"`; anything else → `"error"`.
+pub fn status_from_quote_result<T>(res: &Result<T, Error>) -> String {
+    match res {
+        Ok(_) => "ok",
+        Err(err) => match err.code {
+            Code::Auth => "auth_error",
+            Code::RateLimited => "rate_limited",
+            Code::Unavailable => "unavailable",
+            _ => "error",
+        },
+    }
+    .to_string()
+}
+
+/// Compute the deterministic `swap quote` cache key from the resolved plan +
+/// request (Go `cacheKey(path, map{...})`):
+/// `hex(sha256(command_path | CACHE_PAYLOAD_SCHEMA_VERSION | canonical_json(map)))`.
+pub fn cache_key_for_quote(
+    command_path: &str,
+    plan: &SwapQuotePlan,
+    req: &SwapQuoteRequest,
+) -> String {
+    let payload = SwapQuoteCacheKey {
+        provider: &plan.provider,
+        chain: &req.chain.caip2,
+        from: &req.from_asset.asset_id,
+        to: &req.to_asset.asset_id,
+        trade_type: req.trade_type.as_str(),
+        amount: &req.amount_base_units,
+        slippage_mode: &plan.slippage_mode,
+        slippage_pct: req.slippage_pct,
+        swapper: req.swapper.to_lowercase(),
+        rpc_url: &req.rpc_url,
+    };
+    crate::protocols::cache_key(command_path, &payload)
+}
+
 /// clap parsing + handler for the `swap` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
@@ -518,14 +663,231 @@ pub mod cli {
     }
 
     /// Handle `swap <sub>`.
-    pub async fn handle(_ctx: &AppCtx, cmd: SwapCmd) -> Result<Envelope, Error> {
-        let path = format!("swap {}", cmd.path());
-        let ws = match cmd {
-            SwapCmd::Quote(_) => "WS2",
-            SwapCmd::Plan(_) => "WS3",
-            SwapCmd::Submit(_) | SwapCmd::Status(_) => "WS4",
+    pub async fn handle(ctx: &AppCtx, cmd: SwapCmd) -> Result<Envelope, Error> {
+        match cmd {
+            SwapCmd::Quote(args) => handle_quote(ctx, args).await,
+            SwapCmd::Plan(_) => Err(AppCtx::unimplemented("swap plan", "WS3")),
+            SwapCmd::Submit(_) => Err(AppCtx::unimplemented("swap submit", "WS4")),
+            SwapCmd::Status(_) => Err(AppCtx::unimplemented("swap status", "WS4")),
+        }
+    }
+
+    /// Handle `swap quote`: validate inputs, build the request, route through the
+    /// selected [`defi_providers::SwapProvider`] adapter via the cache flow.
+    ///
+    /// Parity with the Go `quoteCmd.RunE` (`runner.go` ~L1184-1256): structured
+    /// input is merged first (explicit flags win), then the pre-provider guard
+    /// order ([`super::validate_swap_quote_inputs`]) runs, the request is built
+    /// ([`super::parse_swap_request`]), and the provider's `QuoteSwap` is invoked
+    /// inside [`crate::runner::run_cached_command`] (15s TTL) so a fresh cache
+    /// hit short-circuits the provider.
+    async fn handle_quote(ctx: &AppCtx, args: QuoteArgs) -> Result<Envelope, Error> {
+        use defi_model::ProviderStatus;
+
+        // 1. Resolve flag values, merging any structured input (Go PreRunE
+        //    `applyStructuredFlagInput`). Explicitly-set flags are never
+        //    overridden; unknown JSON keys / null values are usage errors.
+        let mut values = super::QuoteFlagValues {
+            provider: args.provider.clone().unwrap_or_default(),
+            chain: args.chain.clone().unwrap_or_default(),
+            from_asset: args.from_asset.clone().unwrap_or_default(),
+            to_asset: args.to_asset.clone().unwrap_or_default(),
+            trade_type: args.r#type.clone(),
+            amount: args.amount.clone().unwrap_or_default(),
+            amount_decimal: args.amount_decimal.clone().unwrap_or_default(),
+            amount_out: args.amount_out.clone().unwrap_or_default(),
+            amount_out_decimal: args.amount_out_decimal.clone().unwrap_or_default(),
+            from_address: args.from_address.clone().unwrap_or_default(),
+            slippage_pct: args.slippage_pct.unwrap_or(0.0),
+            slippage_changed: args.slippage_pct.is_some(),
+            rpc_url: args.rpc_url.clone().unwrap_or_default(),
         };
-        Err(AppCtx::unimplemented(&path, ws))
+        // Track which flags the user set explicitly so the JSON never overrides
+        // them (Go `changedFlagNames`). `type` defaults to "exact-input"; treat a
+        // non-default value as explicit.
+        let explicit: std::collections::HashSet<&str> = {
+            let mut s = std::collections::HashSet::new();
+            if args.provider.is_some() {
+                s.insert("provider");
+            }
+            if args.chain.is_some() {
+                s.insert("chain");
+            }
+            if args.from_asset.is_some() {
+                s.insert("from-asset");
+            }
+            if args.to_asset.is_some() {
+                s.insert("to-asset");
+            }
+            if args.r#type != "exact-input" {
+                s.insert("type");
+            }
+            if args.amount.is_some() {
+                s.insert("amount");
+            }
+            if args.amount_decimal.is_some() {
+                s.insert("amount-decimal");
+            }
+            if args.amount_out.is_some() {
+                s.insert("amount-out");
+            }
+            if args.amount_out_decimal.is_some() {
+                s.insert("amount-out-decimal");
+            }
+            if args.from_address.is_some() {
+                s.insert("from-address");
+            }
+            if args.slippage_pct.is_some() {
+                s.insert("slippage-pct");
+            }
+            if args.rpc_url.is_some() {
+                s.insert("rpc-url");
+            }
+            s
+        };
+        apply_quote_structured_input(&args.input, &explicit, &mut values)?;
+
+        // 2. Pre-provider guard order (provider required -> unsupported -> type ->
+        //    exact-output gate -> slippage gate -> from-address validity).
+        let inputs = super::SwapQuoteInputs {
+            provider: values.provider.clone(),
+            trade_type: values.trade_type.clone(),
+            from_address: values.from_address.clone(),
+            slippage_changed: values.slippage_changed,
+            slippage_pct: values.slippage_pct,
+        };
+        let plan = super::validate_swap_quote_inputs(&inputs, ctx.swap_provider_names())?;
+
+        // 3. Build the canonical request, then layer slippage + swapper.
+        let mut req = super::parse_swap_request(
+            &values.chain,
+            &values.from_asset,
+            &values.to_asset,
+            plan.trade_type,
+            &values.amount,
+            &values.amount_decimal,
+            &values.amount_out,
+            &values.amount_out_decimal,
+            &values.rpc_url,
+        )?;
+        req.slippage_pct = plan.slippage_pct;
+        req.swapper = plan.swapper.clone();
+
+        // 4. Resolve the provider adapter (registered above -> always Some).
+        let provider = ctx.swap_provider(&plan.provider).ok_or_else(|| {
+            defi_errors::Error::new(defi_errors::Code::Unsupported, "unsupported swap provider")
+        })?;
+
+        // 5. Compose the cache key (Go cacheKey map) + fetch closure.
+        let path = "swap quote";
+        let key = super::cache_key_for_quote(path, &plan, &req);
+        let ttl = std::time::Duration::from_secs(super::SWAP_QUOTE_TTL_SECS);
+        let provider_name = provider.info().name;
+        let req_for_fetch = req.clone();
+
+        ctx.run_cached_command(path, &key, ttl, || {
+            let res = crate::ctx::block_on_fetch(provider.quote_swap(req_for_fetch));
+            let status = ProviderStatus {
+                name: provider_name.clone(),
+                status: super::status_from_quote_result(&res),
+                latency_ms: 0,
+            };
+            match res {
+                Ok(quote) => match serde_json::to_value(&quote) {
+                    Ok(data) => Ok(crate::runner::FetchOutcome {
+                        data,
+                        providers: vec![status],
+                        warnings: Vec::new(),
+                        partial: false,
+                    }),
+                    Err(e) => {
+                        let err = defi_errors::Error::wrap(
+                            defi_errors::Code::Internal,
+                            "serialize swap quote",
+                            e,
+                        );
+                        let st = ProviderStatus {
+                            name: provider_name.clone(),
+                            status: "error".to_string(),
+                            latency_ms: 0,
+                        };
+                        Err((vec![st], Vec::new(), false, err))
+                    }
+                },
+                Err(err) => Err((vec![status], Vec::new(), false, err)),
+            }
+        })
+    }
+
+    /// Merge structured input (`--input-json` / `--input-file`) onto the resolved
+    /// `swap quote` flag values (Go `applyStructuredFlagInput`).
+    ///
+    /// Reads the payload (mutually-exclusive `--input-json` / `--input-file`;
+    /// `-` reads stdin), parses it as a JSON object, and applies each entry via
+    /// [`super::quote_set_flag`] unless the flag was explicitly set on the command
+    /// line. A non-object payload, unknown key, or `null` value is a usage error.
+    fn apply_quote_structured_input(
+        input: &crate::execflags::InputFlags,
+        explicit: &std::collections::HashSet<&str>,
+        values: &mut super::QuoteFlagValues,
+    ) -> Result<(), Error> {
+        use defi_errors::Code;
+
+        let payload = read_structured_input(input)?;
+        let payload = match payload {
+            Some(p) if !p.trim().is_empty() => p,
+            _ => return Ok(()),
+        };
+
+        let parsed: serde_json::Value = serde_json::from_str(&payload)
+            .map_err(|e| Error::wrap(Code::Usage, "parse structured input", e))?;
+        let obj = parsed
+            .as_object()
+            .ok_or_else(|| Error::new(Code::Usage, "structured input must be a JSON object"))?;
+
+        for (key, raw) in obj {
+            let canonical = key.replace('_', "-");
+            if explicit.contains(canonical.as_str()) {
+                continue;
+            }
+            super::quote_set_flag(values, key, raw)?;
+        }
+        Ok(())
+    }
+
+    /// Resolve the structured-input payload string from `--input-json` /
+    /// `--input-file` (`-` = stdin), enforcing mutual exclusivity (Go
+    /// `readStructuredInput`).
+    fn read_structured_input(
+        input: &crate::execflags::InputFlags,
+    ) -> Result<Option<String>, Error> {
+        use defi_errors::Code;
+
+        let json = input.input_json.as_deref().unwrap_or("").trim().to_string();
+        let file = input.input_file.as_deref().unwrap_or("").trim().to_string();
+        if !json.is_empty() && !file.is_empty() {
+            return Err(Error::new(
+                Code::Usage,
+                "use only one of --input-json or --input-file",
+            ));
+        }
+        if !json.is_empty() {
+            return Ok(Some(json));
+        }
+        if file.is_empty() {
+            return Ok(None);
+        }
+        if file == "-" {
+            use std::io::Read;
+            let mut buf = String::new();
+            std::io::stdin()
+                .read_to_string(&mut buf)
+                .map_err(|e| Error::wrap(Code::Usage, "read structured input from stdin", e))?;
+            return Ok(Some(buf));
+        }
+        let buf = std::fs::read_to_string(&file)
+            .map_err(|e| Error::wrap(Code::Usage, "read structured input file", e))?;
+        Ok(Some(buf))
     }
 }
 
@@ -1024,6 +1386,577 @@ mod tests {
         assert!(
             err.to_string().contains("action is not a swap intent"),
             "got: {err}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod quote_handler_tests {
+    //! # Success criteria — `defi-app::swap` `swap quote` HANDLER (WS2 read)
+    //!
+    //! Go source: `internal/app/runner.go` `newSwapCommand` `quoteCmd.RunE`
+    //! (lines ~1181-1256) + the cache-flow core `runCachedCommand` + the swap
+    //! provider adapters (`internal/providers/{oneinch,jupiter,...}`). The pure
+    //! pre-provider helpers (`normalize_trade_type`,
+    //! `swap_provider_supports_exact_output`, `parse_swap_request`,
+    //! `validate_swap_quote_inputs`, `resolve_swap_plan_sender`,
+    //! `ensure_swap_intent`) are already covered by the sibling `tests` module
+    //! and are NOT re-asserted here. THIS module asserts the WIRED HANDLER
+    //! (`cli::handle` → `swap quote`): full envelope + meta, cache transitions,
+    //! exit codes, flag parsing, provider routing, key-gating, and the
+    //! Go-semantic error paths. The provider adapter response BODIES (per-field
+    //! quote math) are owned by `defi-providers` and are NOT re-asserted here —
+    //! only that the handler surfaces the adapter result into the envelope.
+    //!
+    //! These are LIVE commands in Go (1inch/jupiter hit real APIs), so per the
+    //! migration spec §4.1 / completion plan WS2 they are NOT byte-diffed
+    //! against the Go binary; instead the handler is driven offline against a
+    //! `wiremock` `MockServer` through the swap-provider base-URL seam
+    //! ([`AppCtx::with_swap_base`], analogous to the existing
+    //! [`AppCtx::with_defillama_base`]) that the GREEN handler must honor. The
+    //! 1inch base-URL `set_base_url` seam already exists on the provider client.
+    //!
+    //! Criteria (each maps to a Go behavior in `quoteCmd.RunE`):
+    //!
+    //!  Q1. **Success envelope shape (1inch / EVM).** With a valid 1inch key + a
+    //!      mock 1inch Swap API, `swap quote --provider 1inch --chain 1
+    //!      --from-asset USDC --to-asset DAI --amount 1000000` returns
+    //!      `version="v1"`, `success=true`, `error=None`,
+    //!      `meta.command="swap quote"`, `meta.partial=false`, and `data` is the
+    //!      SwapQuote object with `provider="1inch"`, `chain_id="eip155:1"`,
+    //!      `trade_type="exact-input"`, and `input_amount.amount_base_units` echo
+    //!      of `1000000`. (Go: `provider.QuoteSwap(reqStruct)` → envelope.)
+    //!
+    //!  Q2. **`meta.providers[]` status row.** On success the handler records
+    //!      exactly one provider status row keyed on the adapter's
+    //!      `Info().Name` (`"1inch"`) with status `"ok"` (Go:
+    //!      `statusFromErr(nil) == "ok"`, `provider.Info().Name`).
+    //!
+    //!  Q3. **Cache transition write → fresh hit.** With caching enabled, the
+    //!      first identical call is `meta.cache.status="write"` (not stale); the
+    //!      second identical call is a fresh `"hit"` that short-circuits the
+    //!      provider (so `meta.providers` is empty). `swap quote` is a cached
+    //!      read path (15s TTL — Go `runCachedCommand(..., 15*time.Second, ...)`).
+    //!      With caching disabled the status stays `"miss"`.
+    //!
+    //!  Q4. **Provider error → full envelope + provider status (auth_error).**
+    //!      `swap quote --provider 1inch` with NO key surfaces the adapter's
+    //!      [`Code::Auth`] error: the handler returns the typed error (exit 10),
+    //!      and the captured provider status row is `"auth_error"` (Go
+    //!      `statusFromErr(CodeAuth)`). Asserted via the handler error + the
+    //!      full-binary `run_with_args` exit code.
+    //!
+    //!  Q5. **`--provider` required (multi-provider, spec §2.5).** Missing
+    //!      `--provider` is a usage error (exit 2) BEFORE any chain/asset parse
+    //!      (Go: empty `NormalizeSwapProvider` → CodeUsage). Asserted via
+    //!      `run_with_args` (full envelope to stderr, exit 2).
+    //!
+    //!  Q6. **Unknown provider → unsupported (exit 13).** `--provider bogus` is a
+    //!      [`Code::Unsupported`] error (Go: not in `s.swapProviders`).
+    //!
+    //!  Q7. **`--type` enum + exact-output capability gate.** An invalid
+    //!      `--type limit-order` is usage (exit 2). `--type exact-output
+    //!      --provider 1inch` is unsupported (exit 13) — only uniswap/tempo
+    //!      support exact-output. (Go `normalizeTradeType` +
+    //!      `swapProviderSupportsExactOutput`.)
+    //!
+    //!  Q8. **uniswap key-gating + identity.** `--provider uniswap` requires a
+    //!      `--from-address` (usage exit 2 when absent) AND a Uniswap API key
+    //!      (auth exit 10 when the key env var is unset but a from-address is
+    //!      supplied). (Go: `--from-address is required for --provider uniswap`
+    //!      guard, then the adapter's key check.)
+    //!
+    //!  Q9. **`--input-json` precedence.** `swap quote --input-json
+    //!      '{"provider":"bogus","chain":"1",...}' --provider 1inch` — the
+    //!      explicit `--provider 1inch` flag OVERRIDES the JSON's
+    //!      `"provider":"bogus"` (Go `applyStructuredFlagInput` only fills
+    //!      flags the user did not set). Verified by NOT getting the
+    //!      unsupported-provider (exit 13) the JSON value would cause; instead
+    //!      the explicit 1inch flag drives the request (reaching the mock).
+    //!
+    //!  Q10. **`--slippage-pct` gate.** `--slippage-pct` on a non-uniswap
+    //!       provider is usage (exit 2). (Go: only uniswap honors the override.)
+    //!
+    //! SKIPPED (owned elsewhere / wrong layer): per-field SwapQuote math
+    //! (defi-providers), cache-key byte composition (runner), the
+    //! `swap plan|submit|status` paths (WS3/WS4), and the JSON
+    //! field-declaration-order rendering (defi-out golden tests).
+
+    use super::cli::{handle, QuoteArgs, SwapCmd};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::exit_code;
+    use defi_errors::{Code, Error};
+    use serde_json::Value;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const DEAD: &str = "0x000000000000000000000000000000000000dEaD";
+
+    // ---- settings + env helpers ------------------------------------------
+
+    /// JSON-output settings with caching toggled by `cache_enabled` and the
+    /// 1inch / uniswap keys threaded explicitly (so the key-gated success path
+    /// can pass an adapter key check). Cache/action paths point at `tmp`.
+    fn settings_in(
+        tmp: &std::path::Path,
+        cache_enabled: bool,
+        oneinch_key: &str,
+        uniswap_key: &str,
+    ) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled,
+            cache_path: tmp.join("cache.sqlite"),
+            cache_lock_path: tmp.join("cache.lock"),
+            action_store_path: tmp.join("actions.sqlite"),
+            action_lock_path: tmp.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: uniswap_key.to_string(),
+            oneinch_api_key: oneinch_key.to_string(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `MapEnv` whose HOME points at a temp dir (so `Settings::load` resolves
+    /// cache/config paths without touching the real home). Keeps the `TempDir`
+    /// guard alive for the test's duration.
+    fn env_with_home() -> (MapEnv, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    /// `swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI
+    /// --amount 1000000` flag set (the canonical EVM happy path).
+    fn oneinch_quote_args() -> QuoteArgs {
+        QuoteArgs {
+            chain: Some("1".to_string()),
+            from_asset: Some("USDC".to_string()),
+            to_asset: Some("DAI".to_string()),
+            provider: Some("1inch".to_string()),
+            r#type: "exact-input".to_string(),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            amount_out: None,
+            amount_out_decimal: None,
+            from_address: None,
+            slippage_pct: None,
+            rpc_url: None,
+            input: crate::execflags::InputFlags::default(),
+        }
+    }
+
+    /// Mount a 1inch Swap API quote response on a fresh `MockServer`.
+    /// Mirrors the real `{base}/swap/v6.0/{chainId}/quote` route shape the
+    /// adapter targets (chain 1 → `/swap/v6.0/1/quote`).
+    async fn oneinch_mock() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/swap/v6.0/1/quote"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .insert_header("Content-Type", "application/json")
+                    .set_body_string(r#"{"dstAmount":"999847836538317147","gas":120000}"#),
+            )
+            .mount(&server)
+            .await;
+        server
+    }
+
+    // ---- Q1: success envelope shape (1inch / EVM) -------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_success_envelope_1inch() {
+        let server = oneinch_mock().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "test-key", ""))
+            .with_swap_base(&server.uri());
+
+        let env = handle(&ctx, SwapCmd::Quote(oneinch_quote_args()))
+            .await
+            .expect("swap quote should succeed against the mock 1inch API");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "swap quote");
+        assert!(!env.meta.partial);
+
+        let data = env.data.as_ref().expect("data present on success");
+        assert_eq!(data["provider"], Value::from("1inch"));
+        assert_eq!(data["chain_id"], Value::from("eip155:1"));
+        assert_eq!(data["trade_type"], Value::from("exact-input"));
+        // Input amount echoed (base+decimal consistency, spec §2.4).
+        assert_eq!(
+            data["input_amount"]["amount_base_units"],
+            Value::from("1000000")
+        );
+        // Adapter result is surfaced into the envelope (estimated_out present).
+        assert!(
+            data["estimated_out"]["amount_base_units"]
+                .as_str()
+                .is_some(),
+            "estimated_out must be surfaced from the adapter: {data}"
+        );
+    }
+
+    // ---- Q2: meta.providers[] status row ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_success_provider_status_ok() {
+        let server = oneinch_mock().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "test-key", ""))
+            .with_swap_base(&server.uri());
+
+        let env = handle(&ctx, SwapCmd::Quote(oneinch_quote_args()))
+            .await
+            .expect("swap quote success");
+
+        assert_eq!(
+            env.meta.providers.len(),
+            1,
+            "exactly one provider status row"
+        );
+        assert_eq!(env.meta.providers[0].name, "1inch");
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // ---- Q3: cache transitions --------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_cache_write_then_hit() {
+        let server = oneinch_mock().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), true, "test-key", ""))
+            .with_swap_base(&server.uri());
+
+        // First call: miss -> provider fetch -> cache write.
+        let first = handle(&ctx, SwapCmd::Quote(oneinch_quote_args()))
+            .await
+            .expect("first swap quote");
+        assert_eq!(
+            first.meta.cache.status, "write",
+            "first cache-enabled fetch should write the cache"
+        );
+        assert!(!first.meta.cache.stale);
+
+        // Second identical call: fresh hit -> no provider call.
+        let second = handle(&ctx, SwapCmd::Quote(oneinch_quote_args()))
+            .await
+            .expect("second swap quote");
+        assert_eq!(
+            second.meta.cache.status, "hit",
+            "second identical fetch should hit the cache"
+        );
+        assert!(!second.meta.cache.stale);
+        assert!(
+            second.meta.providers.is_empty(),
+            "a fresh hit must short-circuit the provider"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_cache_disabled_status_miss() {
+        let server = oneinch_mock().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "test-key", ""))
+            .with_swap_base(&server.uri());
+
+        let env = handle(&ctx, SwapCmd::Quote(oneinch_quote_args()))
+            .await
+            .expect("swap quote");
+        assert_eq!(
+            env.meta.cache.status, "miss",
+            "cache-disabled fetch keeps the initial miss status"
+        );
+    }
+
+    // ---- Q4: provider error -> auth_error status + exit 10 ----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_missing_1inch_key_is_auth_error() {
+        // No 1inch key: the adapter's key check fails with Code::Auth. The
+        // handler surfaces it as a typed error (the cache-flow records the
+        // provider status as "auth_error", Go statusFromErr(CodeAuth)).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "", ""));
+
+        let err = handle(&ctx, SwapCmd::Quote(oneinch_quote_args()))
+            .await
+            .expect_err("missing 1inch key must fail");
+        assert_eq!(err.code, Code::Auth);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 10);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_missing_1inch_key_full_binary_exit_10() {
+        // Full-binary path: no DEFI_1INCH_API_KEY env -> exit 10 (auth).
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "quote",
+                "--provider",
+                "1inch",
+                "--chain",
+                "1",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "DAI",
+                "--amount",
+                "1000000",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 10,
+            "missing 1inch API key must be an auth error (exit 10)"
+        );
+    }
+
+    // ---- Q5: --provider required (spec §2.5) ------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_missing_provider_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "quote",
+                "--chain",
+                "1",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "DAI",
+                "--amount",
+                "1000000",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 2, "missing --provider must be a usage error (exit 2)");
+    }
+
+    // ---- Q6: unknown provider -> unsupported (exit 13) --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_unknown_provider_is_unsupported_exit_13() {
+        // Asserted via `handle` so the SPECIFIC Go message is checked (the stub
+        // also returns exit 13, so the message guards against a false pass).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "test-key", ""));
+        let mut args = oneinch_quote_args();
+        args.provider = Some("bogus".to_string());
+
+        let err = handle(&ctx, SwapCmd::Quote(args))
+            .await
+            .expect_err("unknown provider must fail");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string().contains("unsupported swap provider"),
+            "expected the Go-semantic 'unsupported swap provider' message, got: {err}"
+        );
+    }
+
+    // ---- Q7: --type enum + exact-output capability gate -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_invalid_type_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "quote",
+                "--provider",
+                "1inch",
+                "--chain",
+                "1",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "DAI",
+                "--amount",
+                "1000000",
+                "--type",
+                "limit-order",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 2, "invalid --type must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_exact_output_on_1inch_is_unsupported_exit_13() {
+        // Asserted via `handle` so the SPECIFIC capability-gate message is
+        // checked (the stub also returns exit 13; the message guards against a
+        // false pass).
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "test-key", ""));
+        let mut args = oneinch_quote_args();
+        args.r#type = "exact-output".to_string();
+        args.amount = None;
+        args.amount_out = Some("1000000000000000000".to_string());
+
+        let err = handle(&ctx, SwapCmd::Quote(args))
+            .await
+            .expect_err("exact-output on 1inch must fail");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string()
+                .contains("exact-output swap quotes currently support only"),
+            "expected the Go-semantic exact-output capability message, got: {err}"
+        );
+    }
+
+    // ---- Q8: uniswap key-gating + identity --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_uniswap_requires_from_address_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "quote",
+                "--provider",
+                "uniswap",
+                "--chain",
+                "1",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "DAI",
+                "--amount",
+                "1000000",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "uniswap without --from-address must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_uniswap_missing_key_is_auth_exit_10() {
+        // With a valid --from-address but NO DEFI_UNISWAP_API_KEY, the request
+        // passes the identity guard and reaches the adapter key check -> auth.
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "quote",
+                "--provider",
+                "uniswap",
+                "--chain",
+                "1",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "DAI",
+                "--amount",
+                "1000000",
+                "--from-address",
+                DEAD,
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 10,
+            "uniswap without an API key must be an auth error (exit 10)"
+        );
+    }
+
+    // ---- Q9: --input-json precedence (explicit flag overrides JSON) -------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_explicit_provider_overrides_input_json() {
+        // The JSON sets provider="bogus" (which would be exit 13), but the
+        // explicit --provider 1inch flag must win (Go applyStructuredFlagInput
+        // only fills flags the user did not set). With a 1inch key + the mock
+        // base, the request reaches the mock and succeeds (exit 0), proving the
+        // explicit flag overrode the JSON value.
+        let server = oneinch_mock().await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false, "test-key", ""))
+            .with_swap_base(&server.uri());
+
+        let mut args = oneinch_quote_args();
+        // provider explicitly set to 1inch via the flag.
+        args.provider = Some("1inch".to_string());
+        args.input = crate::execflags::InputFlags {
+            input_json: Some(
+                r#"{"provider":"bogus","chain":"1","from_asset":"USDC","to_asset":"DAI","amount":"1000000"}"#
+                    .to_string(),
+            ),
+            input_file: None,
+        };
+
+        let env = handle(&ctx, SwapCmd::Quote(args))
+            .await
+            .expect("explicit --provider 1inch must override the JSON provider");
+        assert!(env.success);
+        assert_eq!(
+            env.data.as_ref().expect("data")["provider"],
+            Value::from("1inch")
+        );
+    }
+
+    // ---- Q10: --slippage-pct gate -----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn quote_slippage_pct_on_non_uniswap_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "swap",
+                "quote",
+                "--provider",
+                "1inch",
+                "--chain",
+                "1",
+                "--from-asset",
+                "USDC",
+                "--to-asset",
+                "DAI",
+                "--amount",
+                "1000000",
+                "--slippage-pct",
+                "1.0",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "--slippage-pct on a non-uniswap provider must be a usage error (exit 2)"
         );
     }
 }

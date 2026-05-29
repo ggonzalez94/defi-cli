@@ -67,6 +67,12 @@ pub struct AppCtx {
     /// (`stablecoins_api_url`). See [`AppCtx::defillama_api_base`]. `None` uses
     /// the public endpoint.
     pub defillama_stablecoins_base: Option<String>,
+    /// Test/offline seam: override the HTTP-API swap-quote provider base URL
+    /// (applied via each adapter's `set_base_url`, e.g.
+    /// [`defi_providers::oneinch::Client::set_base_url`]) so app-level wiremock
+    /// tests for `swap quote` reach a mock server. `None` (production) uses the
+    /// public endpoints. Analogous to [`AppCtx::defillama_api_base`].
+    pub swap_quote_base: Option<String>,
 }
 
 impl AppCtx {
@@ -77,7 +83,19 @@ impl AppCtx {
             clock: Utc::now,
             defillama_api_base: None,
             defillama_stablecoins_base: None,
+            swap_quote_base: None,
         }
+    }
+
+    /// Retarget the HTTP-API swap-quote provider clients at a single mock-server
+    /// origin (the offline/wiremock seam used by app-level `swap quote` tests).
+    ///
+    /// The `swap quote` handler (WS2) MUST honor this when constructing its swap
+    /// providers (applying it via each adapter's `set_base_url`), analogous to
+    /// how [`AppCtx::defillama`] honors [`AppCtx::defillama_api_base`].
+    pub fn with_swap_base(mut self, base: &str) -> AppCtx {
+        self.swap_quote_base = Some(base.to_string());
+        self
     }
 
     /// Retarget the DefiLlama base URLs (free `api_base` + stablecoins) at a
@@ -145,6 +163,88 @@ impl AppCtx {
             client.set_stablecoins_api_url(base);
         }
         client
+    }
+
+    /// The set of registered swap quote provider names (canonical/normalized),
+    /// in the Go registration order (`runner.go` `s.swapProviders`).
+    ///
+    /// Mirrors the Go runner's `s.swapProviders` keys (`1inch`, `uniswap`,
+    /// `tempo`, `taikoswap`, `jupiter`, `bungee`, `fibrous`). Used by the
+    /// `swap quote` guard to reject unknown providers with
+    /// [`defi_errors::Code::Unsupported`] before any chain/asset parse.
+    pub fn swap_provider_names(&self) -> &'static [&'static str] {
+        &[
+            "1inch",
+            "uniswap",
+            "tempo",
+            "taikoswap",
+            "jupiter",
+            "bungee",
+            "fibrous",
+        ]
+    }
+
+    /// Construct the swap quote provider adapter for a (normalized) provider
+    /// name, applying the offline/wiremock base-URL seam ([`AppCtx::swap_quote_base`])
+    /// to the HTTP-API providers (1inch/uniswap/jupiter/bungee/fibrous). Returns
+    /// `None` for an unregistered provider name (the caller maps that to a typed
+    /// [`defi_errors::Code::Unsupported`] error).
+    ///
+    /// Mirrors the Go runner's `s.swapProviders[providerName]` lookup; the
+    /// adapters are constructed lazily here (per invocation) the same way the Go
+    /// runner builds them in `withRuntimeState`. Tempo/TaikoSwap are RPC-only and
+    /// carry no HTTP base-URL seam.
+    pub fn swap_provider(&self, name: &str) -> Option<Box<dyn defi_providers::SwapProvider>> {
+        use defi_providers::{bungee, fibrous, jupiter, oneinch, taikoswap, tempo, uniswap};
+
+        let base = self.swap_quote_base.as_deref();
+        match name {
+            "1inch" => {
+                let mut c =
+                    oneinch::Client::new(self.http_client(), &self.settings.oneinch_api_key);
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "uniswap" => {
+                let mut c =
+                    uniswap::Client::new(self.http_client(), &self.settings.uniswap_api_key);
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "jupiter" => {
+                let mut c =
+                    jupiter::Client::new(self.http_client(), &self.settings.jupiter_api_key);
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "bungee" => {
+                let mut c = bungee::Client::new_swap(
+                    self.http_client(),
+                    &self.settings.bungee_api_key,
+                    &self.settings.bungee_affiliate,
+                );
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "fibrous" => {
+                let mut c = fibrous::Client::new(self.http_client());
+                if let Some(b) = base {
+                    c.set_base_url(b);
+                }
+                Some(Box::new(c))
+            }
+            "tempo" => Some(Box::new(tempo::Client::new())),
+            "taikoswap" => Some(Box::new(taikoswap::Client::new())),
+            _ => None,
+        }
     }
 
     /// Open the sqlite cache store for `command_path`, or `None` when the path
