@@ -585,11 +585,11 @@ mod tests {
     /// them would do real provider/cache I/O, or — for the lend reads,
     /// `swap quote`, and `bridge quote` — require `--provider`).
     fn is_stub(path: &str) -> bool {
-        // `chains top` / `chains assets` are wired (WS2 unit "chains-extra");
-        // they are now route-verified by parse + command_path above and exercised
-        // end-to-end by their own module tests, so they are no longer stubs.
-        matches!(path, "wallet balance")
-            || path.ends_with(" plan")
+        // `chains top` / `chains assets` (WS2 "chains-extra") and `wallet balance`
+        // (WS2 "wallet-balance") are wired; they are now route-verified by parse +
+        // command_path above and exercised end-to-end by their own module tests,
+        // so they are no longer stubs.
+        path.ends_with(" plan")
             || path.ends_with(" submit")
             || path.ends_with(" status")
             || path.starts_with("actions ")

@@ -35,14 +35,19 @@
 //! top by the runner.
 
 use alloy::primitives::U256;
+use chrono::{DateTime, SecondsFormat, Utc};
 use defi_errors::{Code, Error};
 use defi_evm::address::{self, Address};
 use defi_evm::rpc::{CallRequest, RpcClient};
 use defi_id::{format_decimal, parse_asset, parse_chain, Asset, Chain};
-use defi_model::{AmountInfo, WalletBalance};
+use defi_model::{AmountInfo, ProviderStatus, WalletBalance};
+use serde::Serialize;
 
 /// Native-token decimals on every EVM chain (`wei`'s 18 places).
 const NATIVE_DECIMALS: i32 = 18;
+
+/// The `wallet balance` cache TTL (Go `15*time.Second`).
+const WALLET_BALANCE_TTL_SECS: u64 = 15;
 
 /// The 4-byte selector for `balanceOf(address)` (`0x70a08231`).
 pub const ERC20_BALANCE_OF_SELECTOR: [u8; 4] = [0x70, 0xa0, 0x82, 0x31];
@@ -261,6 +266,117 @@ pub async fn fetch_erc20_decimals(client: &RpcClient, token: &str) -> Result<i32
     Ok(value.to::<i32>())
 }
 
+/// The cache-key payload for `wallet balance` (Go `req := map[string]any{...}`).
+///
+/// Go builds a `map[string]any` and `json.Marshal`s it, which emits keys in
+/// **alphabetical** order: `address`, `asset`, `chain`, `rpc_url`. The fields are
+/// therefore declared alphabetically here so serde's declaration-order
+/// serialization matches Go's sorted-map JSON byte-for-byte. `asset` and
+/// `rpc_url` are conditionally present in Go (`if asset != nil` / `if rpcURLArg
+/// != ""`), reproduced here with `skip_serializing_if`.
+#[derive(Debug, Serialize)]
+struct WalletBalanceCacheReq {
+    /// The query address (lowercased on EVM, Go `cacheAddr`).
+    address: String,
+    /// The ERC-20 asset id (`asset.AssetID`), omitted for native balances.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    asset: Option<String>,
+    /// The resolved chain CAIP-2 id.
+    chain: String,
+    /// The `--rpc-url` override (trimmed), omitted when empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    rpc_url: String,
+}
+
+/// The resolved result of a single `wallet balance` fetch.
+///
+/// Mirrors the Go closure's success tuple: the normalized [`WalletBalance`] and
+/// the single `rpc:<slug>` provider status captured for the request.
+pub struct WalletBalanceOutcome {
+    /// The fetched + normalized balance (with `fetched_at` already stamped).
+    pub balance: WalletBalance,
+    /// The single `rpc:<slug>` provider status row.
+    pub provider: ProviderStatus,
+}
+
+/// A `wallet balance` fetch failure carrying both the wrapped typed error and
+/// the provider statuses to surface in the envelope.
+///
+/// The two Go failure shapes differ in their provider capture: an RPC-resolution
+/// failure carries NO provider status (Go `return nil, nil, nil, false, ...`),
+/// while a connect/read failure carries the `rpc:<slug>` row (Go `statuses :=
+/// []ProviderStatus{...}`). This struct preserves that distinction so the
+/// cache-flow finalizer can pass the exact provider set through.
+pub struct WalletBalanceError {
+    /// The wrapped typed error (`Unsupported` for resolve, `Unavailable` for
+    /// connect/read).
+    pub err: Error,
+    /// The provider statuses to surface (empty for a resolution failure; one
+    /// `rpc:<slug>` row for a connect/read failure).
+    pub providers: Vec<ProviderStatus>,
+}
+
+/// Fetch the wallet balance for a validated request over the resolved RPC
+/// (Go `newWalletCommand` `balance` cache-flow closure).
+///
+/// Behavior (preserved from Go):
+/// * resolves the RPC URL via [`defi_registry::resolve_rpc_url`] (override wins);
+///   a resolution failure wraps to [`defi_errors::Code::Unsupported`] and carries
+///   NO provider status (Go `return nil, nil, nil, false, ...`);
+/// * connects + reads the native or ERC-20 balance; a connect/read failure wraps
+///   to [`defi_errors::Code::Unavailable`] and DOES carry the `rpc:<slug>`
+///   provider status (Go `statuses := []ProviderStatus{...}`);
+/// * on success stamps `fetched_at = now` (RFC 3339, UTC `Z`) and captures the
+///   `rpc:<slug>` provider status with `status="ok"`.
+pub async fn run_balance(
+    req: &WalletBalanceRequest,
+    now: DateTime<Utc>,
+) -> Result<WalletBalanceOutcome, WalletBalanceError> {
+    let rpc_url = match defi_registry::resolve_rpc_url(&req.rpc_url, req.chain.evm_chain_id) {
+        Ok(url) => url,
+        Err(e) => {
+            return Err(WalletBalanceError {
+                err: Error::wrap(Code::Unsupported, "resolve rpc", e),
+                providers: Vec::new(),
+            });
+        }
+    };
+
+    let provider_name = format!("rpc:{}", req.chain.slug);
+    let result = fetch_balance(&rpc_url, &req.chain, &req.address, req.asset.as_ref()).await;
+    let provider = ProviderStatus {
+        name: provider_name,
+        status: crate::protocols::status_from_result(&result),
+        latency_ms: 0,
+    };
+
+    match result {
+        Ok(mut balance) => {
+            balance.fetched_at = now.to_rfc3339_opts(SecondsFormat::Secs, true);
+            Ok(WalletBalanceOutcome { balance, provider })
+        }
+        Err(err) => Err(WalletBalanceError {
+            err: Error::wrap(Code::Unavailable, "fetch balance", err),
+            providers: vec![provider],
+        }),
+    }
+}
+
+/// Connect to `rpc_url` and read the native or ERC-20 balance for `address`
+/// (Go `fetchBalance`). A native balance is read when `asset` is `None`.
+async fn fetch_balance(
+    rpc_url: &str,
+    chain: &Chain,
+    address: &str,
+    asset: Option<&Asset>,
+) -> Result<WalletBalance, Error> {
+    let client = RpcClient::connect(rpc_url)?;
+    match asset {
+        None => fetch_native_balance(&client, chain, address).await,
+        Some(asset) => fetch_erc20_balance(&client, chain, address, asset).await,
+    }
+}
+
 /// The canonical native asset id for a chain (Go `nativeAssetID`):
 /// `"<caip2>/slip44:<ref>"`.
 pub fn native_asset_id(chain: &Chain) -> String {
@@ -327,6 +443,7 @@ pub mod cli {
     use defi_errors::Error;
     use defi_model::Envelope;
 
+    use super::{WalletBalanceCacheReq, WALLET_BALANCE_TTL_SECS};
     use crate::ctx::AppCtx;
 
     /// `wallet` subcommands (Go `newWalletCommand`).
@@ -362,10 +479,82 @@ pub mod cli {
         pub rpc_url: Option<String>,
     }
 
-    /// Handle `wallet <sub>` (WS2 — not yet ported).
-    pub async fn handle(_ctx: &AppCtx, cmd: WalletCmd) -> Result<Envelope, Error> {
+    /// Handle `wallet <sub>`.
+    ///
+    /// `wallet balance` is an on-chain read: the flags are validated up front
+    /// (so usage/unsupported errors surface before any I/O and before the cache
+    /// key is built), then the native / ERC-20 balance read is routed through the
+    /// runner's cache flow (TTL 15s). The async RPC fetch is deferred into the
+    /// cache-flow closure (via [`crate::ctx::block_on_fetch`]) so a fresh cache
+    /// hit short-circuits WITHOUT issuing a network call (spec §2.5).
+    pub async fn handle(ctx: &AppCtx, cmd: WalletCmd) -> Result<Envelope, Error> {
         match cmd {
-            WalletCmd::Balance(_) => Err(AppCtx::unimplemented("wallet balance", "WS2")),
+            WalletCmd::Balance(args) => balance(ctx, args),
+        }
+    }
+
+    /// Run `wallet balance`: native or ERC-20 token balance for an address.
+    fn balance(ctx: &AppCtx, args: BalanceArgs) -> Result<Envelope, Error> {
+        let path = "wallet balance";
+
+        // Pre-flight: validate flags before building the cache key or any I/O.
+        // Usage/unsupported errors surface here (Go RunE pre-flight), NOT inside
+        // the cache-flow closure.
+        let req = super::parse_balance_request(
+            args.chain.as_deref().unwrap_or_default(),
+            args.address.as_deref().unwrap_or_default(),
+            args.asset.as_deref().unwrap_or_default(),
+            args.rpc_url.as_deref().unwrap_or_default(),
+        )?;
+
+        // Cache key payload (Go `map[string]any{"chain","address"[,asset][,rpc_url]}`).
+        // The EVM address is lowercased for the key (Go `cacheAddr`).
+        let cache_req = WalletBalanceCacheReq {
+            address: req.address.to_ascii_lowercase(),
+            asset: req.asset.as_ref().map(|a| a.asset_id.clone()),
+            chain: req.chain.caip2.clone(),
+            rpc_url: req.rpc_url.clone(),
+        };
+        let key = crate::protocols::cache_key(path, &cache_req);
+        let ttl = std::time::Duration::from_secs(WALLET_BALANCE_TTL_SECS);
+        let now = ctx.now();
+
+        ctx.run_cached_command(path, &key, ttl, || {
+            finalize(crate::ctx::block_on_fetch(super::run_balance(&req, now)))
+        })
+    }
+
+    /// Convert a [`super::run_balance`] result into the cache-flow fetch outcome
+    /// tuple expected by `run_cached_command` (mirrors the `lend`/`chains`
+    /// finalize). On success the single `rpc:<slug>` provider status is surfaced;
+    /// on failure the captured provider statuses (empty for a resolve failure;
+    /// one `rpc:<slug>` row for a connect/read failure) ride alongside the typed
+    /// error.
+    #[allow(clippy::type_complexity)]
+    fn finalize(
+        outcome: Result<super::WalletBalanceOutcome, super::WalletBalanceError>,
+    ) -> Result<
+        crate::runner::FetchOutcome,
+        (Vec<defi_model::ProviderStatus>, Vec<String>, bool, Error),
+    > {
+        match outcome {
+            Ok(o) => {
+                let data = serde_json::to_value(&o.balance).map_err(|e| {
+                    (
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                        Error::wrap(defi_errors::Code::Internal, "serialize wallet balance", e),
+                    )
+                })?;
+                Ok(crate::runner::FetchOutcome {
+                    data,
+                    providers: vec![o.provider],
+                    warnings: Vec::new(),
+                    partial: false,
+                })
+            }
+            Err(e) => Err((e.providers, Vec::new(), false, e.err)),
         }
     }
 }
@@ -813,6 +1002,542 @@ mod tests {
         assert!(
             crate::runner::should_open_cache("wallet balance"),
             "wallet balance must open the cache"
+        );
+    }
+}
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — `wallet balance` app-level run handler
+    //! (unit "wallet-balance", WS2; Go: `internal/app/wallet_command.go`
+    //! `newWalletCommand` `balance` RunE + `runCachedCommand`).
+    //!
+    //! These RED tests target the **command-layer RUN handler**
+    //! ([`crate::wallet::cli::handle`]) and the full binary path
+    //! ([`crate::cli::run_with_args`]) — NOT the already-green helpers
+    //! (`parse_balance_request`, `fetch_native_balance`, `fetch_erc20_balance`,
+    //! `native_symbol`/`native_asset_id`), which are unit-tested in the sibling
+    //! `tests` module. They MUST FAIL until `cli::handle` stops returning the WS2
+    //! `unimplemented` stub and instead:
+    //!
+    //! 1. parses + validates the flags (`parse_balance_request`: `--chain`
+    //!    required, `--address` required + valid EVM hex, EVM-only, optional
+    //!    `--asset`),
+    //! 2. resolves the RPC URL (`--rpc-url` override or registry default,
+    //!    `defi_registry::resolve_rpc_url`),
+    //! 3. routes the on-chain read through `ctx.run_cached_command` (TTL 15s, the
+    //!    `wallet balance` path which opens the cache), and
+    //! 4. wraps the result into a success [`Envelope`] (or a typed error envelope)
+    //!    that matches the Go machine contract.
+    //!
+    //! The `--rpc-url` flag is the test seam: every success test points it at a
+    //! `wiremock` JSON-RPC mock server, so no live API is hit and the registry
+    //! default is bypassed. The asserted criteria (machine contract — spec §2.1
+    //! envelope, §2.2 exit codes, §2.5 cache + provider status):
+    //!
+    //! * **W-A1. Native success envelope.** `wallet balance --chain 1 --address
+    //!   <dead> --rpc-url <mock>` over a mocked `eth_getBalance` → a success
+    //!   [`Envelope`]: `version="v1"`, `success=true`, `error=None`,
+    //!   `meta.command="wallet balance"`, `meta.partial=false`. `data` is the
+    //!   single [`WalletBalance`] object (NOT an array): `asset_type="native"`,
+    //!   `symbol="ETH"`, `asset_id="eip155:1/slip44:60"`, `chain_id="eip155:1"`,
+    //!   lowercased `account_address`, `balance.decimals=18`, and base/decimal
+    //!   amounts consistent (`1500000000000000000` ↔ `"1.5"`).
+    //! * **W-A2. Provider status `rpc:<slug>`.** Exactly one `meta.providers[]`
+    //!   row whose `name="rpc:ethereum"` (Go `fmt.Sprintf("rpc:%s", chain.Slug)`)
+    //!   and `status="ok"`. (Go wallet closure provider capture.)
+    //! * **W-A3. `fetched_at` is stamped.** The success payload's `fetched_at` is
+    //!   a non-empty RFC 3339 UTC timestamp (the runner/handler stamps it from the
+    //!   injected clock — Go `result.FetchedAt = now().UTC().Format(RFC3339)`).
+    //! * **W-A4. Cache transition write → hit.** With caching enabled, the first
+    //!   identical call writes (`meta.cache.status="write"`, `stale=false`); a
+    //!   second identical call is a fresh hit (`status="hit"`, `stale=false`) that
+    //!   does NOT call the RPC (proved by an offline second call succeeding /
+    //!   empty providers on the hit). (Spec §2.5 fresh-hit short-circuit.)
+    //! * **W-A5. Cache disabled → `miss`.** With caching disabled, the status stays
+    //!   at the initial `"miss"`. (Spec §2.5.)
+    //! * **W-A6. ERC-20 success envelope.** `--asset <usdc-address>` over mocked
+    //!   `balanceOf` + `decimals()` → `asset_type="erc20"`, the asset's
+    //!   `asset_id`/`symbol`, `balance.decimals=6`, amounts consistent
+    //!   (`1234567` ↔ `"1.234567"`).
+    //! * **W-A7. RPC failure → Unavailable.** When the mock RPC errors the balance
+    //!   read, `cli::handle` returns a typed [`Code::Unavailable`] error (exit 12),
+    //!   and the captured provider status (surfaced on the error envelope by the
+    //!   runner) is `status="unavailable"` for `rpc:ethereum`.
+    //! * **W-E1. Missing `--chain` → exit 2** through `run_with_args` (full binary):
+    //!   a usage error renders the FULL envelope on stderr and exits 2. (Go
+    //!   `TestWalletBalanceMissingChain` / `TestWalletBalanceErrorEnvelope`.)
+    //! * **W-E2. Missing `--address` → exit 2** through `run_with_args`. (Go
+    //!   `TestWalletBalanceMissingAddress`.)
+    //! * **W-E3. Invalid address → exit 2** through `run_with_args`. (Go
+    //!   `TestWalletBalanceInvalidAddress`.)
+    //! * **W-E4. Non-EVM chain → exit 13 (unsupported)** through `run_with_args`,
+    //!   even with a hex-looking address. (Go `TestWalletBalanceUnsupportedSolana`.)
+    //! * **W-E5. Handler routes (not the WS2 stub).** A pre-flight failure routes
+    //!   to the real validation (typed [`Code::Usage`]/[`Code::Unsupported`]), NOT
+    //!   the placeholder `"not yet implemented"` error. (Plan WS0 acceptance: no
+    //!   command returns the stub once ported.)
+    //! * **W-A8. Native success → exit 0** through `run_with_args` with a mock RPC.
+
+    use super::cli::{handle, BalanceArgs, WalletCmd};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::Code;
+    use serde_json::{json, Value};
+    use std::path::Path;
+    use std::time::Duration;
+    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const DEAD: &str = "0x000000000000000000000000000000000000dEaD";
+    const USDC: &str = "0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48";
+
+    // --- fixtures ----------------------------------------------------------
+
+    /// App settings rooted at `tmp`, JSON output, with the cache toggle.
+    fn settings_in(tmp: &Path, cache_enabled: bool) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled,
+            cache_path: tmp.join("cache.sqlite"),
+            cache_lock_path: tmp.join("cache.lock"),
+            action_store_path: tmp.join("actions.sqlite"),
+            action_lock_path: tmp.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `MapEnv` whose HOME points at a temp dir so `Settings::load` resolves
+    /// cache/config paths without touching the real home. Keeps the `TempDir`
+    /// guard alive for the test's duration.
+    fn env_with_home() -> (MapEnv, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    fn balance_args(chain: &str, address: &str, asset: Option<&str>, rpc: &str) -> BalanceArgs {
+        BalanceArgs {
+            chain: Some(chain.to_string()),
+            address: Some(address.to_string()),
+            asset: asset.map(str::to_string),
+            rpc_url: Some(rpc.to_string()),
+        }
+    }
+
+    /// Render a 32-byte big-endian uint256 as a `0x`-prefixed hex string.
+    fn encode_uint256_hex(v: u128) -> String {
+        let mut out = [0u8; 32];
+        out[16..].copy_from_slice(&v.to_be_bytes());
+        let mut s = String::with_capacity(64);
+        for b in out {
+            s.push_str(&format!("{b:02x}"));
+        }
+        format!("0x{s}")
+    }
+
+    /// Register a JSON-RPC `eth_getBalance` responder returning `result_hex`.
+    async fn mock_balance(server: &MockServer, result_hex: &str) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "method": "eth_getBalance" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result_hex,
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// Register an `eth_getBalance` responder that returns a JSON-RPC error.
+    async fn mock_balance_error(server: &MockServer) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "method": "eth_getBalance" })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "error": { "code": -32000, "message": "rpc node down" },
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// Register an `eth_call` responder matching `selector_prefix` returning
+    /// `result_hex`.
+    async fn mock_eth_call(server: &MockServer, selector_prefix: &str, result_hex: &str) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({
+                "method": "eth_call",
+                "params": [ { "data": selector_prefix } ],
+            })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result_hex,
+            })))
+            .mount(server)
+            .await;
+    }
+
+    /// Extract the single `WalletBalance` JSON object from a success envelope's
+    /// `data` (the wallet command emits an OBJECT, not an array).
+    fn balance_obj(env: &defi_model::Envelope) -> &Value {
+        env.data.as_ref().expect("data present")
+    }
+
+    // --- W-A1 / W-A2 / W-A3 / W-A8: native success envelope ----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_native_success_envelope() {
+        let server = MockServer::start().await;
+        // 1.5 ETH in wei = 0x14d1120d7b160000.
+        mock_balance(&server, "0x14d1120d7b160000").await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let env = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("1", DEAD, None, &server.uri())),
+        )
+        .await
+        .expect("wallet balance native should succeed against the mock RPC");
+
+        // W-A1: full success envelope.
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "wallet balance");
+        assert!(!env.meta.partial);
+
+        // data is the single WalletBalance OBJECT (not an array).
+        let bal = balance_obj(&env);
+        assert!(
+            bal.is_object(),
+            "wallet balance data must be an object: {bal}"
+        );
+        assert_eq!(bal["asset_type"], json!("native"));
+        assert_eq!(bal["symbol"], json!("ETH"));
+        assert_eq!(bal["asset_id"], json!("eip155:1/slip44:60"));
+        assert_eq!(bal["chain_id"], json!("eip155:1"));
+        assert_eq!(bal["account_address"], json!(DEAD.to_lowercase()));
+        assert_eq!(bal["balance"]["decimals"], json!(18));
+        assert_eq!(
+            bal["balance"]["amount_base_units"],
+            json!("1500000000000000000")
+        );
+        assert_eq!(bal["balance"]["amount_decimal"], json!("1.5"));
+
+        // W-A2: exactly one provider status row, rpc:<slug>, ok.
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "rpc:ethereum");
+        assert_eq!(env.meta.providers[0].status, "ok");
+
+        // W-A3: fetched_at stamped (non-empty RFC 3339).
+        let fetched_at = bal["fetched_at"].as_str().expect("fetched_at string");
+        assert!(
+            !fetched_at.is_empty(),
+            "fetched_at must be stamped, got empty"
+        );
+        assert!(
+            chrono::DateTime::parse_from_rfc3339(fetched_at).is_ok(),
+            "fetched_at must be RFC 3339, got: {fetched_at}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_native_success_exit_0() {
+        let server = MockServer::start().await;
+        mock_balance(&server, "0x14d1120d7b160000").await;
+        let (env, _home) = env_with_home();
+
+        // W-A8: full binary path exits 0 on a healthy native query.
+        let code = run_with_args(
+            [
+                "defi",
+                "wallet",
+                "balance",
+                "--chain",
+                "1",
+                "--address",
+                DEAD,
+                "--rpc-url",
+                &server.uri(),
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 0, "a healthy native balance query must exit 0");
+    }
+
+    // --- W-A4: cache transition write -> hit -------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_cache_write_then_hit() {
+        let server = MockServer::start().await;
+        mock_balance(&server, "0x14d1120d7b160000").await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), true));
+
+        // First call: miss -> RPC fetch -> cache write.
+        let first = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("1", DEAD, None, &server.uri())),
+        )
+        .await
+        .expect("first wallet balance");
+        assert_eq!(
+            first.meta.cache.status, "write",
+            "first cache-enabled fetch should write the cache"
+        );
+        assert!(!first.meta.cache.stale);
+
+        // Second identical call: fresh hit -> no RPC call -> empty providers.
+        let second = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("1", DEAD, None, &server.uri())),
+        )
+        .await
+        .expect("second wallet balance");
+        assert_eq!(
+            second.meta.cache.status, "hit",
+            "second identical fetch should hit the cache"
+        );
+        assert!(!second.meta.cache.stale);
+        assert!(
+            second.meta.providers.is_empty(),
+            "a fresh hit must not call the RPC provider"
+        );
+    }
+
+    // --- W-A5: cache disabled -> miss --------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_cache_disabled_status_miss() {
+        let server = MockServer::start().await;
+        mock_balance(&server, "0x14d1120d7b160000").await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let env = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("1", DEAD, None, &server.uri())),
+        )
+        .await
+        .expect("wallet balance");
+        assert_eq!(
+            env.meta.cache.status, "miss",
+            "cache-disabled fetch keeps the initial miss status"
+        );
+    }
+
+    // --- W-A6: ERC-20 success envelope -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_erc20_success_envelope() {
+        let server = MockServer::start().await;
+        // balanceOf => 1234567; decimals() => 6.
+        mock_eth_call(&server, "0x70a08231", &encode_uint256_hex(1_234_567)).await;
+        mock_eth_call(&server, "0x313ce567", &encode_uint256_hex(6)).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let env = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("1", DEAD, Some(USDC), &server.uri())),
+        )
+        .await
+        .expect("wallet balance erc20 should succeed against the mock RPC");
+
+        assert!(env.success);
+        assert_eq!(env.meta.command, "wallet balance");
+        let bal = balance_obj(&env);
+        assert_eq!(bal["asset_type"], json!("erc20"));
+        assert_eq!(bal["asset_id"], json!(format!("eip155:1/erc20:{USDC}")));
+        assert_eq!(bal["symbol"], json!("USDC"));
+        assert_eq!(bal["balance"]["decimals"], json!(6));
+        assert_eq!(bal["balance"]["amount_base_units"], json!("1234567"));
+        assert_eq!(bal["balance"]["amount_decimal"], json!("1.234567"));
+        assert_eq!(bal["account_address"], json!(DEAD.to_lowercase()));
+
+        // Provider status row is rpc:<slug>, ok.
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "rpc:ethereum");
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // --- W-A7: RPC failure -> Unavailable (exit 12) ------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_rpc_failure_is_unavailable() {
+        let server = MockServer::start().await;
+        mock_balance_error(&server).await;
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        let err = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("1", DEAD, None, &server.uri())),
+        )
+        .await
+        .expect_err("an RPC failure must surface as a typed error");
+        assert_eq!(
+            err.code,
+            Code::Unavailable,
+            "balance read failure wraps to Unavailable (exit 12)"
+        );
+        // Must NOT be the WS2 placeholder stub error.
+        assert!(
+            !err.to_string()
+                .to_lowercase()
+                .contains("not yet implemented"),
+            "wallet balance must route to the real handler, got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_rpc_failure_exit_12() {
+        let server = MockServer::start().await;
+        mock_balance_error(&server).await;
+        let (env, _home) = env_with_home();
+
+        let code = run_with_args(
+            [
+                "defi",
+                "wallet",
+                "balance",
+                "--chain",
+                "1",
+                "--address",
+                DEAD,
+                "--rpc-url",
+                &server.uri(),
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 12,
+            "an RPC balance failure must exit 12 (unavailable)"
+        );
+    }
+
+    // --- W-E1..W-E4: usage / unsupported error paths via run_with_args -----
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_missing_chain_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "wallet", "balance", "--address", DEAD], &env).await;
+        assert_eq!(code, 2, "missing --chain must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_missing_address_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "wallet", "balance", "--chain", "1"], &env).await;
+        assert_eq!(code, 2, "missing --address must be a usage error (exit 2)");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_invalid_address_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "wallet",
+                "balance",
+                "--chain",
+                "1",
+                "--address",
+                "notanaddress",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "an invalid EVM address must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_non_evm_is_unsupported_exit_13() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "wallet",
+                "balance",
+                "--chain",
+                "solana",
+                "--address",
+                DEAD,
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 13,
+            "a non-EVM chain must be unsupported (exit 13), got {code}"
+        );
+
+        // The exit code alone coincides with the WS2 stub's Unsupported error, so
+        // also assert (at the handler level) that this routes to the REAL EVM-only
+        // gate and not the placeholder — the GREEN handler must reject the chain
+        // via `parse_balance_request`, NOT return "not yet implemented".
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+        let err = handle(
+            &ctx,
+            WalletCmd::Balance(balance_args("solana", DEAD, None, "")),
+        )
+        .await
+        .expect_err("non-EVM chain must be rejected");
+        assert_eq!(err.code, Code::Unsupported);
+        let msg = err.to_string().to_lowercase();
+        assert!(
+            !msg.contains("not yet implemented"),
+            "non-EVM rejection must come from the real EVM-only gate, got: {msg}"
+        );
+        assert!(
+            msg.contains("evm"),
+            "expected the EVM-only message (Go: \"wallet balance currently supports EVM chains only\"), got: {msg}"
+        );
+    }
+
+    // --- W-E5: handler routes (not the WS2 stub) ---------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn wallet_balance_routes_to_real_handler_not_stub() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(settings_in(tmp.path(), false));
+
+        // A pre-flight failure (missing address) must surface the real typed
+        // Usage error from `parse_balance_request`, NOT the WS2 placeholder.
+        let mut args = balance_args("1", "", None, "");
+        args.address = None;
+        let err = handle(&ctx, WalletCmd::Balance(args))
+            .await
+            .expect_err("missing address must be rejected by the real validation");
+        assert_eq!(err.code, Code::Usage);
+        assert!(
+            !err.to_string()
+                .to_lowercase()
+                .contains("not yet implemented"),
+            "wallet balance must route to the real handler, got: {err}"
         );
     }
 }
