@@ -55,6 +55,18 @@ pub struct AppCtx {
     pub settings: Settings,
     /// Injectable clock; defaults to [`Utc::now`].
     pub clock: fn() -> DateTime<Utc>,
+    /// Test/offline seam: override the DefiLlama free-endpoint base URL
+    /// (`api_base`) so app-level wiremock tests can point the wired handlers at a
+    /// mock server. `None` (the production default) uses the public endpoint.
+    ///
+    /// Applied by [`AppCtx::defillama`] via [`defillama::Client::set_api_base`]
+    /// (and `set_bridge_base_url`) when set, so app-level wiremock tests for
+    /// `protocols`/`stablecoins`/`dexes` reach the mock rather than the public API.
+    pub defillama_api_base: Option<String>,
+    /// Test/offline seam: override the DefiLlama stablecoins base URL
+    /// (`stablecoins_api_url`). See [`AppCtx::defillama_api_base`]. `None` uses
+    /// the public endpoint.
+    pub defillama_stablecoins_base: Option<String>,
 }
 
 impl AppCtx {
@@ -63,7 +75,18 @@ impl AppCtx {
         AppCtx {
             settings,
             clock: Utc::now,
+            defillama_api_base: None,
+            defillama_stablecoins_base: None,
         }
+    }
+
+    /// Retarget the DefiLlama base URLs (free `api_base` + stablecoins) at a
+    /// single mock-server origin (the offline/wiremock seam used by app-level
+    /// market-data tests). Both overrides are set to `base`.
+    pub fn with_defillama_base(mut self, base: &str) -> AppCtx {
+        self.defillama_api_base = Some(base.to_string());
+        self.defillama_stablecoins_base = Some(base.to_string());
+        self
     }
 
     /// The current time from the injected clock.
@@ -105,11 +128,23 @@ impl AppCtx {
     /// Construct a DefiLlama market-data client (base URLs default to the public
     /// endpoints; the API key comes from settings — empty when unset).
     ///
-    /// Returned mutable so callers/tests can retarget the base URLs via
-    /// `set_api_base` / `set_bridge_base_url` / `set_stablecoins_api_url`
-    /// (the offline/wiremock seam the adapters already expose).
+    /// When the test/offline base-URL seams ([`AppCtx::defillama_api_base`] /
+    /// [`AppCtx::defillama_stablecoins_base`]) are set (via
+    /// [`AppCtx::with_defillama_base`]), the corresponding `set_api_base` /
+    /// `set_stablecoins_api_url` override is applied so app-level wiremock tests
+    /// point the wired handlers at a mock server. In production both are `None`
+    /// and the public endpoints are used.
     pub fn defillama(&self) -> defillama::Client {
-        defillama::Client::new(self.http_client(), &self.settings.defillama_api_key)
+        let mut client =
+            defillama::Client::new(self.http_client(), &self.settings.defillama_api_key);
+        if let Some(base) = &self.defillama_api_base {
+            client.set_api_base(base);
+            client.set_bridge_base_url(base);
+        }
+        if let Some(base) = &self.defillama_stablecoins_base {
+            client.set_stablecoins_api_url(base);
+        }
+        client
     }
 
     /// Open the sqlite cache store for `command_path`, or `None` when the path

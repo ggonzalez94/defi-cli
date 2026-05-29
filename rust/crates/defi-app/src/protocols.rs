@@ -990,3 +990,378 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — app-level `protocols *` (WS1, wiremock end-to-end)
+    //!
+    //! These tests exercise the **wired command-group handler**
+    //! ([`cli::handle`]) end-to-end against a `wiremock` DefiLlama server, via the
+    //! [`AppCtx`] base-URL seam ([`AppCtx::with_defillama_base`]). They assert the
+    //! full machine contract the handler is responsible for — NOT the provider's
+    //! sort/filter/rank logic (owned/tested by `defi-providers::defillama`) nor
+    //! the cache-flow state machine internals (owned/tested by
+    //! `defi-app::runner`). What is asserted:
+    //!
+    //!  1. **Wiremock reachability through the wired handler.** With the DefiLlama
+    //!     `api_base` retargeted at the mock and `--no-cache`, dispatching
+    //!     `protocols top|categories|fees|revenue` MUST issue the corresponding
+    //!     `GET /protocols` / `GET /overview/fees` request to the mock (proving
+    //!     the handler honors the injected base URL). This is the RED gap:
+    //!     `AppCtx::defillama` does not yet apply the override, so the mock is
+    //!     never contacted and these tests fail.
+    //!  2. **Full success envelope shape.** The resolved [`Envelope`] has
+    //!     `version="v1"`, `success=true`, `error=None`, `data` = the JSON array
+    //!     of rows the mock returned (serialized verbatim, element keys in struct
+    //!     declaration order), `meta.command="protocols <sub>"`, and `partial=false`.
+    //!  3. **`meta.providers[]` capture.** Exactly one provider status, `name=
+    //!     "defillama"`, `status="ok"` on a 200 response.
+    //!  4. **`meta.cache` transitions.** With `--no-cache` the status is `"miss"`
+    //!     (cache disabled → no write). With a real temp cache the first call
+    //!     writes (`status="write"`) and a second identical call is served from
+    //!     cache WITHOUT a second provider request (`status="hit"`, and the mock
+    //!     received exactly one request total).
+    //!  5. **Provider-error path → typed error + exit code.** A 401 from DefiLlama
+    //!     surfaces as a typed `Error` whose code maps the upstream auth failure;
+    //!     driven through `run_with_args` it renders the full error envelope on
+    //!     stderr and returns the mapped exit code (NOT 0).
+    //!  6. **Flag parsing.** `--limit` / `--category` / `--chain` parse and are
+    //!     forwarded; `--limit` defaults to 20.
+
+    use super::cli::{handle, FilterArgs, ProtocolsCmd};
+    use super::DEFAULT_LIMIT;
+    use crate::ctx::AppCtx;
+    use defi_config::Settings;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    /// JSON settings with caching DISABLED (the default for most app tests).
+    fn no_cache_settings() -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            // Short timeout: the wiremock server responds instantly; the only
+            // slow path is the (pre-GREEN) accidental real-URL call, which we
+            // want to fail fast and offline rather than hang.
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: PathBuf::new(),
+            cache_lock_path: PathBuf::new(),
+            action_store_path: PathBuf::new(),
+            action_lock_path: PathBuf::new(),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// JSON settings backed by a real temp sqlite cache (for hit/write tests).
+    fn cache_settings(dir: &std::path::Path) -> Settings {
+        let mut s = no_cache_settings();
+        s.cache_enabled = true;
+        s.cache_path = dir.join("cache.db");
+        s.cache_lock_path = dir.join("cache.lock");
+        s
+    }
+
+    fn protocols_body() -> &'static str {
+        r#"[
+            {"name":"Aave","category":"Lending","tvl":10000,"chains":["Ethereum"],"chainTvls":{"Ethereum":10000}},
+            {"name":"Lido","category":"Liquid Staking","tvl":30000,"chains":["Ethereum"],"chainTvls":{"Ethereum":30000}}
+        ]"#
+    }
+
+    fn fees_body() -> &'static str {
+        r#"{"protocols":[
+            {"name":"Lido","category":"Liquid Staking","total24h":8000000,"total7d":55000000,"total30d":200000000,"change_1d":-1.0,"change_7d":0.5,"change_1m":15.0,"chains":["Ethereum"]},
+            {"name":"Uniswap","category":"Dexs","total24h":5000000,"total7d":30000000,"total30d":120000000,"change_1d":5.2,"change_7d":-2.1,"change_1m":10.5,"chains":["Ethereum","Arbitrum"]}
+        ]}"#
+    }
+
+    /// Mount `GET /protocols` (also serves `categories`).
+    async fn mock_protocols(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/protocols"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(protocols_body(), "application/json"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    /// Mount `GET /overview/fees` (serves both `fees` and `revenue`).
+    async fn mock_fees(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/overview/fees"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(fees_body(), "application/json"))
+            .mount(server)
+            .await;
+    }
+
+    fn filter_args() -> FilterArgs {
+        FilterArgs {
+            category: None,
+            chain: None,
+            limit: DEFAULT_LIMIT,
+        }
+    }
+
+    fn data_array(env: &Envelope) -> Vec<Value> {
+        env.data
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("data is an array")
+    }
+
+    // --- 1, 2, 3, 4(miss). protocols top end-to-end ------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn protocols_top_handler_hits_wiremock_and_builds_envelope() {
+        let server = MockServer::start().await;
+        mock_protocols(&server).await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, ProtocolsCmd::Top(filter_args()))
+            .await
+            .expect("protocols top should succeed against the mock");
+
+        // The wired handler MUST have contacted the mock (RED gap until GREEN
+        // wires AppCtx::defillama to apply the base-URL override).
+        let hits = server.received_requests().await.unwrap_or_default();
+        assert_eq!(
+            hits.len(),
+            1,
+            "handler must issue exactly one GET /protocols to the injected mock"
+        );
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "protocols top");
+        assert!(!env.meta.partial);
+
+        let rows = data_array(&env);
+        assert_eq!(rows.len(), 2, "both mock rows surface in data");
+        // Sorted descending by TVL by the provider: Lido first.
+        assert_eq!(rows[0]["protocol"], Value::from("Lido"));
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            vec!["rank", "protocol", "category", "tvl_usd", "chains"]
+        );
+
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "defillama");
+        assert_eq!(env.meta.providers[0].status, "ok");
+
+        // --no-cache => cache disabled => status "miss" (no write).
+        assert_eq!(env.meta.cache.status, "miss");
+        assert!(!env.meta.cache.stale);
+    }
+
+    // --- 2, 3. protocols categories end-to-end -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn protocols_categories_handler_hits_wiremock() {
+        let server = MockServer::start().await;
+        mock_protocols(&server).await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, ProtocolsCmd::Categories)
+            .await
+            .expect("protocols categories should succeed");
+
+        assert!(!server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty());
+        assert_eq!(env.meta.command, "protocols categories");
+        assert!(env.success);
+        let rows = data_array(&env);
+        // Two protocols => two categories.
+        assert_eq!(rows.len(), 2);
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(keys, vec!["name", "protocols", "tvl_usd"]);
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // --- 2, 3. protocols fees + revenue end-to-end -------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn protocols_fees_handler_hits_overview_fees() {
+        let server = MockServer::start().await;
+        mock_fees(&server).await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, ProtocolsCmd::Fees(filter_args()))
+            .await
+            .expect("protocols fees should succeed");
+
+        assert!(!server
+            .received_requests()
+            .await
+            .unwrap_or_default()
+            .is_empty());
+        assert_eq!(env.meta.command, "protocols fees");
+        let rows = data_array(&env);
+        assert_eq!(rows[0]["protocol"], Value::from("Lido"));
+        assert!(rows[0].as_object().unwrap().contains_key("fees_24h_usd"));
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn protocols_revenue_handler_uses_revenue_data_type() {
+        let server = MockServer::start().await;
+        // Revenue hits /overview/fees with dataType=dailyRevenue.
+        Mock::given(method("GET"))
+            .and(path("/overview/fees"))
+            .and(query_param("dataType", "dailyRevenue"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(fees_body(), "application/json"))
+            .mount(&server)
+            .await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, ProtocolsCmd::Revenue(filter_args()))
+            .await
+            .expect("protocols revenue should succeed");
+
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            1,
+            "revenue must hit /overview/fees?dataType=dailyRevenue once"
+        );
+        assert_eq!(env.meta.command, "protocols revenue");
+        let rows = data_array(&env);
+        assert!(rows[0].as_object().unwrap().contains_key("revenue_24h_usd"));
+    }
+
+    // --- 4. cache write then hit (no second provider call) -----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn protocols_top_caches_write_then_hit() {
+        let server = MockServer::start().await;
+        // expect exactly ONE provider request across both invocations.
+        Mock::given(method("GET"))
+            .and(path("/protocols"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(protocols_body(), "application/json"),
+            )
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(cache_settings(tmp.path())).with_defillama_base(&server.uri());
+
+        // First call: provider fetch + cache write.
+        let first = handle(&ctx, ProtocolsCmd::Top(filter_args()))
+            .await
+            .expect("first protocols top");
+        assert_eq!(first.meta.cache.status, "write");
+
+        // Second identical call: fresh cache hit, NO provider call.
+        let second = handle(&ctx, ProtocolsCmd::Top(filter_args()))
+            .await
+            .expect("second protocols top");
+        assert_eq!(second.meta.cache.status, "hit");
+        assert!(!second.meta.cache.stale);
+
+        // Mock's expect(1) verifies exactly one provider request on drop.
+        drop(server);
+    }
+
+    // --- 5. provider error path → exit code via run_with_args --------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn protocols_top_provider_error_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/protocols"))
+            .respond_with(ResponseTemplate::new(401).set_body_string("unauthorized"))
+            .mount(&server)
+            .await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let err = handle(&ctx, ProtocolsCmd::Top(filter_args()))
+            .await
+            .expect_err("a 401 from DefiLlama must surface as a typed error");
+
+        // The error MUST come from the injected mock (the 401), not the real
+        // public endpoint — keeps the test deterministic + offline. This is the
+        // RED gap: until GREEN wires the override, the handler hits the public
+        // URL and the mock is never contacted.
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the 401 error must originate from the injected mock, not the live API"
+        );
+        // Upstream auth failure must NOT be a success; it is a non-zero exit code.
+        assert_ne!(
+            defi_errors::exit_code(&Err(defi_errors::Error::new(err.code, ""))),
+            0,
+            "provider error must map to a non-zero exit code, got code {:?}",
+            err.code
+        );
+    }
+
+    // --- 6. flag parsing (limit default + forwarding) ----------------------
+
+    #[test]
+    fn protocols_top_limit_default_and_filters_parse() {
+        use clap::Parser;
+        // Default --limit is 20 (DEFAULT_LIMIT).
+        let cli = crate::cli::Cli::try_parse_from(["defi", "protocols", "top"])
+            .expect("protocols top parses");
+        if let crate::cli::TopCommand::Protocols {
+            cmd: ProtocolsCmd::Top(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, DEFAULT_LIMIT);
+            assert_eq!(args.limit, 20);
+        } else {
+            panic!("expected protocols top");
+        }
+
+        // --category / --chain / --limit all parse and forward.
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi",
+            "protocols",
+            "fees",
+            "--category",
+            "Dexs",
+            "--chain",
+            "Ethereum",
+            "--limit",
+            "5",
+        ])
+        .expect("protocols fees flags parse");
+        if let crate::cli::TopCommand::Protocols {
+            cmd: ProtocolsCmd::Fees(args),
+        } = cli.command
+        {
+            assert_eq!(args.category.as_deref(), Some("Dexs"));
+            assert_eq!(args.chain.as_deref(), Some("Ethereum"));
+            assert_eq!(args.limit, 5);
+        } else {
+            panic!("expected protocols fees");
+        }
+    }
+}

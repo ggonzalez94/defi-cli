@@ -761,3 +761,248 @@ mod tests {
         out
     }
 }
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — app-level `dexes volume` (WS1, wiremock end-to-end)
+    //!
+    //! These tests exercise the **wired command-group handler**
+    //! ([`cli::handle`]) end-to-end against a `wiremock` DefiLlama server, via the
+    //! [`AppCtx`] base-URL seam ([`AppCtx::with_defillama_base`]). They assert the
+    //! full machine contract the handler owns — NOT the provider's
+    //! filter/sort/rank logic (owned/tested by `defi-providers::defillama`).
+    //! Asserted:
+    //!
+    //!  1. **Wiremock reachability.** `dexes volume` MUST issue
+    //!     `GET /overview/dexs` to the injected mock. RED gap:
+    //!     `AppCtx::defillama` does not yet apply the override.
+    //!  2. **Full success envelope.** `version="v1"`, `success=true`,
+    //!     `error=None`, `data` = the JSON row array (element keys in declaration
+    //!     order: `rank, protocol, volume_24h_usd, volume_7d_usd, volume_30d_usd,
+    //!     change_1d_pct, change_7d_pct, change_1m_pct, chains`),
+    //!     `meta.command="dexes volume"`, `partial=false`.
+    //!  3. **`meta.providers[]`.** Exactly one `defillama` status, `status="ok"`.
+    //!  4. **`meta.cache`.** First call with a temp cache writes (`"write"`); a
+    //!     second identical call is a fresh `"hit"` with NO second provider call.
+    //!  5. **Provider-error path.** A 503 surfaces as a typed non-zero-exit error.
+    //!  6. **Flag parsing.** `--chain` / `--limit` parse; `--limit` defaults 20.
+
+    use super::cli::{handle, DexesCmd, VolumeArgs};
+    use super::DEFAULT_LIMIT;
+    use crate::ctx::AppCtx;
+    use defi_config::Settings;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn no_cache_settings() -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: PathBuf::new(),
+            cache_lock_path: PathBuf::new(),
+            action_store_path: PathBuf::new(),
+            action_lock_path: PathBuf::new(),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    fn cache_settings(dir: &std::path::Path) -> Settings {
+        let mut s = no_cache_settings();
+        s.cache_enabled = true;
+        s.cache_path = dir.join("cache.db");
+        s.cache_lock_path = dir.join("cache.lock");
+        s
+    }
+
+    fn dexs_body() -> &'static str {
+        r#"{"protocols":[
+            {"name":"PancakeSwap","total24h":8000000,"total7d":55000000,"total30d":200000000,"change_1d":-1.0,"change_7d":0.5,"change_1m":15.0,"chains":["BSC"]},
+            {"name":"Uniswap","total24h":5000000,"total7d":30000000,"total30d":120000000,"change_1d":5.2,"change_7d":-2.1,"change_1m":10.5,"chains":["Ethereum","Arbitrum"]}
+        ]}"#
+    }
+
+    async fn mock_dexs(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/overview/dexs"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(dexs_body(), "application/json"))
+            .mount(server)
+            .await;
+    }
+
+    fn volume_args() -> VolumeArgs {
+        VolumeArgs {
+            chain: None,
+            limit: DEFAULT_LIMIT,
+        }
+    }
+
+    fn data_array(env: &Envelope) -> Vec<Value> {
+        env.data
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("data is an array")
+    }
+
+    // --- 1, 2, 3. dexes volume end-to-end ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dexes_volume_handler_hits_wiremock_and_builds_envelope() {
+        let server = MockServer::start().await;
+        mock_dexs(&server).await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, DexesCmd::Volume(volume_args()))
+            .await
+            .expect("dexes volume should succeed against the mock");
+
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            1,
+            "handler must issue exactly one GET /overview/dexs to the injected mock"
+        );
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "dexes volume");
+        assert!(!env.meta.partial);
+
+        let rows = data_array(&env);
+        assert_eq!(rows.len(), 2);
+        // Sorted descending by 24h volume by the provider: PancakeSwap first.
+        assert_eq!(rows[0]["protocol"], Value::from("PancakeSwap"));
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            vec![
+                "rank",
+                "protocol",
+                "volume_24h_usd",
+                "volume_7d_usd",
+                "volume_30d_usd",
+                "change_1d_pct",
+                "change_7d_pct",
+                "change_1m_pct",
+                "chains",
+            ]
+        );
+
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "defillama");
+        assert_eq!(env.meta.providers[0].status, "ok");
+        assert_eq!(env.meta.cache.status, "miss");
+    }
+
+    // --- 4. cache write then hit -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dexes_volume_caches_write_then_hit() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/overview/dexs"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(dexs_body(), "application/json"))
+            .expect(1)
+            .mount(&server)
+            .await;
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ctx = AppCtx::new(cache_settings(tmp.path())).with_defillama_base(&server.uri());
+
+        let first = handle(&ctx, DexesCmd::Volume(volume_args()))
+            .await
+            .expect("first dexes volume");
+        assert_eq!(first.meta.cache.status, "write");
+
+        let second = handle(&ctx, DexesCmd::Volume(volume_args()))
+            .await
+            .expect("second dexes volume");
+        assert_eq!(second.meta.cache.status, "hit");
+        assert!(!second.meta.cache.stale);
+
+        drop(server);
+    }
+
+    // --- 5. provider-error path --------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn dexes_volume_provider_error_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/overview/dexs"))
+            .respond_with(ResponseTemplate::new(503).set_body_string("unavailable"))
+            .mount(&server)
+            .await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let err = handle(&ctx, DexesCmd::Volume(volume_args()))
+            .await
+            .expect_err("a 503 from DefiLlama must surface as a typed error");
+
+        // The error MUST come from the injected mock (deterministic + offline).
+        // RED gap: until GREEN wires the override, the mock is never contacted.
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the 503 error must originate from the injected mock, not the live API"
+        );
+        assert_ne!(
+            defi_errors::exit_code(&Err(defi_errors::Error::new(err.code, ""))),
+            0,
+            "provider error must map to a non-zero exit code, got code {:?}",
+            err.code
+        );
+    }
+
+    // --- 6. flag parsing ----------------------------------------------------
+
+    #[test]
+    fn dexes_volume_flags_parse_with_defaults() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from(["defi", "dexes", "volume"])
+            .expect("dexes volume parses");
+        if let crate::cli::TopCommand::Dexes {
+            cmd: DexesCmd::Volume(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 20);
+            assert!(args.chain.is_none());
+        } else {
+            panic!("expected dexes volume");
+        }
+
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi", "dexes", "volume", "--chain", "Ethereum", "--limit", "7",
+        ])
+        .expect("dexes volume flags parse");
+        if let crate::cli::TopCommand::Dexes {
+            cmd: DexesCmd::Volume(args),
+        } = cli.command
+        {
+            assert_eq!(args.chain.as_deref(), Some("Ethereum"));
+            assert_eq!(args.limit, 7);
+        } else {
+            panic!("expected dexes volume");
+        }
+    }
+}

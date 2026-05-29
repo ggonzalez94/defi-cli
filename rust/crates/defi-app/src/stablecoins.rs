@@ -928,3 +928,287 @@ mod tests {
         out
     }
 }
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — app-level `stablecoins *` (WS1, wiremock end-to-end)
+    //!
+    //! These tests exercise the **wired command-group handler**
+    //! ([`cli::handle`]) end-to-end against a `wiremock` DefiLlama stablecoins
+    //! server, via the [`AppCtx`] base-URL seam ([`AppCtx::with_defillama_base`],
+    //! which retargets the stablecoins endpoint). They assert the full machine
+    //! contract the handler owns — NOT the provider peg-filter/sort/rank logic
+    //! (owned/tested by `defi-providers::defillama`). Asserted:
+    //!
+    //!  1. **Wiremock reachability.** `stablecoins top` MUST issue
+    //!     `GET /stablecoins?includePrices=true` and `stablecoins chains` MUST
+    //!     issue `GET /stablecoinchains` to the injected mock. This is the RED
+    //!     gap: `AppCtx::defillama` does not yet apply the override.
+    //!  2. **Full success envelope.** `version="v1"`, `success=true`,
+    //!     `error=None`, `data` = the JSON row array (element keys in declaration
+    //!     order), `meta.command="stablecoins <sub>"`, `partial=false`.
+    //!  3. **`meta.providers[]`.** Exactly one `defillama` status, `status="ok"`.
+    //!  4. **`meta.cache`.** `--no-cache` => `status="miss"`.
+    //!  5. **Provider-error path.** A 500 from DefiLlama surfaces as a typed
+    //!     non-zero-exit error.
+    //!  6. **Flag parsing.** `--peg-type` / `--limit` parse; `--limit` defaults 20.
+
+    use super::cli::{handle, ChainsArgs, StablecoinsCmd, TopArgs};
+    use super::DEFAULT_LIMIT;
+    use crate::ctx::AppCtx;
+    use defi_config::Settings;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::PathBuf;
+    use std::time::Duration;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    fn no_cache_settings() -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: PathBuf::new(),
+            cache_lock_path: PathBuf::new(),
+            action_store_path: PathBuf::new(),
+            action_lock_path: PathBuf::new(),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    fn stablecoins_body() -> &'static str {
+        r#"{"peggedAssets":[
+            {"name":"Tether","symbol":"USDT","pegType":"peggedUSD","pegMechanism":"fiat-backed",
+             "circulating":{"peggedUSD":120000000000},"circulatingPrevDay":{"peggedUSD":119500000000},
+             "circulatingPrevWeek":{"peggedUSD":118000000000},"circulatingPrevMonth":{"peggedUSD":115000000000},
+             "chains":["Ethereum","Tron"],"price":1.0001},
+            {"name":"USD Coin","symbol":"USDC","pegType":"peggedUSD","pegMechanism":"fiat-backed",
+             "circulating":{"peggedUSD":55000000000},"circulatingPrevDay":{"peggedUSD":54800000000},
+             "circulatingPrevWeek":{"peggedUSD":54000000000},"circulatingPrevMonth":{"peggedUSD":52000000000},
+             "chains":["Ethereum","Base"],"price":0.9999}
+        ]}"#
+    }
+
+    fn stablecoinchains_body() -> &'static str {
+        r#"[
+            {"gecko_id":"ethereum","totalCirculatingUSD":{"peggedUSD":90000000000},"tokenSymbol":"ETH","name":"Ethereum"},
+            {"gecko_id":"tron","totalCirculatingUSD":{"peggedUSD":60000000000},"tokenSymbol":"TRX","name":"Tron"}
+        ]"#
+    }
+
+    async fn mock_stablecoins(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/stablecoins"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_raw(stablecoins_body(), "application/json"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    async fn mock_stablecoinchains(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/stablecoinchains"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_raw(stablecoinchains_body(), "application/json"),
+            )
+            .mount(server)
+            .await;
+    }
+
+    fn top_args() -> TopArgs {
+        TopArgs {
+            limit: DEFAULT_LIMIT,
+            peg_type: None,
+        }
+    }
+
+    fn chains_args() -> ChainsArgs {
+        ChainsArgs {
+            limit: DEFAULT_LIMIT,
+        }
+    }
+
+    fn data_array(env: &Envelope) -> Vec<Value> {
+        env.data
+            .as_ref()
+            .and_then(Value::as_array)
+            .cloned()
+            .expect("data is an array")
+    }
+
+    // --- 1, 2, 3, 4. stablecoins top end-to-end ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stablecoins_top_handler_hits_wiremock_and_builds_envelope() {
+        let server = MockServer::start().await;
+        mock_stablecoins(&server).await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, StablecoinsCmd::Top(top_args()))
+            .await
+            .expect("stablecoins top should succeed against the mock");
+
+        let hits = server.received_requests().await.unwrap_or_default();
+        assert_eq!(
+            hits.len(),
+            1,
+            "handler must issue exactly one GET /stablecoins to the injected mock"
+        );
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "stablecoins top");
+        assert!(!env.meta.partial);
+
+        let rows = data_array(&env);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["symbol"], Value::from("USDT"));
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            vec![
+                "rank",
+                "name",
+                "symbol",
+                "peg_type",
+                "peg_mechanism",
+                "circulating_usd",
+                "price",
+                "chains",
+                "day_change_usd",
+                "week_change_usd",
+                "month_change_usd",
+            ]
+        );
+
+        assert_eq!(env.meta.providers.len(), 1);
+        assert_eq!(env.meta.providers[0].name, "defillama");
+        assert_eq!(env.meta.providers[0].status, "ok");
+        assert_eq!(env.meta.cache.status, "miss");
+    }
+
+    // --- 1, 2, 3. stablecoins chains end-to-end ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stablecoins_chains_handler_hits_stablecoinchains() {
+        let server = MockServer::start().await;
+        mock_stablecoinchains(&server).await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let env = handle(&ctx, StablecoinsCmd::Chains(chains_args()))
+            .await
+            .expect("stablecoins chains should succeed");
+
+        assert_eq!(
+            server.received_requests().await.unwrap_or_default().len(),
+            1,
+            "handler must issue exactly one GET /stablecoinchains"
+        );
+        assert_eq!(env.meta.command, "stablecoins chains");
+        assert!(env.success);
+
+        let rows = data_array(&env);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0]["chain"], Value::from("Ethereum"));
+        let keys: Vec<&String> = rows[0].as_object().unwrap().keys().collect();
+        assert_eq!(
+            keys,
+            vec![
+                "rank",
+                "chain",
+                "chain_id",
+                "circulating_usd",
+                "dominant_peg_type",
+            ]
+        );
+        assert_eq!(env.meta.providers[0].status, "ok");
+    }
+
+    // --- 5. provider-error path --------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn stablecoins_top_provider_error_propagates() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/stablecoins"))
+            .respond_with(ResponseTemplate::new(500).set_body_string("boom"))
+            .mount(&server)
+            .await;
+
+        let ctx = AppCtx::new(no_cache_settings()).with_defillama_base(&server.uri());
+        let err = handle(&ctx, StablecoinsCmd::Top(top_args()))
+            .await
+            .expect_err("a 500 from DefiLlama must surface as a typed error");
+
+        // The error MUST come from the injected mock (deterministic + offline).
+        // RED gap: until GREEN wires the override, the mock is never contacted.
+        assert!(
+            !server
+                .received_requests()
+                .await
+                .unwrap_or_default()
+                .is_empty(),
+            "the 500 error must originate from the injected mock, not the live API"
+        );
+        assert_ne!(
+            defi_errors::exit_code(&Err(defi_errors::Error::new(err.code, ""))),
+            0,
+            "provider error must map to a non-zero exit code, got code {:?}",
+            err.code
+        );
+    }
+
+    // --- 6. flag parsing ----------------------------------------------------
+
+    #[test]
+    fn stablecoins_flags_parse_with_defaults() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from(["defi", "stablecoins", "top"])
+            .expect("stablecoins top parses");
+        if let crate::cli::TopCommand::Stablecoins {
+            cmd: StablecoinsCmd::Top(args),
+        } = cli.command
+        {
+            assert_eq!(args.limit, 20);
+            assert!(args.peg_type.is_none());
+        } else {
+            panic!("expected stablecoins top");
+        }
+
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi",
+            "stablecoins",
+            "top",
+            "--peg-type",
+            "peggedEUR",
+            "--limit",
+            "3",
+        ])
+        .expect("stablecoins top flags parse");
+        if let crate::cli::TopCommand::Stablecoins {
+            cmd: StablecoinsCmd::Top(args),
+        } = cli.command
+        {
+            assert_eq!(args.peg_type.as_deref(), Some("peggedEUR"));
+            assert_eq!(args.limit, 3);
+        } else {
+            panic!("expected stablecoins top");
+        }
+    }
+}

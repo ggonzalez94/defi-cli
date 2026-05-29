@@ -867,4 +867,168 @@ mod tests {
             "expected all-chains-failed message, got: {err}"
         );
     }
+
+    // =====================================================================
+    // App-level `chains gas` (WS1, wiremock RPC end-to-end through handle /
+    // run_with_args). These exercise the wired handler's full envelope + exit
+    // codes via the existing `--rpc-url` seam (no DefiLlama base-URL override
+    // needed). Additional success criteria over the unit cases above:
+    //
+    //  A1. **Single-chain handler envelope.** `chains gas --chain 1 --rpc-url
+    //      <mock>` resolves a success [`Envelope`]: `version="v1"`,
+    //      `success=true`, `error=None`, `data` = a ONE-element array of
+    //      `GasPrice`, `meta.command="chains gas"`, `meta.cache.status="bypass"`
+    //      (metadata route), `meta.providers` EMPTY (the Go gas command passes
+    //      `nil` providers), `partial=false`. (Go gas command success path.)
+    //  A2. **Multi-chain array + input order.** Two chains with two mock RPCs
+    //      (no `--rpc-url`, registry defaults) → a two-element array in input
+    //      order. (Driven via `cli::handle` with explicit targets is the unit
+    //      path; here we assert the array-always contract end-to-end with one
+    //      mock + a single chain, and the multi-chain `--rpc-url` rejection.)
+    //  A3. **`--rpc-url` rejected with multiple chains → exit 2 (usage)**,
+    //      through the full `run_with_args` path: a usage error renders the FULL
+    //      envelope on stderr and returns exit code 2. (Go
+    //      `TestChainsGasMultipleChainsRejectsRPCURL`.)
+    //  A4. **Missing `--chain` → exit 2 (usage)** through `run_with_args`.
+    //  A5. **Non-EVM chain → exit 13 (unsupported)** through `run_with_args`.
+    //  A6. **Single-chain success → exit 0** through `run_with_args` with a mock
+    //      RPC.
+    // =====================================================================
+
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use defi_config::MapEnv;
+
+    /// App settings: JSON, cache bypassed (gas always bypasses anyway).
+    fn app_settings() -> Settings {
+        let mut s = results_only_settings();
+        s.results_only = false;
+        s.timeout = Duration::from_secs(5);
+        s
+    }
+
+    /// A `MapEnv` whose HOME points at a temp dir so `Settings::load` can resolve
+    /// cache/config paths without touching the real home directory. Returns the
+    /// `TempDir` guard so the caller keeps it alive for the test's duration.
+    fn env_with_home() -> (MapEnv, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    fn gas_args(chain: &str, rpc_url: Option<&str>) -> super::cli::GasArgs {
+        super::cli::GasArgs {
+            chain: Some(chain.to_string()),
+            rpc_url: rpc_url.map(str::to_string),
+        }
+    }
+
+    // --- A1. single-chain handler envelope --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_gas_handler_single_chain_full_envelope() {
+        let server = gas_server("0x10", Some("0x3B9ACA00"), "0xB2D05E00", "0x77359400", true).await;
+        let ctx = AppCtx::new(app_settings());
+
+        let env = super::cli::handle(
+            &ctx,
+            super::cli::ChainsCmd::Gas(gas_args("1", Some(&server.uri()))),
+        )
+        .await
+        .expect("chains gas single chain should succeed");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert_eq!(env.meta.command, "chains gas");
+        assert!(!env.meta.partial);
+
+        // Metadata route: cache bypassed, no provider statuses.
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert!(
+            env.meta.providers.is_empty(),
+            "chains gas passes nil providers (Go parity), got: {:?}",
+            env.meta.providers
+        );
+
+        // Array-always: a single chain still yields a one-element array.
+        let rows = env
+            .data
+            .as_ref()
+            .and_then(Value::as_array)
+            .expect("data is an array");
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["chain_id"], json!("eip155:1"));
+        assert_eq!(rows[0]["eip1559"], json!(true));
+        assert_eq!(rows[0]["gas_price_gwei"], json!("3.000000"));
+    }
+
+    // --- A3. multi-chain + --rpc-url rejected (usage) via run_with_args ----
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_gas_multi_chain_with_rpc_url_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "chains",
+                "gas",
+                "--chain",
+                "1,10",
+                "--rpc-url",
+                "https://example.test",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "multi-chain + --rpc-url must be a usage error (exit 2)"
+        );
+    }
+
+    // --- A4. missing --chain (usage) via run_with_args --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_gas_missing_chain_is_usage_exit_2() {
+        let (env, _home) = env_with_home();
+        // --chain is optional at the parser; the handler rejects an empty chain
+        // with CodeUsage (Go parity). Either way → exit 2.
+        let code = run_with_args(["defi", "chains", "gas"], &env).await;
+        assert_eq!(code, 2, "missing --chain must be a usage error (exit 2)");
+    }
+
+    // --- A5. non-EVM chain (unsupported) via run_with_args ----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_gas_non_evm_is_unsupported_exit_13() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(["defi", "chains", "gas", "--chain", "solana"], &env).await;
+        assert_eq!(
+            code, 13,
+            "a non-EVM chain must be unsupported (exit 13), got {code}"
+        );
+    }
+
+    // --- A6. single-chain success → exit 0 via run_with_args --------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn chains_gas_single_chain_success_exit_0() {
+        let server = gas_server("0x10", Some("0x3B9ACA00"), "0xB2D05E00", "0x77359400", true).await;
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "chains",
+                "gas",
+                "--chain",
+                "1",
+                "--rpc-url",
+                &server.uri(),
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(code, 0, "a healthy single-chain gas query must exit 0");
+    }
 }
