@@ -853,3 +853,1179 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod app_tests {
+    //! # Success criteria — `rewards {claim,compound} plan` app-level handlers
+    //! (WS3, exec-plan)
+    //!
+    //! Go oracle: `internal/app/rewards_command.go` — the `planCmd.RunE` closures
+    //! inside `newRewardsClaimCommand` / `newRewardsCompoundCommand`. These tests
+    //! drive [`cli::handle`] (the real dispatch entry point the binary calls)
+    //! end-to-end for `rewards claim plan` and `rewards compound plan` ONLY,
+    //! asserting the full machine contract the Go runner emits via
+    //! `emitSuccess(...)` / `renderError(...)`.
+    //!
+    //! Unlike `transfer`/`approvals` (whose internal planners build calldata with
+    //! no network), the Aave rewards planner reads on-chain (the incentives
+    //! controller via the pool-address-provider, the Aave pool via `getPool()`,
+    //! and an ERC-20 `allowance` for the compound supply approval). The tests stay
+    //! offline + deterministic by exercising BOTH the no-network short-circuits
+    //! (`--controller-address` / `--pool-address` provided) AND the on-chain
+    //! resolution path through a `wiremock` JSON-RPC mock injected via the
+    //! already-present `--rpc-url` seam. Persistence uses a real
+    //! [`defi_execution::store::Store`] over a `tempfile` directory. Identity is
+    //! exercised through the OFFLINE `--from-address` (legacy_local) path so no OWS
+    //! vault / network is touched; the `--wallet` happy path (OWS resolve) is WS4b
+    //! e2e territory and is asserted here only via its offline guard rejections.
+    //!
+    //! Rewards is the only execution group that routes EXCLUSIVELY to
+    //! `provider=aave` (no `native`, no Morpho/Moonwell), so the provider-status
+    //! row + the `provider != aave` unsupported gate are asserted at the handler
+    //! boundary (the routing internals live in `defi-execution::builder` B6). The
+    //! claim-vs-compound divergences (claim defaults the amount to `"max"`,
+    //! compound rejects an empty amount AND the `"max"` sentinel; compound is a
+    //! 3-step `[claim, approval, supply]` plan) are asserted here as the unique
+    //! rewards-plan behaviors.
+    //!
+    //! Criteria (each a failing test until `cli::handle` routes `*Plan` to a real
+    //! handler — the stub currently returns the `AppCtx::unimplemented` error):
+    //!
+    //! 1. **Claim plan success envelope (legacy `--from-address`).** A valid
+    //!    `rewards claim plan --provider aave --chain 1 --assets 0x11.. --reward-token
+    //!    0x33.. --amount 1000000 --controller-address 0x44.. --from-address 0x..aa`
+    //!    returns an `Ok(Envelope)` (exit 0) with: `version == "v1"`, `success ==
+    //!    true`, `error == None`, `meta.partial == false`, `meta.command ==
+    //!    "rewards claim plan"`, `meta.cache == {status:"bypass", age_ms:0,
+    //!    stale:false}` (execution paths bypass the cache, spec §2.5), and
+    //!    `meta.providers == [{name:"aave", status:"ok"}]` (Go
+    //!    `statusFromErr(nil) == "ok"`; the provider status is keyed on the
+    //!    normalized lending provider, NOT `native`).
+    //!
+    //! 2. **Claim planned action `data` shape.** `env.data` is the serialized
+    //!    [`Action`]: `action_id` matches `^act_[0-9a-f]{32}$`; `intent_type ==
+    //!    "claim_rewards"`; `provider == "aave"`; `status == "planned"`; `chain_id
+    //!    == "eip155:1"`; `from_address` == the EIP-55 checksum of the sender;
+    //!    `to_address` == the recipient (defaults to the sender when `--recipient`
+    //!    is empty); `input_amount == "1000000"`; exactly ONE step with `type ==
+    //!    "claim"`, `value == "0"`, `target` == the controller address, and
+    //!    `chain_id == "eip155:1"`; `metadata.protocol == "aave"`,
+    //!    `metadata.controller` == the controller, `metadata.reward_token` == the
+    //!    reward token, and `metadata.assets` == the normalized asset list.
+    //!
+    //! 3. **Claim step calldata reuses the Aave rewards ABI golden.** With assets
+    //!    `[0x11..]`, amount `1000000`, recipient (default sender), and reward
+    //!    `0x33..`, the step `data` equals the alloy `AAVE_REWARDS_ABI`
+    //!    `claimRewards(assets, amount, to, reward)` encoding (computed in-test from
+    //!    `defi_registry::AAVE_REWARDS_ABI`, the same source the planner uses). This
+    //!    proves the handler routes through `build_aave_rewards_claim_action` (no
+    //!    re-encoding).
+    //!
+    //! 4. **Claim legacy-identity warning + backend.** The `--from-address` path
+    //!    stamps `execution_backend == "legacy_local"` on the action AND surfaces
+    //!    the Go warning `--wallet (OWS) is recommended over --from-address for
+    //!    planning; see docs for details` in `env.warnings`.
+    //!
+    //! 5. **Claim plan persists the action to the Store.** After a successful plan
+    //!    the action is retrievable by its `action_id` from a freshly opened Store
+    //!    over the same path, with matching `intent_type == "claim_rewards"`,
+    //!    `input_amount`, and `provider == "aave"`.
+    //!
+    //! 6. **Claim defaults an empty `--amount` to `"max"` through the handler.**
+    //!    Omitting `--amount` yields a `claim` action whose calldata encodes the
+    //!    `max` sentinel amount (`U256::MAX`) — the "claim everything" default
+    //!    (Go `buildAction`: empty amount → `"max"`). The planner parses `"max"`
+    //!    to `U256::MAX`, so `input_amount` is the decimal `U256::MAX` string.
+    //!
+    //! 7. **Claim auto-resolves the incentives controller via RPC.** Omitting
+    //!    `--controller-address` routes through the pool-address-provider
+    //!    `getAddress(INCENTIVES_CONTROLLER)` on-chain lookup; pointed at a
+    //!    `wiremock` JSON-RPC mock that returns the controller address word, the
+    //!    plan succeeds and the `claim` step targets the resolved controller. This
+    //!    proves the `--rpc-url` seam reaches the planner.
+    //!
+    //! 8. **Claim provider gating.**
+    //!    (a) `--provider morpho` → [`Code::Unsupported`] (exit 13) with `rewards
+    //!        execution currently supports only provider=aave`;
+    //!    (b) a missing/empty `--provider` → [`Code::Usage`] (exit 2) with
+    //!        `--provider is required`.
+    //!    On each, nothing is persisted.
+    //!
+    //! 9. **Claim identity-constraint errors (offline).**
+    //!    (a) BOTH `--wallet` and `--from-address` → [`Code::Usage`] (exit 2);
+    //!    (b) NEITHER → [`Code::Usage`] (exit 2);
+    //!    (c) a malformed `--from-address` → [`Code::Usage`] (exit 2);
+    //!    (d) `--wallet` on a Tempo chain → [`Code::Unsupported`] (exit 13)
+    //!        (`--wallet planning is not supported on Tempo chains yet`).
+    //!    On every error the handler returns the typed `Err(Error)` (the runner
+    //!    renders the full error envelope to stderr, spec §2.1) and persists
+    //!    NOTHING.
+    //!
+    //! 10. **Claim requires at least one asset (through the handler).** An empty /
+    //!     all-blank `--assets` → [`Code::Usage`] (exit 2) with `--assets is
+    //!     required`. Nothing persisted.
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * the `claimRewards` calldata ABI encoding itself — `defi-evm::abi` golden
+    //!     (`encode_claim_rewards_with_address_array_matches_golden`);
+    //!   * the planner's sender/recipient/reward/asset hex validation + amount
+    //!     parsing internals — `defi-execution::planner` RED suite;
+    //!   * the registry routing + the `provider != aave` unsupported message —
+    //!     `defi-execution::builder` B6 (asserted here only at the handler
+    //!     boundary for the contract exit code);
+    //!   * the OWS `--wallet` happy-path resolve + wallet-id persistence — WS4b
+    //!     e2e (here only its offline guard rejections are asserted);
+    //!   * `--input-json`/`--input-file` precedence — structured-input unit;
+    //!   * clap flag defaults + required-flag marking — schema/CLI suites;
+    //!   * `rewards claim submit`/`status` — WS4.
+
+    use super::cli::{handle, ClaimPlanArgs, ClaimVerbCmd, RewardsCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags};
+    use alloy::dyn_abi::JsonAbiExt;
+    use alloy::json_abi::JsonAbi;
+    use alloy::primitives::U256;
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants ------------------------------------------------
+
+    /// Sender EOA (legacy `--from-address` identity); its EIP-55 checksum lands on
+    /// the action.
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    /// An Aave incentives "asset" (aToken/debtToken source).
+    const ASSET_A: &str = "0x1111111111111111111111111111111111111111";
+    /// The reward token claimed from the incentives controller.
+    const REWARD: &str = "0x3333333333333333333333333333333333333333";
+    /// The incentives controller (`--controller-address` override) — short-circuits
+    /// the on-chain `getAddress(INCENTIVES_CONTROLLER)` lookup.
+    const CONTROLLER: &str = "0x4444444444444444444444444444444444444444";
+    /// The Go legacy-identity warning surfaced when planning with `--from-address`.
+    const LEGACY_WARNING: &str =
+        "--wallet (OWS) is recommended over --from-address for planning; see docs for details";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir` and the cache
+    /// disabled (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `rewards claim plan` `ClaimPlanArgs` with the canonical happy-path values;
+    /// mutate per test. `--controller-address` is set so no on-chain controller
+    /// lookup is needed (claim build does no eth_call on this path).
+    fn claim_args(rpc: &str) -> ClaimPlanArgs {
+        ClaimPlanArgs {
+            chain: Some("1".to_string()),
+            assets: vec![ASSET_A.to_string()],
+            reward_token: Some(REWARD.to_string()),
+            amount: Some("1000000".to_string()),
+            recipient: None,
+            controller_address: Some(CONTROLLER.to_string()),
+            pool_address_provider: None,
+            provider: Some("aave".to_string()),
+            rpc_url: Some(rpc.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    async fn run_claim(dir: &Path, args: ClaimPlanArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, RewardsCmd::Claim(ClaimVerbCmd::Plan(args))).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn unsupported_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn action_data(env: &Envelope) -> Value {
+        env.data.clone().expect("plan envelope carries `data`")
+    }
+
+    /// True iff no action is persisted under `dir` (error paths must persist
+    /// nothing). A never-created store counts as empty.
+    fn no_actions_persisted(dir: &Path) -> bool {
+        let store = match ActionStore::open(dir.join("actions.db"), dir.join("actions.lock")) {
+            Ok(store) => store,
+            Err(_) => return true,
+        };
+        store
+            .list("", 1000)
+            .map(|actions| actions.is_empty())
+            .unwrap_or(true)
+    }
+
+    // --- wiremock JSON-RPC: every eth_call returns `result` ----------------
+
+    /// A `wiremock` responder that wraps a fixed hex `result` in a JSON-RPC
+    /// success envelope, echoing the incoming request `id` (mirrors the
+    /// `defi-execution` planner `EchoIdResponder`).
+    struct EchoIdResponder {
+        result: String,
+    }
+
+    impl Respond for EchoIdResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let id = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or_else(|| Value::from(1));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.result,
+            }))
+        }
+    }
+
+    /// A mock JSON-RPC endpoint answering every `eth_call` with the ABI word for
+    /// `addr` (12 zero bytes + 20 address bytes). Used by the controller
+    /// auto-resolution test (no `--controller-address`).
+    async fn address_word_rpc(addr: &str) -> MockServer {
+        let server = MockServer::start().await;
+        let word = format!("0x000000000000000000000000{}", &addr[2..]);
+        Mock::given(method("POST"))
+            .respond_with(EchoIdResponder { result: word })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    // --- in-test alloy/ABI golden (reuses AAVE_REWARDS_ABI) ----------------
+
+    /// The expected `claimRewards(assets, amount, to, reward)` calldata, computed
+    /// from `defi_registry::AAVE_REWARDS_ABI` (the same source the planner uses).
+    fn claim_calldata(assets: &[&str], amount: U256, to: &str, reward: &str) -> String {
+        use alloy::dyn_abi::DynSolValue;
+        let abi: JsonAbi =
+            serde_json::from_str(defi_registry::AAVE_REWARDS_ABI).expect("parse rewards abi");
+        let f = abi
+            .function("claimRewards")
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("claimRewards present");
+        let asset_vals: Vec<DynSolValue> = assets
+            .iter()
+            .map(|a| DynSolValue::Address(a.parse().expect("valid asset address")))
+            .collect();
+        let data = f
+            .abi_encode_input(&[
+                DynSolValue::Array(asset_vals),
+                DynSolValue::Uint(amount, 256),
+                DynSolValue::Address(to.parse().expect("valid to address")),
+                DynSolValue::Address(reward.parse().expect("valid reward address")),
+            ])
+            .expect("encode claimRewards");
+        format!("0x{}", hex::encode(data))
+    }
+
+    // --- 1, 2, 4. claim happy path -----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_emits_success_envelope_and_action_shape() {
+        // No eth_call is made when --controller-address is provided, but connect
+        // must succeed against a parseable URL; a wiremock URI is harmless here.
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_claim(tmp.path(), claim_args(&rpc.uri()))
+            .await
+            .expect("aave rewards claim plan should succeed");
+
+        // Envelope contract (Go `emitSuccess`).
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "rewards claim plan");
+
+        // Execution paths bypass the cache (spec §2.5).
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // One provider status keyed on the normalized lending provider, ok.
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "aave");
+        assert_eq!(env.meta.providers[0].status, "ok");
+
+        // Action `data` shape (Go persisted action).
+        let data = action_data(&env);
+        let action_id = data["action_id"].as_str().expect("action_id string");
+        assert!(
+            action_id.strip_prefix("act_").is_some_and(|rest| rest.len() == 32
+                && rest.bytes().all(|b| b.is_ascii_hexdigit())),
+            "action_id must match act_<32 hex>: got {action_id}"
+        );
+        assert_eq!(data["intent_type"], Value::from("claim_rewards"));
+        assert_eq!(data["provider"], Value::from("aave"));
+        assert_eq!(data["status"], Value::from("planned"));
+        assert_eq!(data["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            data["from_address"].as_str().unwrap().to_lowercase(),
+            SENDER.to_lowercase(),
+            "from_address is the (checksummed) sender"
+        );
+        // recipient defaults to the sender when --recipient is empty.
+        assert_eq!(
+            data["to_address"].as_str().unwrap().to_lowercase(),
+            SENDER.to_lowercase(),
+            "to_address defaults to the sender"
+        );
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+
+        // Exactly one claim step, value 0, target = controller, chain carried.
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 1, "claim is a single-step action");
+        assert_eq!(steps[0]["type"], Value::from("claim"));
+        assert_eq!(steps[0]["value"], Value::from("0"));
+        assert_eq!(steps[0]["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            steps[0]["target"].as_str().unwrap().to_lowercase(),
+            CONTROLLER.to_lowercase(),
+            "claim step targets the incentives controller"
+        );
+
+        // metadata carries the Aave rewards context.
+        let meta = data["metadata"].as_object().expect("metadata object");
+        assert_eq!(meta.get("protocol"), Some(&Value::from("aave")));
+        assert_eq!(
+            meta.get("controller")
+                .map(|v| v.as_str().unwrap().to_lowercase()),
+            Some(CONTROLLER.to_lowercase())
+        );
+        assert_eq!(
+            meta.get("reward_token")
+                .map(|v| v.as_str().unwrap().to_lowercase()),
+            Some(REWARD.to_lowercase())
+        );
+        let assets = meta
+            .get("assets")
+            .and_then(|v| v.as_array())
+            .expect("assets array");
+        assert_eq!(assets.len(), 1);
+        assert_eq!(
+            assets[0].as_str().unwrap().to_lowercase(),
+            ASSET_A.to_lowercase()
+        );
+
+        // Legacy backend stamping + warning (criterion 4).
+        assert_eq!(data["execution_backend"], Value::from("legacy_local"));
+        assert!(
+            env.warnings.iter().any(|w| w == LEGACY_WARNING),
+            "legacy --from-address plan surfaces the OWS-recommended warning; got {:?}",
+            env.warnings
+        );
+    }
+
+    // --- 3. claim step calldata reuses the Aave rewards ABI golden ----------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_step_calldata_matches_aave_rewards_golden() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_claim(tmp.path(), claim_args(&rpc.uri()))
+            .await
+            .expect("aave rewards claim plan should succeed");
+        let data = action_data(&env);
+        let calldata = data["steps"][0]["data"].as_str().expect("step data string");
+        // recipient defaults to the sender; amount 1_000_000; one asset, reward.
+        assert_eq!(
+            calldata.to_lowercase(),
+            claim_calldata(&[ASSET_A], U256::from(1_000_000u64), SENDER, REWARD).to_lowercase(),
+            "claim step calldata must equal the alloy AAVE_REWARDS_ABI claimRewards golden"
+        );
+    }
+
+    // --- 5. claim plan persists the action to the Store --------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_persists_action_to_store() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        let ctx = AppCtx::new(settings.clone());
+        let env = handle(
+            &ctx,
+            RewardsCmd::Claim(ClaimVerbCmd::Plan(claim_args(&rpc.uri()))),
+        )
+        .await
+        .expect("aave rewards claim plan should succeed");
+        let action_id = action_data(&env)["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+
+        let store = ActionStore::open(&settings.action_store_path, &settings.action_lock_path)
+            .expect("reopen action store");
+        let persisted = store
+            .get(&action_id)
+            .expect("planned action retrievable by id");
+        assert_eq!(persisted.intent_type, "claim_rewards");
+        assert_eq!(persisted.input_amount, "1000000");
+        assert_eq!(persisted.provider, "aave");
+    }
+
+    // --- 6. claim defaults an empty --amount to "max" ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_defaults_empty_amount_to_max() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.amount = None; // "claim everything" -> "max" -> U256::MAX.
+        let env = run_claim(tmp.path(), args)
+            .await
+            .expect("empty-amount claim plan should default to max");
+        let data = action_data(&env);
+        // The planner parses "max" to U256::MAX; input_amount is its decimal form.
+        assert_eq!(
+            data["input_amount"],
+            Value::from(U256::MAX.to_string()),
+            "empty --amount defaults to the max sentinel (U256::MAX)"
+        );
+        // The claim step calldata encodes U256::MAX as the amount.
+        let calldata = data["steps"][0]["data"].as_str().expect("step data string");
+        assert_eq!(
+            calldata.to_lowercase(),
+            claim_calldata(&[ASSET_A], U256::MAX, SENDER, REWARD).to_lowercase(),
+            "max-amount claim encodes U256::MAX"
+        );
+    }
+
+    // --- 7. claim auto-resolves the incentives controller via RPC ----------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_auto_resolves_controller_via_rpc() {
+        // No --controller-address: the planner must read the controller on-chain
+        // via the chain-default pool-address-provider. The mock answers the
+        // getAddress(INCENTIVES_CONTROLLER) eth_call with the controller word.
+        let rpc = address_word_rpc(CONTROLLER).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.controller_address = None; // force the on-chain lookup.
+        let env = run_claim(tmp.path(), args)
+            .await
+            .expect("controller auto-resolution should succeed against the mock RPC");
+        let data = action_data(&env);
+        assert_eq!(
+            data["steps"][0]["target"].as_str().unwrap().to_lowercase(),
+            CONTROLLER.to_lowercase(),
+            "claim step targets the RPC-resolved incentives controller"
+        );
+    }
+
+    // --- 8. claim provider gating ------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_non_aave_provider() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.provider = Some("morpho".to_string());
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("rewards plan rejects non-aave providers");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(unsupported_exit(&err), 13);
+        assert!(
+            err.to_string()
+                .contains("rewards execution currently supports only provider=aave"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_missing_provider() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.provider = None;
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("rewards plan requires a provider");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 9. claim identity-constraint errors (offline) ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_both_identity_inputs() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.identity.wallet = Some("alice".to_string());
+        // from_address already set in base.
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("both identity inputs must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_missing_identity_inputs() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.identity.wallet = None;
+        args.identity.from_address = None;
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("missing identity inputs must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_malformed_from_address() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.identity.from_address = Some("0xnot-an-address".to_string());
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("malformed --from-address must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_wallet_on_tempo_chain() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.chain = Some("tempo".to_string()); // eip155:4217 (Tempo mainnet)
+        args.identity.from_address = None;
+        args.identity.wallet = Some("alice".to_string());
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("--wallet on Tempo must be rejected");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string()
+                .contains("--wallet planning is not supported on Tempo chains yet"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 10. claim requires at least one asset (through the handler) -------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_empty_assets() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.assets = Vec::new();
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("empty --assets must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("--assets is required"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn claim_plan_rejects_all_blank_assets() {
+        let rpc = MockServer::start().await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = claim_args(&rpc.uri());
+        args.assets = vec!["   ".to_string(), "".to_string()];
+        let err = run_claim(tmp.path(), args)
+            .await
+            .expect_err("all-blank --assets must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+}
+
+#[cfg(test)]
+mod compound_app_tests {
+    //! # Success criteria — `rewards compound plan` app-level handler (WS3,
+    //! exec-plan)
+    //!
+    //! Go oracle: `internal/app/rewards_command.go` `planCmd.RunE` inside
+    //! `newRewardsCompoundCommand`. These tests drive [`cli::handle`] end-to-end
+    //! for `rewards compound plan` ONLY. Compound is the only THREE-step rewards
+    //! plan: it claims the reward (`claim` step), approves the reward token for the
+    //! Aave pool (`approval` step, only when allowance is insufficient), then
+    //! supplies the claimed reward back into Aave (`lend_call` step). It therefore
+    //! reads on-chain (controller + pool resolution + allowance), all injected via
+    //! the `--rpc-url` `wiremock` seam; `--controller-address` + `--pool-address`
+    //! short-circuit the discovery lookups so only the allowance `eth_call` hits
+    //! the mock. Persistence uses a real [`defi_execution::store::Store`].
+    //!
+    //! Criteria (each failing until `cli::handle` routes `Compound(Plan)` to a real
+    //! handler):
+    //!
+    //! 1. **Compound plan success envelope.** A valid `rewards compound plan
+    //!    --provider aave --chain 1 --assets 0x11.. --reward-token 0x33.. --amount
+    //!    1000000 --controller-address 0x44.. --pool-address 0x..cc --rpc-url
+    //!    <mock> --from-address 0x..aa` returns `Ok(Envelope)` (exit 0) with
+    //!    `version == "v1"`, `success == true`, `error == None`, `meta.partial ==
+    //!    false`, `meta.command == "rewards compound plan"`, `meta.cache ==
+    //!    {status:"bypass", age_ms:0, stale:false}`, and `meta.providers ==
+    //!    [{name:"aave", status:"ok"}]`.
+    //!
+    //! 2. **Compound 3-step action shape (insufficient allowance).** With the
+    //!    allowance mock returning `0` (< amount), `env.data` is the serialized
+    //!    [`Action`] with `intent_type == "compound_rewards"`, `provider ==
+    //!    "aave"`, `status == "planned"`, and EXACTLY the steps `["claim",
+    //!    "approval", "lend_call"]` in order: the `claim` step targets the
+    //!    controller, the `approval` step targets the reward token, the `lend_call`
+    //!    step targets the pool (`value == "0"`, `chain_id == "eip155:1"`).
+    //!    `metadata.compound == true`, `metadata.pool` == the pool, and
+    //!    `metadata.on_behalf_of` == the sender (default).
+    //!
+    //! 3. **Compound skips the approval when allowance is sufficient.** With the
+    //!    allowance mock returning a value `>= amount`, the steps collapse to
+    //!    `["claim", "lend_call"]` (no `approval` step).
+    //!
+    //! 4. **Compound supply step calldata reuses the Aave pool ABI golden.** The
+    //!    `lend_call` step `data` equals the alloy `AAVE_POOL_ABI`
+    //!    `supply(reward, amount, onBehalfOf, referralCode=0)` encoding (computed
+    //!    in-test from `defi_registry::AAVE_POOL_ABI`), proving the handler routes
+    //!    through `build_aave_rewards_compound_action`.
+    //!
+    //! 5. **Compound persists the action to the Store.** Retrievable by
+    //!    `action_id` with `intent_type == "compound_rewards"`, `input_amount`,
+    //!    `provider == "aave"`.
+    //!
+    //! 6. **Compound requires a non-empty `--amount` (NO `"max"` default).** An
+    //!    empty `--amount` → [`Code::Usage`] (exit 2) with `--amount is required`
+    //!    (the request-builder gate, distinct from claim). Nothing persisted.
+    //!
+    //! 7. **Compound rejects the `"max"` sentinel.** An explicit `--amount max` →
+    //!    [`Code::Usage`] (exit 2) (`compound requires an explicit --amount in base
+    //!    units (max is unsupported)` — the planner gate). Nothing persisted.
+    //!
+    //! 8. **Compound rejects a recipient that mismatches the sender.** A
+    //!    `--recipient` that differs from the resolved sender → [`Code::Usage`]
+    //!    (exit 2) (`compound requires --recipient to match --from-address`).
+    //!    Nothing persisted.
+    //!
+    //! 9. **Compound provider gating.** `--provider morpho` → [`Code::Unsupported`]
+    //!    (exit 13); a missing `--provider` → [`Code::Usage`] (exit 2). Nothing
+    //!    persisted.
+    //!
+    //! 10. **Compound legacy-identity warning + backend.** `execution_backend ==
+    //!     "legacy_local"` + the OWS-recommended warning in `env.warnings`.
+    //!
+    //! 11. **Compound requires at least one asset (through the handler).** An empty
+    //!     `--assets` → [`Code::Usage`] (exit 2) with `--assets is required`.
+    //!     Nothing persisted.
+    //!
+    //! SKIPPED (covered elsewhere): the planner's compound assembly + validation
+    //!   internals (`defi-execution::planner` RED suite); the `supply`/`approve`
+    //!   ABI encodings (`defi-evm::abi` goldens); the registry routing
+    //!   (`defi-execution::builder` B6); the OWS `--wallet` happy path (WS4b);
+    //!   `--input-json` precedence; clap flag defaults; `compound submit`/`status`
+    //!   (WS4).
+
+    use super::cli::{handle, CompoundPlanArgs, CompoundVerbCmd, RewardsCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags};
+    use alloy::dyn_abi::{DynSolValue, JsonAbiExt};
+    use alloy::json_abi::JsonAbi;
+    use alloy::primitives::U256;
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
+
+    // --- contract constants ------------------------------------------------
+
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    const OTHER: &str = "0x00000000000000000000000000000000000000bb";
+    const ASSET_A: &str = "0x1111111111111111111111111111111111111111";
+    const REWARD: &str = "0x3333333333333333333333333333333333333333";
+    const CONTROLLER: &str = "0x4444444444444444444444444444444444444444";
+    /// Aave pool (`--pool-address` override) — short-circuits the `getPool()` lookup.
+    const POOL: &str = "0x00000000000000000000000000000000000000cc";
+    const LEGACY_WARNING: &str =
+        "--wallet (OWS) is recommended over --from-address for planning; see docs for details";
+
+    // --- harness -----------------------------------------------------------
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `rewards compound plan` `CompoundPlanArgs` with the canonical happy-path
+    /// values; mutate per test. `--controller-address` + `--pool-address` are set
+    /// so only the allowance `eth_call` hits the mock RPC.
+    fn compound_args(rpc: &str) -> CompoundPlanArgs {
+        CompoundPlanArgs {
+            chain: Some("1".to_string()),
+            assets: vec![ASSET_A.to_string()],
+            reward_token: Some(REWARD.to_string()),
+            amount: Some("1000000".to_string()),
+            recipient: None,
+            on_behalf_of: None,
+            controller_address: Some(CONTROLLER.to_string()),
+            pool_address: Some(POOL.to_string()),
+            pool_address_provider: None,
+            provider: Some("aave".to_string()),
+            rpc_url: Some(rpc.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    async fn run_compound(dir: &Path, args: CompoundPlanArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, RewardsCmd::Compound(CompoundVerbCmd::Plan(args))).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn action_data(env: &Envelope) -> Value {
+        env.data.clone().expect("plan envelope carries `data`")
+    }
+
+    fn no_actions_persisted(dir: &Path) -> bool {
+        let store = match ActionStore::open(dir.join("actions.db"), dir.join("actions.lock")) {
+            Ok(store) => store,
+            Err(_) => return true,
+        };
+        store
+            .list("", 1000)
+            .map(|actions| actions.is_empty())
+            .unwrap_or(true)
+    }
+
+    fn step_types(data: &Value) -> Vec<String> {
+        data["steps"]
+            .as_array()
+            .expect("steps array")
+            .iter()
+            .map(|s| s["type"].as_str().unwrap_or("").to_string())
+            .collect()
+    }
+
+    fn step_of_type<'a>(data: &'a Value, kind: &str) -> &'a Value {
+        data["steps"]
+            .as_array()
+            .expect("steps array")
+            .iter()
+            .find(|s| s["type"].as_str() == Some(kind))
+            .unwrap_or_else(|| panic!("a {kind} step is present"))
+    }
+
+    // --- wiremock JSON-RPC: every eth_call returns a uint word -------------
+
+    struct EchoIdResponder {
+        result: String,
+    }
+
+    impl Respond for EchoIdResponder {
+        fn respond(&self, request: &Request) -> ResponseTemplate {
+            let id = serde_json::from_slice::<Value>(&request.body)
+                .ok()
+                .and_then(|body| body.get("id").cloned())
+                .unwrap_or_else(|| Value::from(1));
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "jsonrpc": "2.0",
+                "id": id,
+                "result": self.result,
+            }))
+        }
+    }
+
+    fn uint_word(v: u128) -> String {
+        format!("0x{}", hex::encode(U256::from(v).to_be_bytes::<32>()))
+    }
+
+    /// A mock JSON-RPC endpoint answering every `eth_call` with a single
+    /// ABI-encoded `uint256` word == `allowance` (the compound supply approval
+    /// allowance check). `--controller-address` + `--pool-address` short-circuit
+    /// the address-returning lookups, so every reaching eth_call is the allowance.
+    async fn allowance_rpc(allowance: u128) -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .respond_with(EchoIdResponder {
+                result: uint_word(allowance),
+            })
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// The expected `supply(asset, amount, onBehalfOf, referralCode=0)` calldata,
+    /// computed from `defi_registry::AAVE_POOL_ABI`.
+    fn supply_calldata(asset: &str, amount: u128, on_behalf_of: &str) -> String {
+        let abi: JsonAbi =
+            serde_json::from_str(defi_registry::AAVE_POOL_ABI).expect("parse pool abi");
+        let f = abi
+            .function("supply")
+            .and_then(|o| o.first())
+            .cloned()
+            .expect("supply present");
+        let data = f
+            .abi_encode_input(&[
+                DynSolValue::Address(asset.parse().expect("valid asset")),
+                DynSolValue::Uint(U256::from(amount), 256),
+                DynSolValue::Address(on_behalf_of.parse().expect("valid on-behalf")),
+                DynSolValue::Uint(U256::ZERO, 16),
+            ])
+            .expect("encode supply");
+        format!("0x{}", hex::encode(data))
+    }
+
+    // --- 1, 2, 10. compound happy path (insufficient allowance) ------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_emits_success_envelope_and_three_step_shape() {
+        let rpc = allowance_rpc(0).await; // insufficient -> approval needed.
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_compound(tmp.path(), compound_args(&rpc.uri()))
+            .await
+            .expect("aave rewards compound plan should succeed against the mock RPC");
+
+        // Envelope contract (Go `emitSuccess`).
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "rewards compound plan");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+        assert_eq!(env.meta.providers.len(), 1, "exactly one provider status");
+        assert_eq!(env.meta.providers[0].name, "aave");
+        assert_eq!(env.meta.providers[0].status, "ok");
+
+        // Action `data` shape.
+        let data = action_data(&env);
+        let action_id = data["action_id"].as_str().expect("action_id string");
+        assert!(
+            action_id.strip_prefix("act_").is_some_and(|rest| rest.len() == 32
+                && rest.bytes().all(|b| b.is_ascii_hexdigit())),
+            "action_id must match act_<32 hex>: got {action_id}"
+        );
+        assert_eq!(data["intent_type"], Value::from("compound_rewards"));
+        assert_eq!(data["provider"], Value::from("aave"));
+        assert_eq!(data["status"], Value::from("planned"));
+        assert_eq!(data["chain_id"], Value::from("eip155:1"));
+        assert_eq!(data["input_amount"], Value::from("1000000"));
+
+        // Insufficient allowance -> [claim, approval, lend_call] in order.
+        assert_eq!(
+            step_types(&data),
+            vec![
+                "claim".to_string(),
+                "approval".to_string(),
+                "lend_call".to_string()
+            ],
+            "compound (insufficient allowance) => claim, approval, supply"
+        );
+        // claim targets the controller.
+        assert_eq!(
+            step_of_type(&data, "claim")["target"]
+                .as_str()
+                .unwrap()
+                .to_lowercase(),
+            CONTROLLER.to_lowercase()
+        );
+        // approval targets the reward token.
+        assert_eq!(
+            step_of_type(&data, "approval")["target"]
+                .as_str()
+                .unwrap()
+                .to_lowercase(),
+            REWARD.to_lowercase()
+        );
+        // supply (lend_call) targets the pool.
+        let supply = step_of_type(&data, "lend_call");
+        assert_eq!(supply["value"], Value::from("0"));
+        assert_eq!(supply["chain_id"], Value::from("eip155:1"));
+        assert_eq!(
+            supply["target"].as_str().unwrap().to_lowercase(),
+            POOL.to_lowercase()
+        );
+
+        // metadata carries the compound + pool + on_behalf_of context.
+        let meta = data["metadata"].as_object().expect("metadata object");
+        assert_eq!(meta.get("compound"), Some(&Value::Bool(true)));
+        assert_eq!(
+            meta.get("pool").map(|v| v.as_str().unwrap().to_lowercase()),
+            Some(POOL.to_lowercase())
+        );
+        assert_eq!(
+            meta.get("on_behalf_of")
+                .map(|v| v.as_str().unwrap().to_lowercase()),
+            Some(SENDER.to_lowercase()),
+            "on_behalf_of defaults to the sender"
+        );
+
+        // Legacy backend stamping + warning (criterion 10).
+        assert_eq!(data["execution_backend"], Value::from("legacy_local"));
+        assert!(
+            env.warnings.iter().any(|w| w == LEGACY_WARNING),
+            "legacy plan surfaces the OWS-recommended warning; got {:?}",
+            env.warnings
+        );
+    }
+
+    // --- 3. compound skips approval when allowance sufficient --------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_skips_approval_when_allowance_sufficient() {
+        let rpc = allowance_rpc(10_000_000).await; // >= requested.
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_compound(tmp.path(), compound_args(&rpc.uri()))
+            .await
+            .expect("aave rewards compound plan should succeed");
+        let data = action_data(&env);
+        assert_eq!(
+            step_types(&data),
+            vec!["claim".to_string(), "lend_call".to_string()],
+            "sufficient allowance => claim then supply (no approval)"
+        );
+    }
+
+    // --- 4. compound supply step calldata reuses the Aave pool ABI golden ---
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_supply_calldata_matches_aave_pool_golden() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let env = run_compound(tmp.path(), compound_args(&rpc.uri()))
+            .await
+            .expect("aave rewards compound plan should succeed");
+        let data = action_data(&env);
+        let supply = step_of_type(&data, "lend_call");
+        // on_behalf_of defaults to the sender; supplies the reward token.
+        assert_eq!(
+            supply["data"].as_str().unwrap().to_lowercase(),
+            supply_calldata(REWARD, 1_000_000, SENDER).to_lowercase(),
+            "compound supply calldata must equal the alloy AAVE_POOL_ABI golden"
+        );
+    }
+
+    // --- 5. compound persists the action to the Store ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_persists_action_to_store() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        let ctx = AppCtx::new(settings.clone());
+        let env = handle(
+            &ctx,
+            RewardsCmd::Compound(CompoundVerbCmd::Plan(compound_args(&rpc.uri()))),
+        )
+        .await
+        .expect("aave rewards compound plan should succeed");
+        let action_id = action_data(&env)["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string();
+
+        let store = ActionStore::open(&settings.action_store_path, &settings.action_lock_path)
+            .expect("reopen action store");
+        let persisted = store
+            .get(&action_id)
+            .expect("planned action retrievable by id");
+        assert_eq!(persisted.intent_type, "compound_rewards");
+        assert_eq!(persisted.input_amount, "1000000");
+        assert_eq!(persisted.provider, "aave");
+    }
+
+    // --- 6. compound requires a non-empty amount (no "max" default) --------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_rejects_empty_amount() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = compound_args(&rpc.uri());
+        args.amount = None;
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("empty compound --amount must be rejected (no max default)");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("--amount is required"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 7. compound rejects the "max" sentinel ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_rejects_max_amount() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = compound_args(&rpc.uri());
+        args.amount = Some("max".to_string());
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("compound rejects the max sentinel");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("max is unsupported"), "got: {err}");
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 8. compound rejects a recipient mismatch --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_rejects_recipient_mismatch() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = compound_args(&rpc.uri());
+        args.recipient = Some(OTHER.to_string()); // differs from the sender.
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("compound requires recipient == sender");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("compound requires --recipient to match --from-address"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 9. compound provider gating ---------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_rejects_non_aave_provider() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = compound_args(&rpc.uri());
+        args.provider = Some("morpho".to_string());
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("compound plan rejects non-aave providers");
+        assert_eq!(err.code, Code::Unsupported);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 13);
+        assert!(
+            err.to_string()
+                .contains("rewards execution currently supports only provider=aave"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_rejects_missing_provider() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = compound_args(&rpc.uri());
+        args.provider = None;
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("compound plan requires a provider");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(no_actions_persisted(tmp.path()));
+    }
+
+    // --- 11. compound requires at least one asset --------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn compound_plan_rejects_empty_assets() {
+        let rpc = allowance_rpc(0).await;
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = compound_args(&rpc.uri());
+        args.assets = Vec::new();
+        let err = run_compound(tmp.path(), args)
+            .await
+            .expect_err("empty --assets must be rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("--assets is required"),
+            "got: {err}"
+        );
+        assert!(no_actions_persisted(tmp.path()));
+    }
+}
