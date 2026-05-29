@@ -223,9 +223,10 @@ fn go_quote(s: &str) -> String {
 /// clap parsing + handler for the `actions` command group.
 pub mod cli {
     use clap::{Args, Subcommand};
-    use defi_errors::Error;
-    use defi_model::Envelope;
+    use defi_errors::{Code, Error};
+    use defi_model::{Envelope, ProviderStatus};
 
+    use super::{parse_action_estimate_options, resolve_action_id};
     use crate::ctx::AppCtx;
 
     /// `actions` subcommands (Go `newActionsCommand`).
@@ -292,10 +293,91 @@ pub mod cli {
         pub max_priority_fee_gwei: Option<String>,
     }
 
-    /// Handle `actions <sub>` (WS4 — not yet ported).
-    pub async fn handle(_ctx: &AppCtx, cmd: ActionsCmd) -> Result<Envelope, Error> {
-        let path = format!("actions {}", cmd.path());
-        Err(AppCtx::unimplemented(&path, "WS4"))
+    /// Handle `actions <sub>`.
+    ///
+    /// The `actions` group is a read-only inspection surface over the persisted
+    /// execution-action [`Store`]; it does no provider routing and bypasses the
+    /// cache (spec §2.5, execution command paths). Each handler builds the
+    /// success [`Envelope`] directly via [`AppCtx::metadata_envelope`] with
+    /// `cache.status == "bypass"` and no provider statuses.
+    ///
+    /// [`Store`]: defi_execution::store::Store
+    pub async fn handle(ctx: &AppCtx, cmd: ActionsCmd) -> Result<Envelope, Error> {
+        match cmd {
+            ActionsCmd::List(args) => handle_list(ctx, args).await,
+            ActionsCmd::Show(args) => handle_show(ctx, args).await,
+            ActionsCmd::Estimate(args) => handle_estimate(ctx, args).await,
+        }
+    }
+
+    /// Handle `actions list` (Go `listCmd.RunE` in `newActionsCommand`).
+    ///
+    /// Flow parity with the Go runner: open the action store, list the persisted
+    /// actions (`--status` filter trimmed, `--limit` cap), and emit the resulting
+    /// array as the envelope `data` (empty → `[]`). A list error is wrapped as a
+    /// [`Code::Internal`] `list actions` error.
+    async fn handle_list(ctx: &AppCtx, args: ListArgs) -> Result<Envelope, Error> {
+        let store = ctx.open_action_store()?;
+        let items = store
+            .list(
+                args.status.as_deref().unwrap_or_default().trim(),
+                args.limit,
+            )
+            .map_err(|e| Error::wrap(Code::Internal, "list actions", e))?;
+        let data = serde_json::to_value(&items)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize actions", e))?;
+        Ok(ctx.metadata_envelope("actions list", data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Handle `actions show` (Go `showCmd.RunE` → `lookupAction`).
+    ///
+    /// Flow parity with the Go runner: resolve + validate the `--action-id`
+    /// (required, `act_<32 hex chars>`), open the store, load the action, and emit
+    /// it as the envelope `data`. A load failure (not found / decode) is wrapped as
+    /// a [`Code::Usage`] `load action` error (matching Go `lookupAction`).
+    async fn handle_show(ctx: &AppCtx, args: ShowArgs) -> Result<Envelope, Error> {
+        let action_id = resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("actions show", data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Handle `actions estimate` (Go `estimateCmd.RunE` in `newActionsCommand`).
+    ///
+    /// Flow parity with the Go runner:
+    /// 1. resolve + validate the `--action-id` (required, `act_<32 hex chars>`);
+    /// 2. open the store and load the action (load failure → [`Code::Usage`]
+    ///    `load action`);
+    /// 3. parse the estimate options ([`parse_action_estimate_options`]:
+    ///    `--step-ids` CSV, `--gas-multiplier > 1`, EIP-1559 fee overrides,
+    ///    `--block-tag` normalization);
+    /// 4. run the gas/fee estimate ([`estimate_action_gas`]) — EIP-1559 native gas
+    ///    for EVM actions, fee-token (`fee_unit`/`fee_token`) for Tempo actions;
+    ///    a no-steps action surfaces the `action has no executable steps` error;
+    /// 5. emit the estimate as the envelope `data`.
+    ///
+    /// [`estimate_action_gas`]: defi_execution::estimate::estimate_action_gas
+    async fn handle_estimate(ctx: &AppCtx, args: EstimateArgs) -> Result<Envelope, Error> {
+        let action_id = resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        let opts = parse_action_estimate_options(
+            args.step_ids.as_deref().unwrap_or_default(),
+            args.gas_multiplier,
+            args.max_fee_gwei.as_deref().unwrap_or_default(),
+            args.max_priority_fee_gwei.as_deref().unwrap_or_default(),
+            &args.block_tag,
+        )?;
+        let estimate = defi_execution::estimate::estimate_action_gas(&action, opts).await?;
+        let data = serde_json::to_value(&estimate)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize estimate", e))?;
+        Ok(ctx.metadata_envelope("actions estimate", data, Vec::<ProviderStatus>::new()))
     }
 }
 
@@ -591,5 +673,248 @@ mod tests {
         let msg = err.to_string();
         assert!(msg.contains("unknown actions subcommand"), "got: {msg}");
         assert!(msg.contains("status"), "message quotes the arg: {msg}");
+    }
+}
+
+#[cfg(test)]
+mod handler_tests {
+    //! # Success criteria — `defi-app::actions::cli::handle` (Go: `internal/app`
+    //! `newActionsCommand` `RunE` closures: `list` / `show` (`lookupAction`) /
+    //! `estimate`)
+    //!
+    //! These exercise the WIRED `actions list|show|estimate` handlers end-to-end
+    //! over a real persisted [`defi_execution::store::Store`] (the action-id
+    //! resolver / estimate-options parser / store routing are unit-asserted in the
+    //! parent module). "Correct" means each handler preserves the runner-owned
+    //! actions flow AND the stable machine contract (design spec §2.1 envelope,
+    //! §2.2 exit codes, §2.5 execution paths bypass the cache). Criteria:
+    //!
+    //! 1. **`actions list` over the store.** With a persisted action present,
+    //!    `actions list` emits a success envelope whose `data` is an ARRAY
+    //!    containing the action; with an EMPTY store it emits `[]` (Go
+    //!    `TestRunnerActionsListBypassesCacheOpen`). The cache is bypassed
+    //!    (`cache.status == "bypass"`).
+    //!
+    //! 2. **`actions show` over the store.** `actions show --action-id <id>` loads
+    //!    the persisted action and emits it as a single OBJECT `data`. A missing
+    //!    `--action-id` is a [`Code::Usage`] error (exit 2); a well-formed but
+    //!    absent id surfaces a [`Code::Usage`] `load action` error (Go
+    //!    `lookupAction`).
+    //!
+    //! 3. **`actions estimate` over the store.** A zero-step action surfaces the
+    //!    `action has no executable steps` error (Go
+    //!    `TestRunnerActionsEstimateTempoActionsNoSteps`); `--gas-multiplier <= 1`
+    //!    is rejected before any RPC.
+    //!
+    //! SKIPPED (owned elsewhere): the actual gas/fee estimation numbers + the
+    //! EVM/Tempo fee_unit/fee_token shape (owned by `defi_execution::estimate`),
+    //! the action-store persistence (owned by `defi_execution::store`), and the
+    //! cache-bypass routing predicate (owned by `crate::runner`).
+
+    use super::cli::{handle, ActionsCmd, EstimateArgs, ListArgs, ShowArgs};
+    use crate::ctx::AppCtx;
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, Constraints};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    const VALID_ID: &str = "act_0123456789abcdef0123456789abcdef";
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, String::new())))
+    }
+
+    /// Execution settings with a real action store under `dir`, cache disabled
+    /// (execution paths bypass the cache, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// Persist a zero-step `swap` action with the canonical fixed id (mirrors the
+    /// Go `TestRunnerActionsEstimateTempoActionsNoSteps` fixture).
+    fn save_fixture_action(settings: &Settings) -> Action {
+        let store = ActionStore::open(&settings.action_store_path, &settings.action_lock_path)
+            .expect("open action store");
+        let action = Action::new(
+            VALID_ID,
+            "swap",
+            "eip155:4217",
+            Constraints {
+                simulate: true,
+                ..Constraints::default()
+            },
+        );
+        store.save(&action).expect("save fixture action");
+        action
+    }
+
+    fn data(env: &Envelope) -> Value {
+        env.data.clone().expect("success envelope carries `data`")
+    }
+
+    // --- 1. actions list ---------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_empty_store_emits_empty_array() {
+        let tmp = TempDir::new().expect("tempdir");
+        let ctx = AppCtx::new(exec_settings(tmp.path()));
+        let env = handle(&ctx, ActionsCmd::List(ListArgs::default()))
+            .await
+            .expect("actions list should succeed on an empty store");
+        assert!(env.success);
+        let d = data(&env);
+        assert!(d.is_array(), "data should be an array, got {d}");
+        assert_eq!(d.as_array().expect("array").len(), 0);
+        assert_eq!(env.meta.cache.status, "bypass");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn list_returns_persisted_action() {
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        save_fixture_action(&settings);
+        let ctx = AppCtx::new(settings);
+        let env = handle(&ctx, ActionsCmd::List(ListArgs::default()))
+            .await
+            .expect("actions list should succeed");
+        let d = data(&env);
+        let arr = d.as_array().expect("array");
+        assert_eq!(arr.len(), 1, "one persisted action listed");
+        assert_eq!(arr[0]["action_id"], Value::from(VALID_ID));
+        assert_eq!(arr[0]["intent_type"], Value::from("swap"));
+    }
+
+    // --- 2. actions show ---------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn show_returns_persisted_action_object() {
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        save_fixture_action(&settings);
+        let ctx = AppCtx::new(settings);
+        let env = handle(
+            &ctx,
+            ActionsCmd::Show(ShowArgs {
+                action_id: Some(VALID_ID.to_string()),
+            }),
+        )
+        .await
+        .expect("actions show should succeed");
+        let d = data(&env);
+        assert!(d.is_object(), "data should be a single object, got {d}");
+        assert_eq!(d["action_id"], Value::from(VALID_ID));
+        assert_eq!(d["intent_type"], Value::from("swap"));
+        assert_eq!(env.meta.cache.status, "bypass");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn show_missing_action_id_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let ctx = AppCtx::new(exec_settings(tmp.path()));
+        let err = handle(&ctx, ActionsCmd::Show(ShowArgs { action_id: None }))
+            .await
+            .expect_err("missing --action-id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn show_absent_action_is_usage_load_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let ctx = AppCtx::new(exec_settings(tmp.path()));
+        let err = handle(
+            &ctx,
+            ActionsCmd::Show(ShowArgs {
+                action_id: Some(VALID_ID.to_string()),
+            }),
+        )
+        .await
+        .expect_err("absent action should fail to load");
+        // Go `lookupAction` wraps the store not-found as a Usage `load action`.
+        assert_eq!(err.code, Code::Usage);
+        assert!(err.to_string().contains("load action"), "got: {err}");
+    }
+
+    // --- 3. actions estimate -----------------------------------------------
+
+    fn estimate_args(action_id: &str) -> EstimateArgs {
+        EstimateArgs {
+            action_id: Some(action_id.to_string()),
+            step_ids: None,
+            block_tag: "pending".to_string(),
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+        }
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn estimate_zero_step_action_has_no_executable_steps() {
+        // Go `TestRunnerActionsEstimateTempoActionsNoSteps`.
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        save_fixture_action(&settings);
+        let ctx = AppCtx::new(settings);
+        let err = handle(&ctx, ActionsCmd::Estimate(estimate_args(VALID_ID)))
+            .await
+            .expect_err("zero-step action should fail to estimate");
+        assert!(
+            err.to_string().contains("no executable steps"),
+            "expected no-steps error, got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn estimate_rejects_gas_multiplier_lte_one() {
+        let tmp = TempDir::new().expect("tempdir");
+        let settings = exec_settings(tmp.path());
+        save_fixture_action(&settings);
+        let ctx = AppCtx::new(settings);
+        let mut args = estimate_args(VALID_ID);
+        args.gas_multiplier = 1.0;
+        let err = handle(&ctx, ActionsCmd::Estimate(args))
+            .await
+            .expect_err("gas multiplier == 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn estimate_missing_action_id_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let ctx = AppCtx::new(exec_settings(tmp.path()));
+        let mut args = estimate_args(VALID_ID);
+        args.action_id = None;
+        let err = handle(&ctx, ActionsCmd::Estimate(args))
+            .await
+            .expect_err("missing --action-id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
     }
 }
