@@ -154,6 +154,11 @@ pub mod cli {
     use crate::ctx::AppCtx;
     use crate::execflags::{PlanIdentityFlags, StatusArgs, TransferSubmitArgs};
     use crate::execident::{apply_execution_identity_to_action, resolve_execution_identity};
+    use crate::execsubmit::{
+        execute_resolved, parse_execute_options, presign_validate_action,
+        resolve_action_execution_backend, validate_execution_sender, ExecuteOptionInputs,
+        SubmitExecutionInputs,
+    };
 
     /// `transfer` subcommands (Go `newTransferCommand`).
     #[derive(Subcommand, Debug)]
@@ -211,8 +216,8 @@ pub mod cli {
     pub async fn handle(ctx: &AppCtx, cmd: TransferCmd) -> Result<Envelope, Error> {
         match cmd {
             TransferCmd::Plan(args) => handle_plan(ctx, args).await,
-            TransferCmd::Submit(_) => Err(AppCtx::unimplemented("transfer submit", "WS4")),
-            TransferCmd::Status(_) => Err(AppCtx::unimplemented("transfer status", "WS4")),
+            TransferCmd::Submit(args) => handle_submit(ctx, args).await,
+            TransferCmd::Status(args) => handle_status(ctx, args).await,
         }
     }
 
@@ -288,6 +293,106 @@ pub mod cli {
         let mut env = ctx.metadata_envelope("transfer plan", data, providers);
         env.warnings = identity.warnings;
         Ok(env)
+    }
+
+    /// Handle `transfer submit` (Go `submitCmd.RunE` in `transfer_command.go`).
+    ///
+    /// Structurally identical to `approvals submit` (the same shared `execsubmit`
+    /// plumbing: action-id resolve → store load → intent gate → already-completed
+    /// short-circuit → backend/signer resolve → sender match → execute-option
+    /// parse → broadcast), with the `transfer`-only intent gate
+    /// ([`super::ensure_transfer_intent`]). `transfer submit` carries NO
+    /// `--allow-max-approval` / `--unsafe-provider-tx` flags
+    /// ([`TransferSubmitArgs`]); the Go handler hardcodes both `false` for
+    /// `parseExecuteOptions`, so the bounded-approval pre-sign guardrail is
+    /// irrelevant here (a `transfer` step is never an `approve`).
+    async fn handle_submit(ctx: &AppCtx, args: TransferSubmitArgs) -> Result<Envelope, Error> {
+        // 1. Resolve + validate the action id.
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+
+        // 2. Load the persisted action (not-found → usage `load action`).
+        let store = ctx.open_action_store()?;
+        let mut action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+
+        // 3. Intent gate (transfer-only).
+        super::ensure_transfer_intent(&action.intent_type)?;
+
+        // 4. Already-completed short-circuit (no re-broadcast).
+        if action.status == defi_execution::action::ActionStatus::Completed {
+            let data = serde_json::to_value(&action)
+                .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+            let mut env =
+                ctx.metadata_envelope("transfer submit", data, Vec::<ProviderStatus>::new());
+            env.warnings = vec!["action already completed".to_string()];
+            return Ok(env);
+        }
+
+        // 5. Resolve the execution backend + signer (legacy-local / OWS guards).
+        let resolved = resolve_action_execution_backend(
+            &action,
+            SubmitExecutionInputs {
+                signer: &args.signer,
+                key_source: &args.key_source,
+                private_key: args.private_key.as_deref().unwrap_or_default(),
+                from_address: args.from_address.as_deref().unwrap_or_default(),
+            },
+        )?;
+
+        // 6. Validate the resolved sender vs --from-address + planned sender.
+        validate_execution_sender(
+            &action,
+            args.from_address.as_deref().unwrap_or_default(),
+            &resolved.sender,
+        )?;
+
+        // 7. Parse the execute options (durations, gas multiplier, fee flags). A
+        //    transfer carries no approval/provider-tx guardrails, so the Go handler
+        //    hardcodes `allow_max_approval` / `unsafe_provider_tx` to `false`.
+        let opts = parse_execute_options(&ExecuteOptionInputs {
+            simulate: args.simulate,
+            poll_interval: &args.poll_interval,
+            step_timeout: &args.step_timeout,
+            gas_multiplier: args.gas_multiplier,
+            max_fee_gwei: args.max_fee_gwei.as_deref().unwrap_or_default(),
+            max_priority_fee_gwei: args.max_priority_fee_gwei.as_deref().unwrap_or_default(),
+            allow_max_approval: false,
+            unsafe_provider_tx: false,
+            fee_token: args.fee_token.as_deref().unwrap_or_default(),
+        })?;
+
+        // 8. Pre-sign guardrail (a transfer step is never an approval, so this is a
+        //    no-op for the bounded-approval bound, but keeping the call mirrors the
+        //    approvals path and the engine's per-step policy contract).
+        presign_validate_action(&action, &opts)?;
+
+        // 9. Broadcast through the engine (persisting each transition), then emit
+        //    the terminal-state envelope (cache bypassed for execution paths).
+        execute_resolved(&store, &mut action, resolved, opts).await?;
+
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("transfer submit", data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Handle `transfer status` (Go `statusCmd.RunE` in `transfer_command.go`).
+    ///
+    /// A pure read over the persisted action store: resolve + validate the
+    /// `--action-id`, load the action (not-found → usage `load action`), gate the
+    /// intent (`transfer`-only), and emit the action verbatim (cache bypassed).
+    async fn handle_status(ctx: &AppCtx, args: StatusArgs) -> Result<Envelope, Error> {
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        super::ensure_transfer_intent(&action.intent_type)?;
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("transfer status", data, Vec::<ProviderStatus>::new()))
     }
 
     /// Merge structured input (`--input-json` / `--input-file`) onto the parsed
@@ -1134,5 +1239,897 @@ mod app_tests {
             .list("", 1000)
             .map(|actions| actions.is_empty())
             .unwrap_or(true)
+    }
+}
+
+#[cfg(test)]
+mod submit_app_tests {
+    //! # Success criteria — `transfer submit` app-level handler (WS4, exec-submit)
+    //!
+    //! Go oracle: `internal/app/transfer_command.go` `submitCmd.RunE` +
+    //! `internal/app/execution_helpers.go`
+    //! (`resolveActionExecutionBackend` / `validateExecutionSender` /
+    //! `executeActionWithTimeout`) + `internal/app/runner.go`
+    //! (`resolveActionID` / `newExecutionSigner` / `parseExecuteOptions`). These
+    //! tests drive [`cli::handle`] (the real binary dispatch entry point) for
+    //! `transfer submit` ONLY, asserting the full machine contract the Go runner
+    //! emits via `emitSuccess(...)` / `renderError(...)`.
+    //!
+    //! Transfer submit is structurally identical to `approvals submit` (the same
+    //! shared `execsubmit` plumbing: action-id resolve → store load → intent gate →
+    //! already-completed short-circuit → backend/signer resolve → sender match →
+    //! execute-option parse → broadcast), with three differences:
+    //!   * the intent gate is `transfer`-only (`action is not a transfer intent`),
+    //!     not `approve`-only ([`super::ensure_transfer_intent`]);
+    //!   * `transfer submit` carries NO `--allow-max-approval` / `--unsafe-provider-tx`
+    //!     flags ([`crate::execflags::TransferSubmitArgs`]) — the Go handler hardcodes
+    //!     `false`/`false` for those `parseExecuteOptions` args, so the bounded-approval
+    //!     pre-sign guardrail is irrelevant here (a `transfer` step is never an
+    //!     `approve`, so no over-approval bound exists);
+    //!   * the persisted step is a `transfer` (`StepType::Transfer`), not an
+    //!     `approval`.
+    //!
+    //! ## Determinism / offline strategy (no live chains)
+    //!
+    //! The reused [`defi_execution`] engine ([`defi_execution::evm_executor::execute_action`])
+    //! is the contract source of truth, and the tests reuse it exactly as its own
+    //! suite (and the `approvals submit` app suite) does:
+    //!
+    //! * **Pre-broadcast guards** (action-id, store load, intent gate,
+    //!   already-completed short-circuit, backend selection, sender match,
+    //!   execute-option validation) all fire BEFORE any network and are fully
+    //!   deterministic.
+    //! * **Local-signer broadcast/completion** is exercised OFFLINE through the
+    //!   `--private-key` override (a deterministic in-args secp256k1 key whose
+    //!   address is pinned in `defi-evm`): in this build the EVM step path enforces
+    //!   the pre-sign policy and (matching the engine's own `execute_action` tests,
+    //!   which never dial the step `rpc_url` for a policed EVM step) transitions the
+    //!   action to `completed` without a network call. Unlike `approvals submit`, a
+    //!   transfer step needs NO `--allow-max-approval` to pass the policy (there is
+    //!   no approval bound to inflate). The full RPC-backed sign+broadcast
+    //!   (chain-id/gas/nonce/`sendRawTransaction`/receipt) is integration/`wiremock`-RPC
+    //!   territory (WS5) and is recorded as a deferral — it is NOT asserted here.
+    //! * **OWS `--wallet` backend** resolves through the OWS vault/CLI (WS4b e2e),
+    //!   so only its OFFLINE guard rejections are asserted (missing persisted
+    //!   `wallet_id`; legacy signer flags on a wallet-backed action). The OWS
+    //!   happy-path broadcast (the `OwsSubmitBackend` send-hook seam) is a WS4b
+    //!   deferral.
+    //! * **Bridge destination-settlement waits** do NOT apply to `transfer`
+    //!   (transfer actions never carry a `bridge_send` step); that transition is
+    //!   owned by the `bridge submit/status` unit + the `defi-execution`
+    //!   `verify_bridge_settlement` suite, and is intentionally NOT re-asserted here.
+    //!
+    //! Each criterion below is a FAILING test until `cli::handle` implements
+    //! `transfer submit` (today it returns the `AppCtx::unimplemented` stub).
+    //!
+    //! Criteria:
+    //!
+    //! 1. **Submit success envelope (legacy local key) + completion.** Given a
+    //!    persisted `transfer` action whose `from_address` matches the deterministic
+    //!    `--private-key` signer, a submit returns `Ok(Envelope)` (exit 0) with:
+    //!    `version == "v1"`, `success == true`, `error == None`, `meta.partial ==
+    //!    false`, `meta.command == "transfer submit"`, and `meta.cache ==
+    //!    {status:"bypass", age_ms:0, stale:false}` (execution paths bypass the
+    //!    cache, spec §2.5). The serialized `data` Action has `status ==
+    //!    "completed"` and its single step has `status == "confirmed"`. (Go
+    //!    `emitSuccess(..., action, nil, cacheMetaBypass(), nil, false)` after
+    //!    `executeActionWithTimeout`.) NB: no `--allow-max-approval` is needed (the
+    //!    flag does not exist on `transfer submit`).
+    //!
+    //! 2. **Submit persists the terminal state.** After a successful submit, the
+    //!    action re-loaded from a freshly opened [`defi_execution::store::Store`]
+    //!    has `status == "completed"`. (Go `ExecuteAction` persists each
+    //!    transition through `s.actionStore`.)
+    //!
+    //! 3. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2)
+    //!    (`action id is required (--action-id)`); a malformed id (`"act_xyz"`) →
+    //!    [`Code::Usage`] (exit 2) (`action id must match act_<32 hex chars>`).
+    //!    (Go `resolveActionID`.)
+    //!
+    //! 4. **Load failure for a non-existent action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`).
+    //!
+    //! 5. **Intent gate.** Submitting a persisted NON-`transfer` action (e.g. an
+    //!    `approve` intent) through `transfer submit` → [`Code::Usage`] (exit 2)
+    //!    with `action is not a transfer intent`. (Go `submitCmd` IntentType
+    //!    guard; mirrors [`super::ensure_transfer_intent`].)
+    //!
+    //! 6. **Already-completed short-circuit.** Submitting an action already in
+    //!    `status == "completed"` returns `Ok(Envelope)` (exit 0) WITHOUT
+    //!    re-broadcast, carrying the warning `action already completed` and the
+    //!    unchanged completed action in `data`. (Go `if action.Status ==
+    //!    ActionStatusCompleted { return s.emitSuccess(..., []string{"action
+    //!    already completed"}, ...) }`.)
+    //!
+    //! 7. **Legacy backend rejects a non-local signer.** A `legacy_local` action
+    //!    submitted with `--signer tempo` → [`Code::Usage`] (exit 2)
+    //!    (`legacy actions only support --signer local; tempo submit requires
+    //!    execution_backend=tempo`). (Go `resolveActionExecutionBackend` legacy
+    //!    branch.)
+    //!
+    //! 8. **OWS action missing persisted wallet_id.** A wallet-backed
+    //!    (`execution_backend == "ows"`) action with an empty `wallet_id` → submit
+    //!    is rejected with [`Code::Usage`] (exit 2)
+    //!    (`wallet-backed action is missing persisted wallet_id`). (Go OWS branch
+    //!    guard — reachable OFFLINE because the guard precedes any OWS resolve.)
+    //!
+    //! 9. **OWS action rejects legacy signer flags.** A wallet-backed action with a
+    //!    persisted `wallet_id` submitted with an explicit legacy signer flag
+    //!    (`--private-key`) → [`Code::Usage`] (exit 2)
+    //!    (`wallet-backed actions do not accept legacy signer flags`). (Go
+    //!    `usesLegacySignerFlags` guard — asserted via the `--private-key` flag,
+    //!    which is unambiguously "explicitly set".)
+    //!
+    //! 10. **Sender mismatch (`--from-address`).** A `legacy_local` action whose
+    //!     persisted `from_address` is address A, submitted with `--from-address`
+    //!     == address B (≠ the resolved signer) → [`Code::Signer`] (exit 24).
+    //!     (Go `validateExecutionSender`: `signer address does not match
+    //!     --from-address`.)
+    //!
+    //! 11. **Sender mismatch (planned action sender vs signer).** A `legacy_local`
+    //!     action whose persisted `from_address` does NOT match the
+    //!     `--private-key` signer address (and no `--from-address` is supplied) →
+    //!     a [`Code::Signer`] (exit 24) error surfaces from the persisted-sender
+    //!     validation. (Go `validateExecutionSender` /
+    //!     `validate_persisted_action_sender`: backend sender ≠ planned sender.)
+    //!
+    //! 12. **Execute-option validation.** `--gas-multiplier 1.0` → [`Code::Usage`]
+    //!     (exit 2) (`--gas-multiplier must be > 1`); `--poll-interval "0s"` →
+    //!     [`Code::Usage`] (exit 2); `--step-timeout "nope"` → [`Code::Usage`]
+    //!     (exit 2). (Go `parseExecuteOptions`.)
+    //!
+    //! 13. **Signer init failure (no key).** A `legacy_local` action submitted with
+    //!     `--signer local` and NO resolvable key (`--key-source env` with the env
+    //!     unset, no `--private-key`) → [`Code::Signer`] (exit 24). (Go
+    //!     `newExecutionSigner` → `initialize local signer`.)
+    //!
+    //! 14. **Error paths do not mutate terminal status.** On every rejected submit
+    //!     (criteria 3–13, error cases) the persisted action — when one exists —
+    //!     remains in its pre-submit `status == "planned"` (the handler returns the
+    //!     typed `Err(Error)`; the runner renders the full error envelope to
+    //!     stderr, spec §2.1).
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit / deferred):
+    //!   * the full RPC-backed sign+broadcast (chain-id/gas/fee/nonce/
+    //!     `sendRawTransaction`/receipt) — WS5 `wiremock`-RPC integration deferral;
+    //!   * the OWS happy-path resolve + send-hook broadcast — WS4b e2e deferral;
+    //!   * Tempo (type 0x76) submit — Tempo is a separate execution path
+    //!     (`--signer tempo` / `execution_backend == "tempo"`), byte-parity is
+    //!     WS4a, and `transfer` planning is OWS-first standard-EVM (no Tempo
+    //!     identity branch);
+    //!   * the bounded-approval pre-sign guardrail / `--allow-max-approval` —
+    //!     N/A to transfer (no such flag, no approval bound); owned + asserted by
+    //!     the `approvals submit` app suite + `defi-execution::policy`;
+    //!   * bridge destination-settlement waits — `bridge submit/status` unit +
+    //!     `defi-execution::verify_bridge_settlement`;
+    //!   * the EIP-1559 signing byte layout — `defi-evm` signer goldens;
+    //!   * `--input-json`/`--input-file` precedence on submit — structured-input
+    //!     unit (the plan-side merge is already covered in `app_tests`);
+    //!   * cobra/clap flag defaults + schema auth metadata — schema/CLI suites.
+
+    use super::cli::{handle, PlanArgs, TransferCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, TransferSubmitArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    // --- contract constants ------------------------------------------------
+
+    /// The deterministic secp256k1 test key (`internal/execution/signer`
+    /// `testPrivateKey`); shared with the `defi-evm` / `defi-execution` suites.
+    const TEST_KEY: &str = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1";
+    /// The EIP-55 address `defi-evm` derives for [`TEST_KEY`] (pinned in
+    /// `defi-evm::signer` against the go-ethereum oracle). The persisted action's
+    /// `from_address` must equal this for the local-signer submit to pass the
+    /// sender-match guard.
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+    /// A DIFFERENT canonical address — used to force the sender-mismatch guards.
+    const OTHER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    /// Recipient for planned transfers (matches the `defi-evm` transfer golden
+    /// recipient `0x..CC` so the planned step shape is identical to production).
+    const RECIPIENT: &str = "0x00000000000000000000000000000000000000CC";
+
+    /// A non-dialed RPC sentinel for the step (the policed EVM step path does not
+    /// reach the network in this build; this keeps the action well-formed).
+    const DEAD_RPC: &str = "http://127.0.0.1:0";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir`, cache disabled.
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `TransferSubmitArgs` carrying the clap flag DEFAULTS (the
+    /// `#[derive(Default)]` zero values would NOT match the parsed defaults, so
+    /// they are stamped here): `signer=local`, `key_source=auto`,
+    /// `gas_multiplier=1.2`, `poll_interval=2s`, `step_timeout=2m`,
+    /// `simulate=true`. The `--private-key` is pre-set to the deterministic test
+    /// key so the offline local-signer path resolves. Callers mutate the returned
+    /// value per test. NB: there is NO `allow_max_approval`/`unsafe_provider_tx`
+    /// field on transfer submit (Go hardcodes them to false).
+    fn base_submit_args(action_id: &str) -> TransferSubmitArgs {
+        TransferSubmitArgs {
+            action_id: Some(action_id.to_string()),
+            from_address: None,
+            signer: "local".to_string(),
+            key_source: "auto".to_string(),
+            private_key: Some(TEST_KEY.to_string()),
+            fee_token: None,
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+            simulate: true,
+            poll_interval: "2s".to_string(),
+            step_timeout: "2m".to_string(),
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Plan + persist a canonical `transfer` action against `dir`, returning its
+    /// `action_id`. `from_addr` becomes the action's `from_address`; `amount` is
+    /// the transferred base-unit amount (which is also the planned `input_amount`).
+    /// Plans through the real `cli::handle` plan path so the persisted shape is
+    /// identical to production.
+    async fn plan_transfer(dir: &Path, from_addr: &str, amount: &str) -> String {
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = PlanArgs {
+            chain: Some("1".to_string()),
+            asset: Some("USDC".to_string()),
+            recipient: Some(RECIPIENT.to_string()),
+            amount: Some(amount.to_string()),
+            amount_decimal: None,
+            rpc_url: Some(DEAD_RPC.to_string()),
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(from_addr.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, TransferCmd::Plan(args))
+            .await
+            .expect("plan a transfer action for the submit fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    /// Persist `action` directly (used for fixtures the plan path cannot build,
+    /// e.g. an `approve`-intent or an OWS-backed action).
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    /// Re-load a persisted action's `status` string from a freshly opened store.
+    fn persisted_status(dir: &Path, action_id: &str) -> String {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let action = store.get(action_id).expect("action retrievable");
+        serde_json::to_value(action.status)
+            .expect("status serializes")
+            .as_str()
+            .expect("status is a string")
+            .to_string()
+    }
+
+    async fn run_submit(dir: &Path, args: TransferSubmitArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, TransferCmd::Submit(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("submit envelope carries `data`")
+    }
+
+    // --- 1, 2. submit success + completion + persistence -------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_local_completes_and_emits_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Plan a transfer whose sender matches the deterministic local signer.
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+
+        // No --allow-max-approval needed: a transfer step is never an approval, so
+        // the bounded-approval pre-sign policy does not apply.
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("legacy-local transfer submit should complete offline");
+
+        // Envelope contract.
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "transfer submit");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // Completed action in data, single confirmed step.
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert_eq!(steps.len(), 1);
+        assert_eq!(steps[0]["status"], Value::from("confirmed"));
+
+        // Persisted terminal state (criterion 2).
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- 3. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_submit_args("");
+        args.action_id = Some(String::new());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_xyz");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 4. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Well-formed id that was never persisted.
+        let args = base_submit_args("act_0123456789abcdef0123456789abcdef");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 5. intent gate ----------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_transfer_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A persisted APPROVE-intent action submitted through transfer submit.
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "approve",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let args = base_submit_args(&action.action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-transfer intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("action is not a transfer intent"),
+            "got: {err}"
+        );
+        // Status untouched.
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+    }
+
+    // --- 6. already-completed short-circuit --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_already_completed_short_circuits_with_warning() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        // Force the persisted action to completed without re-broadcasting.
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            action.status = ActionStatus::Completed;
+            store.save(&action).expect("persist completed");
+        }
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("already-completed submit returns success without re-broadcast");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "transfer submit");
+        assert!(
+            env.warnings.iter().any(|w| w == "action already completed"),
+            "expected `action already completed` warning, got {:?}",
+            env.warnings
+        );
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+    }
+
+    // --- 7. legacy backend rejects a non-local signer ----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_action_rejects_tempo_signer() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = None; // tempo signer + private key would be a different error
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("legacy action with --signer tempo rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("legacy actions only support --signer local"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 8, 9. OWS backend offline guards ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_missing_wallet_id_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A wallet-backed action with an EMPTY wallet_id (the guard precedes any
+        // OWS resolve, so this is fully offline).
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "transfer",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = String::new();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        // No legacy signer flags (those would trip a different guard first).
+        args.private_key = None;
+        args.signer = "local".to_string();
+        args.key_source = "auto".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS action without wallet_id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed action is missing persisted wallet_id"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_rejects_legacy_signer_flags() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A wallet-backed action WITH a persisted wallet_id, submitted with an
+        // explicit legacy signer flag (--private-key).
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "transfer",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = "wallet-123".to_string();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        args.private_key = Some(TEST_KEY.to_string()); // explicit legacy flag
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS action with legacy signer flags rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed actions do not accept legacy signer flags"),
+            "got: {err}"
+        );
+    }
+
+    // --- 10, 11. sender mismatch -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_from_address_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Action sender matches the signer, but --from-address is a DIFFERENT addr.
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let mut args = base_submit_args(&action_id);
+        args.from_address = Some(OTHER_ADDR.to_string());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("--from-address mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        // Signer maps to exit 24 (spec §2.2).
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_planned_sender_signer_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Planned action sender is OTHER_ADDR but the local signer is SIGNER_ADDR;
+        // no --from-address supplied.
+        let action_id = plan_transfer(tmp.path(), OTHER_ADDR, "1000000").await;
+        let args = base_submit_args(&action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("planned-sender/signer mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- 12. execute-option validation -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_gas_multiplier_not_greater_than_one() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let mut args = base_submit_args(&action_id);
+        args.gas_multiplier = 1.0;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("gas-multiplier <= 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("gas-multiplier"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_positive_poll_interval() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let mut args = base_submit_args(&action_id);
+        args.poll_interval = "0s".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-positive poll-interval rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_unparseable_step_timeout() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let mut args = base_submit_args(&action_id);
+        args.step_timeout = "nope".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unparseable step-timeout rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 13. signer init failure (no key) ----------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_signer_init_failure_is_signer_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let mut args = base_submit_args(&action_id);
+        // Force an unresolvable key: source=env (isolates the env hex var) with no
+        // --private-key override. The DEFI_PRIVATE_KEY env var is not set in this
+        // test, so local-signer init must fail with a signer error.
+        args.private_key = None;
+        args.key_source = "env".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("signer init with no key must fail");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+}
+
+#[cfg(test)]
+mod status_app_tests {
+    //! # Success criteria — `transfer status` app-level handler (WS4, exec-status)
+    //!
+    //! Go oracle: `internal/app/transfer_command.go` `statusCmd.RunE`. These tests
+    //! drive [`cli::handle`] for `transfer status` ONLY. `transfer status` is a
+    //! pure READ over the persisted action store (no signing, no network), so it is
+    //! fully offline + deterministic. (Bridge destination-settlement polling — the
+    //! only network-backed status transition — does NOT apply to `transfer`:
+    //! transfer actions never carry a `bridge_send` step. That wait is owned by
+    //! `bridge status` + `defi-execution::verify_bridge_settlement` and is NOT
+    //! re-asserted here.) Structurally identical to `approvals status`, with the
+    //! `transfer` intent gate (`action is not a transfer intent`).
+    //!
+    //! Criteria (each FAILING until `cli::handle` implements `transfer status`):
+    //!
+    //! 1. **Status success envelope reflects the persisted action.** Given a
+    //!    persisted `transfer` action in `status == "planned"`, `transfer status
+    //!    --action-id <id>` returns `Ok(Envelope)` (exit 0) with `version ==
+    //!    "v1"`, `success == true`, `error == None`, `meta.command ==
+    //!    "transfer status"`, `meta.cache == {status:"bypass", age_ms:0,
+    //!    stale:false}` (execution paths bypass the cache, spec §2.5), and `data`
+    //!    is the serialized Action with `action_id` == the requested id,
+    //!    `intent_type == "transfer"`, and `status == "planned"`. (Go
+    //!    `emitSuccess(..., action, nil, cacheMetaBypass(), nil, false)`.)
+    //!
+    //! 2. **Status reflects a `completed` transition.** After the persisted action
+    //!    is advanced to `completed`, `transfer status` returns `data.status ==
+    //!    "completed"` (status is a read of the persisted lifecycle, not a
+    //!    re-execution).
+    //!
+    //! 3. **Status reflects a `running` transition.** A persisted action in
+    //!    `running` is reported verbatim as `data.status == "running"`.
+    //!
+    //! 4. **Action-id validation.** `--action-id ""` → [`Code::Usage`] (exit 2);
+    //!    a malformed id → [`Code::Usage`] (exit 2). (Go `resolveActionID`.)
+    //!
+    //! 5. **Load failure for an unknown action.** A well-formed but unknown
+    //!    `--action-id` → [`Code::Usage`] (exit 2) (Go wraps the store `Get`
+    //!    not-found as `clierr.Wrap(CodeUsage, "load action", err)`).
+    //!
+    //! 6. **Intent gate.** `transfer status` on a persisted NON-`transfer` action
+    //!    (e.g. a `bridge` intent) → [`Code::Usage`] (exit 2) with `action is not
+    //!    a transfer intent`. (Go `statusCmd` IntentType guard.)
+    //!
+    //! SKIPPED (covered elsewhere / wrong unit):
+    //!   * bridge destination-settlement polling — `bridge status` unit;
+    //!   * the action JSON shape internals — `defi-execution::action` golden;
+    //!   * cache-bypass routing for `transfer status` — runner cache-flow concern
+    //!     (`should_open_cache`), asserted here only via `meta.cache.status`.
+
+    use super::cli::{handle, PlanArgs, TransferCmd};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, StatusArgs};
+    use defi_config::Settings;
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+    const RECIPIENT: &str = "0x00000000000000000000000000000000000000CC";
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_millis(750),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// Plan + persist a canonical `transfer` action, returning its `action_id`.
+    async fn plan_transfer(dir: &Path) -> String {
+        let ctx = AppCtx::new(exec_settings(dir));
+        let args = PlanArgs {
+            chain: Some("1".to_string()),
+            asset: Some("USDC".to_string()),
+            recipient: Some(RECIPIENT.to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            rpc_url: None,
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        };
+        let env = handle(&ctx, TransferCmd::Plan(args))
+            .await
+            .expect("plan a transfer action for the status fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    fn set_status(dir: &Path, action_id: &str, status: ActionStatus) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open store");
+        let mut action = store.get(action_id).expect("load");
+        action.status = status;
+        store.save(&action).expect("persist status");
+    }
+
+    async fn run_status(dir: &Path, action_id: &str) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(
+            &ctx,
+            TransferCmd::Status(StatusArgs {
+                action_id: Some(action_id.to_string()),
+            }),
+        )
+        .await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("status envelope carries `data`")
+    }
+
+    // --- 1. status success envelope ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_planned_emits_success_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path()).await;
+        let env = run_status(tmp.path(), &action_id)
+            .await
+            .expect("status on a planned transfer should succeed");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "transfer status");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        let data = data_of(&env);
+        assert_eq!(data["action_id"], Value::from(action_id.as_str()));
+        assert_eq!(data["intent_type"], Value::from("transfer"));
+        assert_eq!(data["status"], Value::from("planned"));
+    }
+
+    // --- 2, 3. status reflects lifecycle transitions -----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reflects_completed_transition() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path()).await;
+        set_status(tmp.path(), &action_id, ActionStatus::Completed);
+        let env = run_status(tmp.path(), &action_id).await.expect("status ok");
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reflects_running_transition() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_transfer(tmp.path()).await;
+        set_status(tmp.path(), &action_id, ActionStatus::Running);
+        let env = run_status(tmp.path(), &action_id).await.expect("status ok");
+        assert_eq!(data_of(&env)["status"], Value::from("running"));
+    }
+
+    // --- 4. action-id validation -------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), "")
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), "act_not_hex")
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 5. load failure for an unknown action -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), "act_0123456789abcdef0123456789abcdef")
+            .await
+            .expect_err("unknown action surfaces a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- 6. intent gate ----------------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_non_transfer_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A persisted BRIDGE-intent action queried through transfer status.
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_status(tmp.path(), &action.action_id)
+            .await
+            .expect_err("non-transfer intent rejected by transfer status");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("action is not a transfer intent"),
+            "got: {err}"
+        );
     }
 }

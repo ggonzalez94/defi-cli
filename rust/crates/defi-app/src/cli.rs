@@ -620,10 +620,18 @@ mod tests {
         // `Usage` error (missing `--action-id`), NOT the `Unsupported`
         // not-yet-implemented stub, so they are route-verified by parse +
         // command_path above and exercised end-to-end by their own module tests.
+        // `transfer submit` / `transfer status` (execution unit "transfer-submit")
+        // are likewise wired: each routes to a real handler over the persisted
+        // action store. With the bare argv used here they return a typed `Usage`
+        // error (missing `--action-id`), NOT the `Unsupported` not-yet-implemented
+        // stub, so they are route-verified by parse + command_path above and
+        // exercised end-to-end by their own module tests.
         if path == "approvals plan"
             || path == "approvals submit"
             || path == "approvals status"
             || path == "transfer plan"
+            || path == "transfer submit"
+            || path == "transfer status"
             || path == "swap plan"
             || path == "bridge plan"
             || path.starts_with("actions ")
