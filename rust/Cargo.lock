@@ -1684,6 +1684,7 @@ dependencies = [
 name = "defi-providers"
 version = "0.5.0"
 dependencies = [
+ "alloy",
  "async-trait",
  "chrono",
  "defi-errors",
@@ -1693,8 +1694,12 @@ dependencies = [
  "defi-id",
  "defi-model",
  "defi-registry",
+ "hex",
+ "num-bigint",
+ "reqwest",
  "serde",
  "serde_json",
+ "sha1",
  "tokio",
  "wiremock",
 ]
@@ -3999,6 +4004,17 @@ checksum = "a84f14a19e9a014bb9f4512488d9829a68e04ecabffb0f9904cd1ace94598177"
 dependencies = [
  "base16ct",
  "serde",
+]
+
+[[package]]
+name = "sha1"
+version = "0.10.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e3bf829a2d51ab4a5ddf1352d8470c140cadc8301b2ae1789db023f01cedd6ba"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest 0.10.7",
 ]
 
 [[package]]

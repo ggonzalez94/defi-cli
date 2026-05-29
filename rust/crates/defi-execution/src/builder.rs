@@ -28,6 +28,33 @@ pub enum SwapTradeType {
     ExactOutput,
 }
 
+impl SwapTradeType {
+    /// Canonical wire string (mirrors Go `SwapTradeType` constant values).
+    ///
+    /// Note the hyphen: `exact-input` / `exact-output` (NOT underscores).
+    pub fn as_str(self) -> &'static str {
+        match self {
+            SwapTradeType::ExactInput => "exact-input",
+            SwapTradeType::ExactOutput => "exact-output",
+        }
+    }
+
+    /// Parse a wire string into a [`SwapTradeType`].
+    ///
+    /// Trim- and case-tolerant (Go uses `strings.ToLower(strings.TrimSpace(..))`).
+    /// An empty string parses to the default [`SwapTradeType::ExactInput`] to
+    /// match the Go runner, which treats an empty `--type` as exact-input.
+    /// Unknown input returns `None`.
+    pub fn parse(input: &str) -> Option<Self> {
+        match input.trim().to_ascii_lowercase().as_str() {
+            "" => Some(SwapTradeType::ExactInput),
+            "exact-input" => Some(SwapTradeType::ExactInput),
+            "exact-output" => Some(SwapTradeType::ExactOutput),
+            _ => None,
+        }
+    }
+}
+
 /// Parameters for a swap quote/build (mirrors Go `SwapQuoteRequest`).
 #[derive(Debug, Clone, Default)]
 pub struct SwapQuoteRequest {
