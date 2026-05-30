@@ -651,6 +651,15 @@ mod tests {
         // typed `Usage` error (missing `--action-id`), NOT the `Unsupported`
         // not-yet-implemented stub, so they are route-verified by parse +
         // command_path above and exercised end-to-end by their own module tests.
+        // `bridge submit` / `bridge status` (execution unit "bridge-submit") are
+        // wired: the standard-EVM bridge submit routes the persisted Across/LiFi
+        // action through the shared `execsubmit` plumbing (the engine waits for
+        // destination settlement on the `bridge_send` step), and `bridge status`
+        // reads the persisted action verbatim. With the bare argv used here they
+        // return a typed `Usage` error (missing `--action-id`), NOT the
+        // `Unsupported` not-yet-implemented stub, so they are route-verified by
+        // parse + command_path above and exercised end-to-end by their own module
+        // tests.
         if path == "approvals plan"
             || path == "approvals submit"
             || path == "approvals status"
@@ -661,6 +670,8 @@ mod tests {
             || path == "swap submit"
             || path == "swap status"
             || path == "bridge plan"
+            || path == "bridge submit"
+            || path == "bridge status"
             || path.starts_with("actions ")
             || path.starts_with("lend supply ")
             || path.starts_with("lend withdraw ")

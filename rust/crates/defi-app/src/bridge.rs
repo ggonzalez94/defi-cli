@@ -384,9 +384,136 @@ pub mod cli {
             BridgeCmd::List(args) => handle_list(ctx, args).await,
             BridgeCmd::Details(args) => handle_details(ctx, args).await,
             BridgeCmd::Plan(args) => handle_plan(ctx, args).await,
-            BridgeCmd::Submit(_) => Err(AppCtx::unimplemented("bridge submit", "WS4")),
-            BridgeCmd::Status(_) => Err(AppCtx::unimplemented("bridge status", "WS4")),
+            BridgeCmd::Submit(args) => handle_submit(ctx, args).await,
+            BridgeCmd::Status(args) => handle_status(ctx, args).await,
         }
+    }
+
+    /// Handle `bridge submit` (Go `submitCmd.RunE`,
+    /// `bridge_execution_commands.go` ~L163-215).
+    ///
+    /// `bridge submit` is the **standard-EVM** execution submit: an Across / LiFi
+    /// bridge action is an EVM `legacy_local` / `ows` action (there is NO Tempo
+    /// bridge path, unlike `swap submit`). Flow parity with the Go runner:
+    /// 1. resolve + validate `--action-id` ([`crate::actions::resolve_action_id`]);
+    /// 2. load the persisted action (not-found → usage `load action`);
+    /// 3. gate the intent (`bridge`-only — [`super::ensure_bridge_intent`]);
+    /// 4. short-circuit an already-`completed` action (success + warning, no
+    ///    re-broadcast);
+    /// 5. resolve the execution backend + signer
+    ///    ([`crate::execsubmit::resolve_action_execution_backend`]: legacy-local /
+    ///    OWS guards);
+    /// 6. validate the resolved signer vs `--from-address` + the planned sender;
+    /// 7. parse the execute options (`--gas-multiplier > 1`, durations, fee flags,
+    ///    the `--allow-max-approval` / `--unsafe-provider-tx` guardrail opt-ins —
+    ///    bridge submit carries these, like `approvals submit`);
+    /// 8. run the bounded-approval pre-sign guardrail with the action context;
+    /// 9. broadcast through the engine ([`crate::execsubmit::execute_resolved`]) —
+    ///    which, for a `bridge_send` step, waits for destination settlement (Across
+    ///    `/deposit/status`, LiFi `/status`) before marking the step confirmed —
+    ///    persisting each transition, then emit the terminal-state envelope (cache
+    ///    bypassed for execution paths, spec §2.5).
+    ///
+    /// On every guard/build error the typed [`Error`] is returned (the runner
+    /// renders the full error envelope to stderr) and the persisted action is left
+    /// in its pre-submit state.
+    async fn handle_submit(ctx: &AppCtx, args: SubmitArgs) -> Result<Envelope, Error> {
+        use defi_errors::Code;
+        use defi_model::ProviderStatus;
+
+        // 1. Resolve + validate the action id.
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+
+        // 2. Load the persisted action (not-found → usage `load action`).
+        let store = ctx.open_action_store()?;
+        let mut action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+
+        // 3. Intent gate (bridge-only).
+        super::ensure_bridge_intent(&action.intent_type)?;
+
+        // 4. Already-completed short-circuit (no re-broadcast).
+        if action.status == defi_execution::action::ActionStatus::Completed {
+            let data = serde_json::to_value(&action)
+                .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+            let mut env =
+                ctx.metadata_envelope("bridge submit", data, Vec::<ProviderStatus>::new());
+            env.warnings = vec!["action already completed".to_string()];
+            return Ok(env);
+        }
+
+        // 5. Resolve the execution backend + signer (legacy-local / OWS guards).
+        //    There is NO Tempo bridge branch (bridge planning is OWS-first
+        //    standard-EVM only).
+        let resolved = crate::execsubmit::resolve_action_execution_backend(
+            &action,
+            crate::execsubmit::SubmitExecutionInputs {
+                signer: &args.signer,
+                key_source: &args.key_source,
+                private_key: args.private_key.as_deref().unwrap_or_default(),
+                from_address: args.from_address.as_deref().unwrap_or_default(),
+            },
+        )?;
+
+        // 6. Validate the resolved sender vs --from-address + planned sender.
+        crate::execsubmit::validate_execution_sender(
+            &action,
+            args.from_address.as_deref().unwrap_or_default(),
+            &resolved.sender,
+        )?;
+
+        // 7. Parse the execute options (durations, gas multiplier, fee flags,
+        //    approval/provider-tx guardrail opt-ins).
+        let opts =
+            crate::execsubmit::parse_execute_options(&crate::execsubmit::ExecuteOptionInputs {
+                simulate: args.simulate,
+                poll_interval: &args.poll_interval,
+                step_timeout: &args.step_timeout,
+                gas_multiplier: args.gas_multiplier,
+                max_fee_gwei: args.max_fee_gwei.as_deref().unwrap_or_default(),
+                max_priority_fee_gwei: args.max_priority_fee_gwei.as_deref().unwrap_or_default(),
+                allow_max_approval: args.allow_max_approval,
+                unsafe_provider_tx: args.unsafe_provider_tx,
+                fee_token: args.fee_token.as_deref().unwrap_or_default(),
+            })?;
+
+        // 8. Bounded-approval pre-sign guardrail (with action context).
+        crate::execsubmit::presign_validate_action(&action, &opts)?;
+
+        // 9. Broadcast through the engine (persisting each transition, incl. the
+        //    bridge destination-settlement wait), then emit the terminal-state
+        //    envelope (cache bypassed for execution paths).
+        crate::execsubmit::execute_resolved(&store, &mut action, resolved, opts).await?;
+
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("bridge submit", data, Vec::<ProviderStatus>::new()))
+    }
+
+    /// Handle `bridge status` (Go `statusCmd.RunE`,
+    /// `bridge_execution_commands.go` ~L233-254).
+    ///
+    /// A pure read over the persisted action store: resolve + validate the
+    /// `--action-id`, load the action (not-found → usage `load action`), gate the
+    /// intent (`bridge`-only — [`super::ensure_bridge_intent`]), and emit the
+    /// action verbatim (cache bypassed, spec §2.5). Backend-agnostic — `bridge
+    /// status` never signs.
+    async fn handle_status(ctx: &AppCtx, args: StatusArgs) -> Result<Envelope, Error> {
+        use defi_errors::Code;
+        use defi_model::ProviderStatus;
+
+        let action_id =
+            crate::actions::resolve_action_id(args.action_id.as_deref().unwrap_or_default())?;
+        let store = ctx.open_action_store()?;
+        let action = store
+            .get(&action_id)
+            .map_err(|e| Error::wrap(Code::Usage, "load action", e))?;
+        super::ensure_bridge_intent(&action.intent_type)?;
+        let data = serde_json::to_value(&action)
+            .map_err(|e| Error::wrap(Code::Internal, "serialize action", e))?;
+        Ok(ctx.metadata_envelope("bridge status", data, Vec::<ProviderStatus>::new()))
     }
 
     /// Resolved `bridge quote` flag values after merging structured input.
@@ -2958,6 +3085,1402 @@ mod plan_tests {
             assert_eq!(args.identity.wallet.as_deref(), Some("alice"));
         } else {
             panic!("expected bridge plan");
+        }
+    }
+}
+
+#[cfg(test)]
+mod submit_app_tests {
+    //! # Success criteria — app-level `bridge submit` (WS4, exec-submit)
+    //!
+    //! Go oracle: `internal/app/bridge_execution_commands.go`
+    //! `addBridgeExecutionSubcommands` `submitCmd.RunE` (lines ~163-215). `bridge
+    //! submit` is the **standard-EVM** execution submit (Across / LiFi bridge
+    //! actions are EVM `legacy_local` / `ows` actions — there is NO Tempo bridge
+    //! path, unlike `swap submit`). It loads a persisted bridge action, resolves
+    //! the signing/execution backend from the action's persisted
+    //! `execution_backend` + the submit signer flags, validates the resolved
+    //! sender against `--from-address` and the planned sender, parses the execute
+    //! options (including the `--allow-max-approval` / `--unsafe-provider-tx`
+    //! guardrail opt-ins that bridge submit carries), runs the bounded-approval
+    //! pre-sign guardrail, and broadcasts through the engine — which, for a
+    //! `bridge_send` step, waits for **destination settlement** (Across
+    //! `/deposit/status`, LiFi `/status`) before marking the step confirmed
+    //! (owned by `defi_execution::evm_executor`; the settlement-wait semantics are
+    //! pinned by the sibling `settlement_tests` module). The terminal-state
+    //! envelope is emitted with the cache bypassed (spec §2.5).
+    //!
+    //! Flow parity with the Go `submitCmd.RunE`:
+    //!   1. resolve + validate `--action-id`
+    //!      ([`crate::actions::resolve_action_id`]: empty / malformed → usage);
+    //!   2. load the persisted action (not-found → usage `load action`);
+    //!   3. gate the intent (`bridge`-only — [`super::ensure_bridge_intent`]);
+    //!   4. short-circuit an already-`completed` action (success + warning, no
+    //!      re-broadcast);
+    //!   5. resolve the execution backend + signer
+    //!      ([`crate::execsubmit::resolve_action_execution_backend`]: legacy-local
+    //!      only accepts `--signer local`; OWS requires a persisted `wallet_id`
+    //!      and rejects legacy signer flags). There is NO Tempo bridge branch;
+    //!   6. validate the resolved signer vs `--from-address` + the planned sender
+    //!      ([`crate::execsubmit::validate_execution_sender`]);
+    //!   7. parse the execute options ([`crate::execsubmit::parse_execute_options`]:
+    //!      durations, `--gas-multiplier > 1`, fee flags, the
+    //!      `--allow-max-approval` / `--unsafe-provider-tx` opt-ins);
+    //!   8. run the bounded-approval pre-sign guardrail with the action context
+    //!      ([`crate::execsubmit::presign_validate_action`]);
+    //!   9. broadcast through the engine ([`crate::execsubmit::execute_resolved`]),
+    //!      persisting each transition, and emit the terminal-state envelope.
+    //!
+    //! On every guard/build error the typed [`Error`] is returned (the runner
+    //! renders the full error envelope to stderr) and the persisted action is left
+    //! in its pre-submit state.
+    //!
+    //! Because the Across / LiFi `bridge plan` build path performs an HTTP GET to
+    //! the provider, these fixtures plan offline against a `wiremock` server (the
+    //! `bridge_quote_base` seam, [`AppCtx::with_bridge_base`]); the offline-policed
+    //! engine then confirms the persisted steps WITHOUT dialing a live RPC
+    //! (parity with the `swap`/`approvals` submit suites — the full RPC-backed
+    //! sign/broadcast is exercised by `defi-execution` integration tests). The
+    //! bridge plan stamps the canonical Across settlement endpoint + execution
+    //! target, so a default (bounded) submit passes the bridge pre-sign policy.
+    //!
+    //! Criteria (each maps to a Go `submitCmd.RunE` behavior):
+    //!
+    //!  S1. **Submit success envelope + completion (Across, legacy `--from-address`).**
+    //!      A planned Across bridge action submitted with the deterministic local
+    //!      key completes offline: `version="v1"`, `success=true`, `error=None`,
+    //!      `meta.command="bridge submit"`, `meta.partial=false`, execution-path
+    //!      cache bypass (`status="bypass"`, `age_ms=0`, `stale=false`); `data` is
+    //!      the [`Action`] with `status="completed"` and every step `confirmed`,
+    //!      including the `bridge_send` step.
+    //!  S2. **Submit persists the terminal state.** After a successful submit the
+    //!      action reloads from the [`Store`] with `status="completed"`.
+    //!  S3. **action-id validation.** An empty / malformed `--action-id` is a
+    //!      [`Code::Usage`] error (exit 2) BEFORE any load.
+    //!  S4. **Unknown action → usage load error.** A well-formed but unknown
+    //!      `--action-id` surfaces a [`Code::Usage`] `load action` error (exit 2).
+    //!  S5. **Intent gate (bridge-only).** A persisted NON-`bridge` action (e.g. a
+    //!      `swap` action) submitted through `bridge submit` is a [`Code::Usage`]
+    //!      error (exit 2) `action is not a bridge intent`; the action status is
+    //!      untouched.
+    //!  S6. **Already-completed short-circuit.** A completed action returns success
+    //!      with the `action already completed` warning and no re-broadcast.
+    //!  S7. **Legacy backend rejects a non-local signer.** A `legacy_local` bridge
+    //!      action submitted with `--signer tempo` is a [`Code::Usage`] error
+    //!      (exit 2) `legacy actions only support --signer local`; status untouched.
+    //!  S8. **OWS backend missing `wallet_id` → usage.** An `ows`-backed bridge
+    //!      action with an empty `wallet_id` (and no legacy signer flags) is a
+    //!      [`Code::Usage`] error (exit 2) `wallet-backed action is missing
+    //!      persisted wallet_id`.
+    //!  S9. **OWS backend rejects legacy signer flags.** An `ows`-backed bridge
+    //!      action submitted with an explicit `--private-key` is a [`Code::Usage`]
+    //!      error (exit 2) `wallet-backed actions do not accept legacy signer
+    //!      flags`.
+    //!  S10. **`--from-address` mismatch → signer error.** A resolved signer whose
+    //!      address differs from `--from-address` is a [`Code::Signer`] error
+    //!      (exit 24); status untouched.
+    //!  S11. **Planned-sender / signer mismatch → signer error.** A planned action
+    //!      sender that differs from the resolved signer is a [`Code::Signer`]
+    //!      error (exit 24); status untouched.
+    //!  S12. **execute-option validation.** `--gas-multiplier <= 1`, a non-positive
+    //!      `--poll-interval`, and an unparseable `--step-timeout` are each
+    //!      [`Code::Usage`] errors (exit 2).
+    //!  S13. **Signer init failure (no key) → signer error.** A `legacy_local`
+    //!      action submitted with `--key-source env` and no `--private-key`
+    //!      override is a [`Code::Signer`] error (exit 24); status untouched.
+    //!  S14. **Inflated-approval pre-sign gate + `--allow-max-approval` opt-in.** A
+    //!      bridge action whose leading approval step exceeds `input_amount`
+    //!      (an inflated / max approval — common for Across max approvals) is a
+    //!      [`Code::ActionPlan`] error by default with the documented
+    //!      `--allow-max-approval` hint; the opt-in lets it complete.
+    //!  S15. **Full-binary exit codes.** Via `run_with_args`: malformed
+    //!      `--action-id` → exit 2; well-formed unknown `--action-id` → exit 2.
+    //!
+    //! SKIPPED (owned elsewhere / wrong layer): the destination-settlement
+    //! wait semantics (Across `/deposit/status`, LiFi `/status`) — owned by
+    //! `defi_execution::evm_executor::verify_bridge_settlement`, pinned by the
+    //! sibling `settlement_tests` module; the backend-resolution / sender-validation
+    //! / execute-option / pre-sign internals — `crate::execsubmit` +
+    //! `defi-execution`; the full RPC-backed sign/broadcast byte layout —
+    //! `defi-evm` / `defi-execution` integration tests; JSON field-declaration-order
+    //! rendering — `defi-out` golden tests.
+
+    use super::cli::{handle, BridgeCmd, PlanArgs};
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags, SubmitArgs};
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ActionStatus, ExecutionBackend, StepStatus};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+    use wiremock::matchers::{method, path};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    // --- contract constants ------------------------------------------------
+
+    /// The deterministic secp256k1 test key (`internal/execution/signer`
+    /// `testPrivateKey`); shared with the `defi-evm` / `defi-execution` suites.
+    const TEST_KEY: &str = "59c6995e998f97a5a0044976f0945388cf9b7e5e5f4f9d2d9d8f1f5b7f6d11d1";
+    /// The EIP-55 address `defi-evm` derives for [`TEST_KEY`] (pinned against the
+    /// go-ethereum oracle). A planned action's `from_address` must equal this for
+    /// the local-signer submit to pass the sender-match guard.
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+    /// A DIFFERENT canonical address — used to force the sender-mismatch guards.
+    const OTHER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+
+    // --- harness -----------------------------------------------------------
+
+    /// Execution settings with a real action store under `dir`, cache disabled
+    /// (execution paths bypass the cache anyway, spec §2.5).
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// A `BridgeCmd::Submit` `SubmitArgs` carrying the clap flag DEFAULTS (the
+    /// `#[derive(Default)]` zero values would NOT match the parsed defaults, so
+    /// they are stamped here): `signer=local`, `key_source=auto`,
+    /// `gas_multiplier=1.2`, `poll_interval=2s`, `step_timeout=2m`,
+    /// `simulate=true`, both guardrail opt-ins `false`. The `--private-key` is
+    /// pre-set to the deterministic test key so the offline local-signer path
+    /// resolves. Callers mutate the returned value per test.
+    pub(super) fn base_submit_args(action_id: &str) -> SubmitArgs {
+        SubmitArgs {
+            action_id: Some(action_id.to_string()),
+            from_address: None,
+            allow_max_approval: false,
+            unsafe_provider_tx: false,
+            signer: "local".to_string(),
+            key_source: "auto".to_string(),
+            private_key: Some(TEST_KEY.to_string()),
+            fee_token: None,
+            gas_multiplier: 1.2,
+            max_fee_gwei: None,
+            max_priority_fee_gwei: None,
+            simulate: true,
+            poll_interval: "2s".to_string(),
+            step_timeout: "2m".to_string(),
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Mount the Across `/swap/approval` execution route (one approval txn + the
+    /// swap/bridge txn) on a fresh `MockServer`. The approval txn carries a REAL
+    /// bounded `approve(spender, 1000000)` calldata (selector `0x095ea7b3` +
+    /// 32-byte spender + 32-byte amount == the planned `input_amount`), so the
+    /// default (no `--allow-max-approval`) bounded-approval pre-sign guardrail
+    /// passes and the submit-completion tests exercise the full broadcast path.
+    /// Mirrors the body the `defi-providers` Across builder suite uses and stamps
+    /// the canonical Across execution target so the default submit also passes the
+    /// bridge provider-tx pre-sign policy.
+    async fn across_swap_approval_mock() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/swap/approval"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+                    "approvalTxns": [{
+                        "chainId": 1,
+                        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "data": "0x095ea7b30000000000000000000000005c7bcd6e7de5423a257d81b442095a1a6ced35c500000000000000000000000000000000000000000000000000000000000f4240",
+                        "value": "0"
+                    }],
+                    "swapTx": {
+                        "chainId": 1,
+                        "to": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+                        "data": "0xad5425c6",
+                        "value": "0x0"
+                    },
+                    "minOutputAmount": "990000",
+                    "expectedOutputAmount": "995000",
+                    "expectedFillTime": 5
+                }"#,
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    /// An Across `bridge plan` `PlanArgs` (USDC 1→10, legacy `--from-address`).
+    fn across_plan_args(from_addr: &str) -> PlanArgs {
+        PlanArgs {
+            from: Some("1".to_string()),
+            to: Some("10".to_string()),
+            asset: Some("USDC".to_string()),
+            to_asset: None,
+            provider: Some("across".to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            from_amount_for_gas: None,
+            recipient: None,
+            slippage_bps: 50,
+            rpc_url: None,
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(from_addr.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Plan + persist a canonical Across `bridge` action against `dir`, returning
+    /// its `action_id`. `from_addr` becomes the action's `from_address`. Plans
+    /// through the real `cli::handle` plan path (offline, via the bridge-quote
+    /// base seam) so the persisted shape is identical to production.
+    pub(super) async fn plan_across(dir: &Path, from_addr: &str) -> String {
+        let server = across_swap_approval_mock().await;
+        let ctx = AppCtx::new(exec_settings(dir)).with_bridge_base(&server.uri());
+        let env = handle(&ctx, BridgeCmd::Plan(across_plan_args(from_addr)))
+            .await
+            .expect("plan an across bridge action for the submit fixture");
+        env.data.expect("plan data")["action_id"]
+            .as_str()
+            .expect("action_id")
+            .to_string()
+    }
+
+    /// Persist `action` directly (used for fixtures the plan path cannot build,
+    /// e.g. a `swap`-intent or an OWS-backed action).
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    /// Re-load a persisted action's `status` string from a freshly opened store.
+    fn persisted_status(dir: &Path, action_id: &str) -> String {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let action = store.get(action_id).expect("action retrievable");
+        serde_json::to_value(action.status)
+            .expect("status serializes")
+            .as_str()
+            .expect("status is a string")
+            .to_string()
+    }
+
+    async fn run_submit(dir: &Path, args: SubmitArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, BridgeCmd::Submit(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("submit envelope carries `data`")
+    }
+
+    fn env_with_home() -> (MapEnv, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    // --- S1, S2: submit success + completion + persistence -----------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_across_legacy_local_completes_and_emits_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("legacy-local across bridge submit should complete offline");
+
+        // Envelope contract.
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "bridge submit");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+
+        // Completed action in data; the bridge_send step is confirmed.
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert!(
+            steps
+                .iter()
+                .any(|s| s["type"].as_str() == Some("bridge_send")),
+            "the action must carry a bridge_send step: {steps:?}"
+        );
+        for step in steps {
+            assert_eq!(
+                step["status"],
+                Value::from("confirmed"),
+                "every step must be confirmed after a successful submit: {step:?}"
+            );
+        }
+
+        // Persisted terminal state (criterion S2).
+        assert_eq!(persisted_status(tmp.path(), &action_id), "completed");
+    }
+
+    // --- S3: action-id validation ------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut args = base_submit_args("");
+        args.action_id = Some(String::new());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_xyz");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- S4: load failure for an unknown action ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let args = base_submit_args("act_0123456789abcdef0123456789abcdef");
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- S5: intent gate (bridge-only) -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_bridge_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        // A persisted SWAP-intent action submitted through bridge submit.
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "swap",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let args = base_submit_args(&action.action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-bridge intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("action is not a bridge intent"),
+            "got: {err}"
+        );
+        // Status untouched.
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+    }
+
+    // --- S6: already-completed short-circuit -------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_already_completed_short_circuits_with_warning() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        // Force the persisted action to completed without re-broadcasting.
+        {
+            let store = ActionStore::open(
+                tmp.path().join("actions.db"),
+                tmp.path().join("actions.lock"),
+            )
+            .expect("open store");
+            let mut action = store.get(&action_id).expect("load");
+            action.status = ActionStatus::Completed;
+            store.save(&action).expect("persist completed");
+        }
+
+        let env = run_submit(tmp.path(), base_submit_args(&action_id))
+            .await
+            .expect("already-completed submit returns success without re-broadcast");
+        assert!(env.success);
+        assert_eq!(env.meta.command, "bridge submit");
+        assert!(
+            env.warnings.iter().any(|w| w == "action already completed"),
+            "expected `action already completed` warning, got {:?}",
+            env.warnings
+        );
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+    }
+
+    // --- S7: legacy backend rejects a non-local signer ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_legacy_action_rejects_non_local_signer() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.signer = "tempo".to_string();
+        args.private_key = None; // a non-local signer + private key is a different error
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("legacy action with --signer tempo rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("legacy actions only support --signer local"),
+            "got: {err}"
+        );
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- S8, S9: OWS backend offline guards --------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_missing_wallet_id_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.provider = "across".to_string();
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = String::new();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        // No legacy signer flags (those would trip a different guard first).
+        args.private_key = None;
+        args.signer = "local".to_string();
+        args.key_source = "auto".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS bridge action without wallet_id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed action is missing persisted wallet_id"),
+            "got: {err}"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_ows_action_rejects_legacy_signer_flags() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.provider = "across".to_string();
+        action.execution_backend = Some(ExecutionBackend::Ows);
+        action.wallet_id = "wallet-123".to_string();
+        action.from_address = SIGNER_ADDR.to_string();
+        save_action(tmp.path(), &action);
+
+        let mut args = base_submit_args(&action.action_id);
+        args.private_key = Some(TEST_KEY.to_string()); // explicit legacy flag
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("OWS bridge action with legacy signer flags rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string()
+                .contains("wallet-backed actions do not accept legacy signer flags"),
+            "got: {err}"
+        );
+    }
+
+    // --- S10, S11: sender mismatch -----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_from_address_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Action sender matches the signer, but --from-address is a DIFFERENT addr.
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.from_address = Some(OTHER_ADDR.to_string());
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("--from-address mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        // Signer maps to exit 24 (spec §2.2).
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_planned_sender_signer_mismatch() {
+        let tmp = TempDir::new().expect("tempdir");
+        // Planned action sender is OTHER_ADDR but the local signer is SIGNER_ADDR;
+        // no --from-address supplied.
+        let action_id = plan_across(tmp.path(), OTHER_ADDR).await;
+        let args = base_submit_args(&action_id);
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("planned-sender/signer mismatch rejected");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- S12: execute-option validation ------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_gas_multiplier_not_greater_than_one() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.gas_multiplier = 1.0;
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("gas-multiplier <= 1 rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(err.to_string().contains("gas-multiplier"), "got: {err}");
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_non_positive_poll_interval() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.poll_interval = "0s".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("non-positive poll-interval rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_rejects_unparseable_step_timeout() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        args.step_timeout = "nope".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("unparseable step-timeout rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- S13: signer init failure (no key) ---------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_signer_init_failure_is_signer_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let mut args = base_submit_args(&action_id);
+        // Force an unresolvable key: source=env with no --private-key override.
+        args.private_key = None;
+        args.key_source = "env".to_string();
+        let err = run_submit(tmp.path(), args)
+            .await
+            .expect_err("signer init with no key must fail");
+        assert_eq!(err.code, Code::Signer);
+        assert_eq!(exit_code(&Err(Error::new(err.code, ""))), 24);
+        assert_eq!(persisted_status(tmp.path(), &action_id), "planned");
+    }
+
+    // --- S14: inflated-approval pre-sign gate + --allow-max-approval -------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_inflated_approval_requires_allow_max_approval() {
+        // A bridge action whose leading approval step approves MORE than the
+        // action's input_amount (an inflated / "max" approval — common for Across
+        // routes) must be rejected by the bounded-approval pre-sign guardrail
+        // unless `--allow-max-approval` is set (Go `parseExecuteOptions` +
+        // `presign_validate_action`). Built directly so the approval calldata
+        // encodes an over-bound amount.
+        let tmp = TempDir::new().expect("tempdir");
+        let action = inflated_approval_bridge_action(tmp.path());
+        save_action(tmp.path(), &action);
+
+        // Default submit (no opt-in) → ActionPlan rejection with the hint.
+        let err = run_submit(tmp.path(), base_submit_args(&action.action_id))
+            .await
+            .expect_err("an inflated approval must be rejected without --allow-max-approval");
+        assert_eq!(err.code, Code::ActionPlan);
+        assert!(
+            err.to_string().contains("allow-max-approval"),
+            "the rejection must surface the --allow-max-approval hint: {err}"
+        );
+        // Nothing broadcast → status untouched.
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+
+        // With the opt-in the same action completes offline.
+        let mut args = base_submit_args(&action.action_id);
+        args.allow_max_approval = true;
+        let env = run_submit(tmp.path(), args)
+            .await
+            .expect("--allow-max-approval lets the inflated approval through");
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    /// Build a `bridge` action with a single inflated `approval` step: the ERC-20
+    /// `approve` calldata grants `u128::MAX` while the action `input_amount` is
+    /// `1000000`, so the bounded-approval pre-sign guardrail trips by default. The
+    /// step targets an arbitrary token and carries a (fake but well-formed)
+    /// `rpc_url` so the offline-policed engine can confirm it once the bound check
+    /// passes. No `bridge_send` step is needed (the approval gate runs first).
+    fn inflated_approval_bridge_action(dir: &Path) -> Action {
+        use defi_execution::action::{ActionStep, StepType};
+
+        // approve(spender, u128::MAX) — selector 0x095ea7b3.
+        let spender = "0000000000000000000000005c7bcd6e7de5423a257d81b442095a1a6ced35c5";
+        let max = "00000000000000000000000000000000ffffffffffffffffffffffffffffffff";
+        let approve_data = format!("0x095ea7b3{spender}{max}");
+
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.provider = "across".to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        action.from_address = SIGNER_ADDR.to_string();
+        action.input_amount = "1000000".to_string();
+        action.steps = vec![ActionStep {
+            step_id: "step-1".to_string(),
+            step_type: StepType::Approval,
+            status: StepStatus::Pending,
+            chain_id: "eip155:1".to_string(),
+            rpc_url: format!("{}/rpc", dir.display()),
+            description: String::new(),
+            target: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
+            data: approve_data,
+            value: "0".to_string(),
+            calls: Vec::new(),
+            expected_outputs: None,
+            tx_hash: String::new(),
+            error: String::new(),
+        }];
+        action
+    }
+
+    // --- S15: full-binary exit codes ---------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_full_binary_malformed_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code =
+            run_with_args(["defi", "bridge", "submit", "--action-id", "act_xyz"], &env).await;
+        assert_eq!(
+            code, 2,
+            "malformed --action-id must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_full_binary_unknown_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "bridge",
+                "submit",
+                "--action-id",
+                "act_0123456789abcdef0123456789abcdef",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "well-formed unknown --action-id must be a usage (load) error (exit 2)"
+        );
+    }
+
+    // --- flag parsing: submit defaults + forwarding ------------------------
+
+    #[test]
+    fn bridge_submit_flags_parse_with_defaults() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi",
+            "bridge",
+            "submit",
+            "--action-id",
+            "act_0123456789abcdef0123456789abcdef",
+        ])
+        .expect("bridge submit flags parse");
+        if let crate::cli::TopCommand::Bridge {
+            cmd: BridgeCmd::Submit(args),
+        } = cli.command
+        {
+            assert_eq!(
+                args.action_id.as_deref(),
+                Some("act_0123456789abcdef0123456789abcdef")
+            );
+            // Go defaults: --signer local, --key-source auto, --gas-multiplier 1.2,
+            // --poll-interval 2s, --step-timeout 2m, --simulate true, both
+            // guardrail opt-ins false.
+            assert_eq!(args.signer, "local");
+            assert_eq!(args.key_source, "auto");
+            assert_eq!(args.gas_multiplier, 1.2);
+            assert_eq!(args.poll_interval, "2s");
+            assert_eq!(args.step_timeout, "2m");
+            assert!(args.simulate);
+            assert!(!args.allow_max_approval);
+            assert!(!args.unsafe_provider_tx);
+        } else {
+            panic!("expected bridge submit");
+        }
+    }
+
+    #[test]
+    fn bridge_submit_flags_parse_guardrail_opt_ins() {
+        use clap::Parser;
+        let cli = crate::cli::Cli::try_parse_from([
+            "defi",
+            "bridge",
+            "submit",
+            "--action-id",
+            "act_0123456789abcdef0123456789abcdef",
+            "--allow-max-approval",
+            "--unsafe-provider-tx",
+            "--step-timeout",
+            "5m",
+        ])
+        .expect("bridge submit guardrail flags parse");
+        if let crate::cli::TopCommand::Bridge {
+            cmd: BridgeCmd::Submit(args),
+        } = cli.command
+        {
+            assert!(args.allow_max_approval);
+            assert!(args.unsafe_provider_tx);
+            assert_eq!(args.step_timeout, "5m");
+        } else {
+            panic!("expected bridge submit");
+        }
+    }
+}
+
+#[cfg(test)]
+mod status_app_tests {
+    //! # Success criteria — app-level `bridge status` (WS4, exec-status)
+    //!
+    //! Go oracle: `internal/app/bridge_execution_commands.go`
+    //! `addBridgeExecutionSubcommands` `statusCmd.RunE` (lines ~233-254). `bridge
+    //! status` is a pure READ over the persisted action store: resolve + validate
+    //! the `--action-id`, load the action (not-found → usage `load action`), gate
+    //! the intent (`bridge`-only — [`super::ensure_bridge_intent`]), and emit the
+    //! action verbatim (cache bypassed, spec §2.5). There is NO broadcast and NO
+    //! signer — `bridge status` never signs and is backend-agnostic.
+    //!
+    //! Criteria:
+    //!
+    //!  T1. **Status success envelope + verbatim action.** A planned Across bridge
+    //!      action returns `version="v1"`, `success=true`, `error=None`,
+    //!      `meta.command="bridge status"`, `meta.partial=false`, execution-path
+    //!      cache bypass, and no provider routing (`meta.providers` empty); `data`
+    //!      echoes the [`Action`] (`action_id`, `intent_type="bridge"`,
+    //!      `provider="across"`, `status="planned"`).
+    //!  T2. **Status reflects a completed action.** After a successful `bridge
+    //!      submit`, `bridge status` reports `status="completed"` with the
+    //!      `bridge_send` step `confirmed`.
+    //!  T3. **action-id validation.** An empty / malformed `--action-id` is a
+    //!      [`Code::Usage`] error (exit 2).
+    //!  T4. **Unknown action → usage load error.** A well-formed but unknown
+    //!      `--action-id` surfaces a [`Code::Usage`] `load action` error (exit 2).
+    //!  T5. **Intent gate (bridge-only).** A persisted NON-`bridge` action queried
+    //!      through `bridge status` is a [`Code::Usage`] error (exit 2) `action is
+    //!      not a bridge intent`.
+    //!  T6. **Full-binary exit codes.** Via `run_with_args`: malformed
+    //!      `--action-id` → exit 2; well-formed unknown `--action-id` → exit 2.
+    //!
+    //! SKIPPED (owned elsewhere / wrong layer): the destination-settlement wait
+    //! (Go `bridge status` does NOT poll settlement — settlement is owned by the
+    //! submit-time engine path, pinned by `settlement_tests`); JSON
+    //! field-declaration-order rendering — `defi-out` golden tests.
+
+    use super::cli::{handle, BridgeCmd};
+    use super::submit_app_tests;
+    use crate::cli::run_with_args;
+    use crate::ctx::AppCtx;
+    use crate::execflags::StatusArgs;
+    use defi_config::{MapEnv, Settings};
+    use defi_errors::{exit_code, Code, Error};
+    use defi_execution::action::{Action, ExecutionBackend};
+    use defi_execution::store::Store as ActionStore;
+    use defi_model::Envelope;
+    use serde_json::Value;
+    use std::path::Path;
+    use std::time::Duration;
+    use tempfile::TempDir;
+
+    const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    fn status_args(action_id: &str) -> StatusArgs {
+        StatusArgs {
+            action_id: Some(action_id.to_string()),
+        }
+    }
+
+    async fn run_status(dir: &Path, args: StatusArgs) -> Result<Envelope, Error> {
+        let ctx = AppCtx::new(exec_settings(dir));
+        handle(&ctx, BridgeCmd::Status(args)).await
+    }
+
+    fn usage_exit(err: &Error) -> i32 {
+        exit_code(&Err(Error::new(err.code, "")))
+    }
+
+    fn data_of(env: &Envelope) -> Value {
+        env.data.clone().expect("status envelope carries `data`")
+    }
+
+    fn save_action(dir: &Path, action: &Action) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        store.save(action).expect("persist fixture action");
+    }
+
+    fn env_with_home() -> (MapEnv, TempDir) {
+        let tmp = TempDir::new().expect("tempdir");
+        let env = MapEnv::with_home(tmp.path().to_path_buf());
+        (env, tmp)
+    }
+
+    // --- T1: status success envelope + verbatim action ---------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_emits_success_envelope() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = submit_app_tests::plan_across(tmp.path(), SIGNER_ADDR).await;
+
+        let env = run_status(tmp.path(), status_args(&action_id))
+            .await
+            .expect("bridge status should succeed for a planned bridge action");
+
+        assert_eq!(env.version, "v1");
+        assert!(env.success);
+        assert!(env.error.is_none());
+        assert!(!env.meta.partial);
+        assert_eq!(env.meta.command, "bridge status");
+        assert_eq!(env.meta.cache.status, "bypass");
+        assert_eq!(env.meta.cache.age_ms, 0);
+        assert!(!env.meta.cache.stale);
+        assert!(
+            env.meta.providers.is_empty(),
+            "status does no provider routing"
+        );
+
+        let data = data_of(&env);
+        assert_eq!(data["action_id"], Value::from(action_id.as_str()));
+        assert_eq!(data["intent_type"], Value::from("bridge"));
+        assert_eq!(data["provider"], Value::from("across"));
+        assert_eq!(data["status"], Value::from("planned"));
+    }
+
+    // --- T2: status reflects a completed action ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_reflects_completed_action() {
+        let tmp = TempDir::new().expect("tempdir");
+        let action_id = submit_app_tests::plan_across(tmp.path(), SIGNER_ADDR).await;
+
+        // Submit through the real handler so status reads the post-broadcast state.
+        let ctx = AppCtx::new(exec_settings(tmp.path()));
+        let submit_args = submit_app_tests::base_submit_args(&action_id);
+        handle(&ctx, BridgeCmd::Submit(submit_args))
+            .await
+            .expect("bridge submit should complete offline");
+
+        let env = run_status(tmp.path(), status_args(&action_id))
+            .await
+            .expect("status after submit");
+        let data = data_of(&env);
+        assert_eq!(data["status"], Value::from("completed"));
+        let steps = data["steps"].as_array().expect("steps array");
+        assert!(
+            steps
+                .iter()
+                .any(|s| s["type"].as_str() == Some("bridge_send")
+                    && s["status"].as_str() == Some("confirmed")),
+            "the bridge_send step must be confirmed after submit: {steps:?}"
+        );
+    }
+
+    // --- T3: action-id validation ------------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_empty_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), status_args(""))
+            .await
+            .expect_err("empty action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_malformed_action_id() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(tmp.path(), status_args("act_xyz"))
+            .await
+            .expect_err("malformed action id rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- T4: load failure for an unknown action ----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_unknown_action_is_usage_error() {
+        let tmp = TempDir::new().expect("tempdir");
+        let err = run_status(
+            tmp.path(),
+            status_args("act_0123456789abcdef0123456789abcdef"),
+        )
+        .await
+        .expect_err("unknown action must surface a load (usage) error");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+    }
+
+    // --- T5: intent gate (bridge-only) -------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_rejects_non_bridge_intent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "swap",
+            "eip155:1",
+            Default::default(),
+        );
+        action.from_address = SIGNER_ADDR.to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        save_action(tmp.path(), &action);
+
+        let err = run_status(tmp.path(), status_args(&action.action_id))
+            .await
+            .expect_err("non-bridge intent rejected");
+        assert_eq!(err.code, Code::Usage);
+        assert_eq!(usage_exit(&err), 2);
+        assert!(
+            err.to_string().contains("action is not a bridge intent"),
+            "got: {err}"
+        );
+    }
+
+    // --- T6: full-binary exit codes ----------------------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_full_binary_malformed_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code =
+            run_with_args(["defi", "bridge", "status", "--action-id", "act_xyz"], &env).await;
+        assert_eq!(
+            code, 2,
+            "malformed --action-id must be a usage error (exit 2)"
+        );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn status_full_binary_unknown_action_id_exit_2() {
+        let (env, _home) = env_with_home();
+        let code = run_with_args(
+            [
+                "defi",
+                "bridge",
+                "status",
+                "--action-id",
+                "act_0123456789abcdef0123456789abcdef",
+            ],
+            &env,
+        )
+        .await;
+        assert_eq!(
+            code, 2,
+            "well-formed unknown --action-id must be a usage (load) error (exit 2)"
+        );
+    }
+}
+
+#[cfg(test)]
+mod settlement_tests {
+    //! # Success criteria — `bridge submit` destination-settlement wait (WS4)
+    //!
+    //! Go oracle: `internal/execution/executor.go` `verifyBridgeSettlement` /
+    //! `waitForAcrossSettlement` / `waitForLiFiSettlement` (lines ~500-636), which
+    //! the executor invokes after a `bridge_send` step's source-chain receipt
+    //! confirms (`waitForStepConfirmation` line ~248) so a bridge submit only
+    //! reports `completed` once the DESTINATION has settled. The Rust analogue is
+    //! [`defi_execution::evm_executor::verify_bridge_settlement`] — the engine seam
+    //! the `bridge submit` handler relies on. This module pins the settlement-wait
+    //! contract the handler depends on, driven offline against `wiremock` so no
+    //! live chain/provider is contacted.
+    //!
+    //! These tests build a REAL Across `bridge plan` (so the persisted
+    //! `bridge_send` step carries the exact `settlement_provider` /
+    //! `settlement_status_endpoint` / `settlement_origin_chain` /
+    //! `settlement_destination_chain` metadata the production planner stamps),
+    //! retarget the step's `settlement_status_endpoint` at a `wiremock` server
+    //! (the offline seam), and assert the wait:
+    //!
+    //!  X1. **Across settlement completes on `filled`.** With a mock Across
+    //!      `/deposit/status` returning `{"status":"filled","fillTx":"0x..."}`,
+    //!      [`verify_bridge_settlement`] resolves `Ok(())` and records
+    //!      `settlement_status="filled"` + `destination_tx_hash` on the step (Go
+    //!      `waitForAcrossSettlement` success path). Proves the handler's
+    //!      submit waits for Across destination settlement before `completed`.
+    //!  X2. **Across settlement fails on `refunded`.** A `{"status":"refunded"}`
+    //!      response is a [`Code::Unavailable`] `bridge settlement refunded` error
+    //!      — the submit must NOT report success on a refund.
+    //!  X3. **LiFi settlement completes on `DONE`.** A planned LiFi-provider bridge
+    //!      step whose `settlement_status_endpoint` points at a mock `/status`
+    //!      returning `{"status":"DONE",...}` resolves `Ok(())` and records the
+    //!      destination tx hash (Go `waitForLiFiSettlement` success path).
+    //!  X4. **LiFi settlement fails on `FAILED`.** A `{"status":"FAILED"}` response
+    //!      is a [`Code::Unavailable`] `bridge settlement failed` error.
+    //!
+    //! The provider-specific query-param shaping + response parsing is owned by
+    //! `defi-execution`; here we assert the END-TO-END settlement gate the bridge
+    //! submit relies on, using the metadata a real `bridge plan` produces.
+
+    use super::cli::{handle, BridgeCmd, PlanArgs};
+    use crate::ctx::AppCtx;
+    use crate::execflags::{InputFlags, PlanIdentityFlags};
+    use defi_config::Settings;
+    use defi_errors::Code;
+    use defi_execution::action::{ActionStep, StepType};
+    use defi_execution::evm_executor::verify_bridge_settlement;
+    use defi_execution::ExecuteOptions;
+    use std::path::Path;
+    use std::time::Duration;
+    use wiremock::matchers::method;
+    use wiremock::{Mock, MockServer, ResponseTemplate};
+
+    const SENDER: &str = "0x00000000000000000000000000000000000000aa";
+
+    fn exec_settings(dir: &Path) -> Settings {
+        Settings {
+            output_mode: "json".to_string(),
+            select_fields: Vec::new(),
+            results_only: false,
+            enable_commands: Vec::new(),
+            strict: false,
+            timeout: Duration::from_secs(5),
+            retries: 0,
+            max_stale: Duration::from_secs(0),
+            no_stale: false,
+            cache_enabled: false,
+            cache_path: dir.join("cache.db"),
+            cache_lock_path: dir.join("cache.lock"),
+            action_store_path: dir.join("actions.db"),
+            action_lock_path: dir.join("actions.lock"),
+            defillama_api_key: String::new(),
+            uniswap_api_key: String::new(),
+            oneinch_api_key: String::new(),
+            jupiter_api_key: String::new(),
+            bungee_api_key: String::new(),
+            bungee_affiliate: String::new(),
+        }
+    }
+
+    /// Fast settlement-poll options so the offline loop polls immediately and
+    /// times out quickly instead of waiting the default 2s/2m.
+    fn fast_settlement_opts() -> ExecuteOptions {
+        ExecuteOptions {
+            poll_interval: Duration::from_millis(5),
+            step_timeout: Duration::from_millis(200),
+            gas_multiplier: 1.2,
+            ..ExecuteOptions::default()
+        }
+    }
+
+    /// Across `/swap/approval` execution route (one approval + the swap/bridge
+    /// txn) — drives the offline `bridge plan` build.
+    async fn across_swap_approval_mock() -> MockServer {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"{
+                    "approvalTxns": [{
+                        "chainId": 1,
+                        "to": "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48",
+                        "data": "0x095ea7b3",
+                        "value": "0"
+                    }],
+                    "swapTx": {
+                        "chainId": 1,
+                        "to": "0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5",
+                        "data": "0xad5425c6",
+                        "value": "0x0"
+                    },
+                    "minOutputAmount": "990000",
+                    "expectedOutputAmount": "995000",
+                    "expectedFillTime": 5
+                }"#,
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+        server
+    }
+
+    fn plan_args(provider: &str) -> PlanArgs {
+        PlanArgs {
+            from: Some("1".to_string()),
+            to: Some("10".to_string()),
+            asset: Some("USDC".to_string()),
+            to_asset: None,
+            provider: Some(provider.to_string()),
+            amount: Some("1000000".to_string()),
+            amount_decimal: None,
+            from_amount_for_gas: None,
+            recipient: None,
+            slippage_bps: 50,
+            rpc_url: None,
+            simulate: true,
+            identity: PlanIdentityFlags {
+                wallet: None,
+                from_address: Some(SENDER.to_string()),
+            },
+            input: InputFlags::default(),
+        }
+    }
+
+    /// Plan a real Across bridge action offline and return its persisted
+    /// `bridge_send` step (carrying the production settlement metadata).
+    async fn across_bridge_step(dir: &Path) -> ActionStep {
+        let server = across_swap_approval_mock().await;
+        let ctx = AppCtx::new(exec_settings(dir)).with_bridge_base(&server.uri());
+        let env = handle(&ctx, BridgeCmd::Plan(plan_args("across")))
+            .await
+            .expect("across bridge plan for settlement fixture");
+        let action: defi_execution::action::Action =
+            serde_json::from_value(env.data.expect("plan data")).expect("deserialize action");
+        action
+            .steps
+            .into_iter()
+            .find(|s| s.step_type == StepType::Bridge)
+            .expect("planned action carries a bridge_send step")
+    }
+
+    // --- X1: Across settlement completes on `filled` -----------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn across_settlement_completes_on_filled() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut step = across_bridge_step(tmp.path()).await;
+
+        // Retarget the settlement status endpoint at the offline mock.
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"status":"filled","fillTx":"0xdestination"}"#),
+            )
+            .mount(&server)
+            .await;
+        set_settlement_endpoint(&mut step, &server.uri());
+
+        verify_bridge_settlement(&mut step, "0xsourcehash", &fast_settlement_opts())
+            .await
+            .expect("across destination settlement should complete on `filled`");
+
+        let outs = step.expected_outputs.as_ref().expect("settlement outputs");
+        assert_eq!(
+            outs.get("settlement_status").and_then(|v| v.as_str()),
+            Some("filled")
+        );
+        assert_eq!(
+            outs.get("destination_tx_hash").and_then(|v| v.as_str()),
+            Some("0xdestination")
+        );
+    }
+
+    // --- X2: Across settlement fails on `refunded` -------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn across_settlement_fails_on_refunded() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let mut step = across_bridge_step(tmp.path()).await;
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200)
+                    .set_body_string(r#"{"status":"refunded","depositRefundTxHash":"0xrefund"}"#),
+            )
+            .mount(&server)
+            .await;
+        set_settlement_endpoint(&mut step, &server.uri());
+
+        let err = verify_bridge_settlement(&mut step, "0xsourcehash", &fast_settlement_opts())
+            .await
+            .expect_err("a refunded Across settlement must fail the submit");
+        assert_eq!(err.code, Code::Unavailable);
+        assert!(
+            err.to_string().contains("refunded"),
+            "expected a refunded settlement error, got: {err}"
+        );
+    }
+
+    // --- X3: LiFi settlement completes on `DONE` ---------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifi_settlement_completes_on_done() {
+        // Build a LiFi-flavored bridge step directly (the LiFi plan build needs a
+        // source-chain allowance RPC; here only the settlement metadata matters).
+        let mut step = lifi_bridge_step();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(ResponseTemplate::new(200).set_body_string(
+                r#"{"status":"DONE","substatus":"COMPLETED","receiving":{"txHash":"0xdestination"}}"#,
+            ))
+            .mount(&server)
+            .await;
+        set_settlement_endpoint(&mut step, &server.uri());
+
+        verify_bridge_settlement(&mut step, "0xsourcehash", &fast_settlement_opts())
+            .await
+            .expect("lifi destination settlement should complete on `DONE`");
+
+        let outs = step.expected_outputs.as_ref().expect("settlement outputs");
+        assert_eq!(
+            outs.get("settlement_status").and_then(|v| v.as_str()),
+            Some("DONE")
+        );
+        assert_eq!(
+            outs.get("destination_tx_hash").and_then(|v| v.as_str()),
+            Some("0xdestination")
+        );
+    }
+
+    // --- X4: LiFi settlement fails on `FAILED` -----------------------------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn lifi_settlement_fails_on_failed() {
+        let mut step = lifi_bridge_step();
+
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .respond_with(
+                ResponseTemplate::new(200).set_body_string(
+                    r#"{"status":"FAILED","substatusMessage":"bridge route failed"}"#,
+                ),
+            )
+            .mount(&server)
+            .await;
+        set_settlement_endpoint(&mut step, &server.uri());
+
+        let err = verify_bridge_settlement(&mut step, "0xsourcehash", &fast_settlement_opts())
+            .await
+            .expect_err("a FAILED LiFi settlement must fail the submit");
+        assert_eq!(err.code, Code::Unavailable);
+        assert!(
+            err.to_string().contains("bridge settlement failed"),
+            "expected a failed settlement error, got: {err}"
+        );
+    }
+
+    // --- helpers -----------------------------------------------------------
+
+    /// Overwrite the step's `settlement_status_endpoint` so the offline poll hits
+    /// the wiremock server instead of the canonical live settlement URL.
+    fn set_settlement_endpoint(step: &mut ActionStep, endpoint: &str) {
+        let outs = step.expected_outputs.get_or_insert_with(Default::default);
+        outs.insert(
+            "settlement_status_endpoint".to_string(),
+            serde_json::Value::String(endpoint.to_string()),
+        );
+    }
+
+    /// A minimal LiFi `bridge_send` step carrying the LiFi settlement metadata a
+    /// LiFi `bridge plan` stamps (`settlement_provider="lifi"`).
+    fn lifi_bridge_step() -> ActionStep {
+        use defi_execution::action::StepStatus;
+        let mut outs = serde_json::Map::new();
+        outs.insert("settlement_provider".into(), "lifi".into());
+        ActionStep {
+            step_id: "step-bridge".to_string(),
+            step_type: StepType::Bridge,
+            status: StepStatus::Submitted,
+            chain_id: "eip155:1".to_string(),
+            rpc_url: String::new(),
+            description: String::new(),
+            target: "0x1231DeB6f5749EF6Ce6943a275A1D3E7486F4EaE".to_string(),
+            data: "0x1234".to_string(),
+            value: "0x0".to_string(),
+            calls: Vec::new(),
+            expected_outputs: Some(outs),
+            tx_hash: String::new(),
+            error: String::new(),
         }
     }
 }
