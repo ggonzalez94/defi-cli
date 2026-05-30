@@ -48,6 +48,7 @@ alloy = { version = "2", features = [
     "network",
     "json-abi",
 ] }
+alloy-rlp = "0.3"
 ruint = "1"
 num-bigint = "0.4"
 hex = "0.4"

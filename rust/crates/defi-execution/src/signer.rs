@@ -421,12 +421,23 @@ pub struct TempoCall {
     pub data: Vec<u8>,
 }
 
+/// The Tempo transaction type prefix byte (`0x76`).
+///
+/// Parity with tempo-go `encodeWithPrefix` (prefix `"76"` for `FormatNormal`).
+/// The signed/serialized bytes that go to `eth_sendRawTransaction` are
+/// `0x76 || rlp([...])`.
+pub const TEMPO_TX_TYPE: u8 = 0x76;
+
 /// An (optionally signed) Tempo type-0x76 transaction.
 ///
-/// A builder for the Tempo batched-call transaction; the fields mirror the
-/// EIP-1559-style fee model tempo-go uses plus an ordered call list. The exact
-/// RLP byte layout is owned by [`crate::tempo_executor`]; this type carries the
-/// fields the [`TempoWalletSigner`] needs to produce a recoverable signature.
+/// A builder for the Tempo batched-call transaction. The fields and their RLP
+/// layout mirror tempo-go's `transaction.Tx` byte-for-byte (the on-wire format
+/// owned by `tempoxyz/tempo-go/pkg/transaction`), so [`Self::serialize`] and
+/// [`Self::signing_hash`] reproduce tempo-go's `Serialize` / `GetSignPayload`
+/// exactly. Self-paid (no fee payer) transactions only: `nonceKey`,
+/// `validBefore`, `validAfter` default to 0, `accessList` and the
+/// `authorizationList` are always empty, and the `feePayerSignatureOrSender`
+/// field is the empty byte-string.
 #[derive(Debug, Clone)]
 pub struct TempoTx {
     /// EIP-155 chain id the signature is bound to.
@@ -441,6 +452,8 @@ pub struct TempoTx {
     pub gas: u64,
     /// The ordered batched calls (`approve` + `swap` are atomic in one tx).
     pub calls: Vec<TempoCall>,
+    /// The stablecoin fee-token address (`U256::ZERO`/`Address::ZERO` → native).
+    pub fee_token: Address,
     /// The attached signature (`None` until signed).
     signature: Option<Signature>,
 }
@@ -455,6 +468,7 @@ impl TempoTx {
             max_fee_per_gas: 0,
             gas: 0,
             calls: Vec::new(),
+            fee_token: Address::ZERO,
             signature: None,
         }
     }
@@ -483,6 +497,12 @@ impl TempoTx {
         self
     }
 
+    /// Set the stablecoin fee token (builder style). [`Address::ZERO`] → native.
+    pub fn fee_token(mut self, token: Address) -> Self {
+        self.fee_token = token;
+        self
+    }
+
     /// Append a batched call (builder style).
     pub fn add_call(mut self, to: Address, value: U256, data: Vec<u8>) -> Self {
         self.calls.push(TempoCall { to, value, data });
@@ -495,30 +515,86 @@ impl TempoTx {
         self.signature.is_some()
     }
 
-    /// The 32-byte keccak256 signing hash over the transaction fields.
+    /// Encode the RLP field list (excluding the trailing signature envelope),
+    /// parity with tempo-go `buildRLPList` for a self-paid normal-format tx.
     ///
-    /// Deterministic for a given tx (so signing is reproducible). The chain id is
-    /// folded in for replay protection, matching the EIP-155 binding property the
-    /// Go `transaction.SignTransaction` carries. The exact tempo-go byte layout
-    /// is owned by [`crate::tempo_executor`]; here the only contract is a stable,
-    /// chain-bound digest that recovers to the signing-key EOA.
+    /// The 13 sender-payload fields, in tempo-go declaration order:
+    /// `[chainId, maxPriorityFeePerGas, maxFeePerGas, gas, calls, accessList,
+    /// nonceKey, nonce, validBefore, validAfter, feeToken,
+    /// feePayerSignatureOrSender, authorizationList]`.
+    fn encode_field_payload(&self, out: &mut Vec<u8>) {
+        // 0: chainId
+        encode_uint_bytes(self.chain_id as u128, out);
+        // 1: maxPriorityFeePerGas
+        encode_uint_bytes(self.max_priority_fee_per_gas, out);
+        // 2: maxFeePerGas
+        encode_uint_bytes(self.max_fee_per_gas, out);
+        // 3: gas
+        encode_uint_bytes(self.gas as u128, out);
+        // 4: calls = [[to, value, data], ...]
+        encode_calls(&self.calls, out);
+        // 5: accessList (always empty)
+        encode_empty_list(out);
+        // 6: nonceKey (always 0 → empty)
+        encode_uint_bytes(0, out);
+        // 7: nonce
+        encode_uint_bytes(self.nonce as u128, out);
+        // 8: validBefore (always 0 → empty)
+        encode_uint_bytes(0, out);
+        // 9: validAfter (always 0 → empty)
+        encode_uint_bytes(0, out);
+        // 10: feeToken (20 bytes, or empty when zero/native)
+        encode_fee_token(self.fee_token, out);
+        // 11: feePayerSignatureOrSender (empty byte-string, no fee payer)
+        encode_bytes(&[], out);
+        // 12: authorizationList (always empty)
+        encode_empty_list(out);
+    }
+
+    /// The keccak256 signing hash over `0x76 || rlp([13 sender fields])`,
+    /// parity with tempo-go `GetSignPayload` (`SerializeForSigning` → strips the
+    /// signature → `Serialize(ForSigning, FormatNormal)` → `ComputeHash`).
+    ///
+    /// Self-paid only, so `SerializeForSigning` includes `feeToken` and the
+    /// `feePayerSignatureOrSender` field is the empty byte-string.
     fn signing_hash(&self) -> alloy::primitives::B256 {
-        let mut buf: Vec<u8> = Vec::new();
-        // Domain separator so a Tempo digest never collides with another scheme.
-        buf.extend_from_slice(b"tempo-tx-0x76");
-        buf.extend_from_slice(&self.chain_id.to_be_bytes());
-        buf.extend_from_slice(&self.nonce.to_be_bytes());
-        buf.extend_from_slice(&self.max_priority_fee_per_gas.to_be_bytes());
-        buf.extend_from_slice(&self.max_fee_per_gas.to_be_bytes());
-        buf.extend_from_slice(&self.gas.to_be_bytes());
-        buf.extend_from_slice(&(self.calls.len() as u64).to_be_bytes());
-        for call in &self.calls {
-            buf.extend_from_slice(&call.to.as_bytes());
-            buf.extend_from_slice(&call.value.to_be_bytes::<32>());
-            buf.extend_from_slice(&(call.data.len() as u64).to_be_bytes());
-            buf.extend_from_slice(&call.data);
-        }
-        keccak256(&buf)
+        let mut payload: Vec<u8> = Vec::new();
+        self.encode_field_payload(&mut payload);
+
+        let mut wire: Vec<u8> = Vec::with_capacity(1 + payload.len() + 9);
+        wire.push(TEMPO_TX_TYPE);
+        encode_list_header(payload.len(), &mut wire);
+        wire.extend_from_slice(&payload);
+        keccak256(&wire)
+    }
+
+    /// The signed, broadcast-ready bytes: `0x76 || rlp([14 fields])`, parity with
+    /// tempo-go `Serialize(tx, nil)` for a signed self-paid tx.
+    ///
+    /// Appends the secp256k1 signature envelope (a 65-byte `r||s||yParity` string)
+    /// as the 14th RLP field. Errors if the tx is unsigned (typed [`Code::Signer`]).
+    pub fn serialize(&self) -> Result<Vec<u8>, Error> {
+        let sig = self
+            .signature
+            .ok_or_else(|| Error::new(Code::Signer, "tempo tx is not signed"))?;
+
+        let mut payload: Vec<u8> = Vec::new();
+        self.encode_field_payload(&mut payload);
+        // 13: signatureEnvelope — secp256k1 raw 65 bytes (r||s||yParity), encoded
+        // as an RLP byte-string (`b841 || 65 bytes`).
+        encode_bytes(&sig.as_rsy(), &mut payload);
+
+        let mut wire: Vec<u8> = Vec::with_capacity(1 + payload.len() + 9);
+        wire.push(TEMPO_TX_TYPE);
+        encode_list_header(payload.len(), &mut wire);
+        wire.extend_from_slice(&payload);
+        Ok(wire)
+    }
+
+    /// The on-chain transaction hash: `keccak256(serialize())`, parity with
+    /// tempo-go `ComputeHash(Serialize(tx, nil))`. Errors if the tx is unsigned.
+    pub fn tx_hash(&self) -> Result<[u8; 32], Error> {
+        Ok(keccak256(self.serialize()?).0)
     }
 
     /// Recover the signing address from the attached signature.
@@ -534,6 +610,91 @@ impl TempoTx {
             .map(Address::from)
             .map_err(|e| Error::wrap(Code::Signer, "recover tempo signer", msg_cause(e)))
     }
+}
+
+// =============================================================================
+// Tempo type-0x76 RLP encoding helpers.
+//
+// These reproduce tempo-go's `serialize.go` encoding rules byte-for-byte over
+// `alloy_rlp` primitives:
+//   - `bigIntToBytes`/`uint64ToBytes`: minimal big-endian, empty for 0.
+//   - byte-strings: the standard RLP rule (single byte < 0x80 → itself; empty →
+//     0x80; else header + payload) via `alloy_rlp`'s `[u8]` `Encodable`.
+//   - lists: an explicit list header over the concatenated child payload.
+// =============================================================================
+
+/// Encode an unsigned integer as an RLP byte-string with minimal big-endian
+/// bytes (empty for 0), parity with tempo-go `bigIntToBytes`/`uint64ToBytes`.
+fn encode_uint_bytes(v: u128, out: &mut Vec<u8>) {
+    if v == 0 {
+        encode_bytes(&[], out);
+        return;
+    }
+    let be = v.to_be_bytes();
+    let start = be.iter().position(|&b| b != 0).unwrap_or(be.len());
+    encode_bytes(&be[start..], out);
+}
+
+/// Encode raw bytes as an RLP byte-string (standard single-byte/empty/header
+/// rules), via `alloy_rlp`'s `[u8]` `Encodable`.
+fn encode_bytes(bytes: &[u8], out: &mut Vec<u8>) {
+    alloy_rlp::Encodable::encode(bytes, out);
+}
+
+/// Encode the fee-token field: 20 address bytes when set, empty when zero
+/// (native), parity with tempo-go `encodeFeeToken`.
+fn encode_fee_token(token: Address, out: &mut Vec<u8>) {
+    if token.is_zero() {
+        encode_bytes(&[], out);
+    } else {
+        encode_bytes(&token.as_bytes(), out);
+    }
+}
+
+/// Encode the calls field as `[[to, value, data], ...]`, parity with tempo-go
+/// `encodeCalls` (each call a 3-tuple of byte-strings).
+fn encode_calls(calls: &[TempoCall], out: &mut Vec<u8>) {
+    let mut payload: Vec<u8> = Vec::new();
+    for call in calls {
+        let mut tuple: Vec<u8> = Vec::new();
+        // 0: to (20 bytes; empty for contract creation, unused here)
+        encode_bytes(&call.to.as_bytes(), &mut tuple);
+        // 1: value (minimal big-endian, empty for 0)
+        encode_u256_bytes(call.value, &mut tuple);
+        // 2: data (raw bytes)
+        encode_bytes(&call.data, &mut tuple);
+
+        encode_list_header(tuple.len(), &mut payload);
+        payload.extend_from_slice(&tuple);
+    }
+    encode_list_header(payload.len(), out);
+    out.extend_from_slice(&payload);
+}
+
+/// Encode a [`U256`] call value as an RLP byte-string with minimal big-endian
+/// bytes (empty for 0), parity with tempo-go `(*big.Int).Bytes()`.
+fn encode_u256_bytes(v: U256, out: &mut Vec<u8>) {
+    if v.is_zero() {
+        encode_bytes(&[], out);
+        return;
+    }
+    let be = v.to_be_bytes::<32>();
+    let start = be.iter().position(|&b| b != 0).unwrap_or(be.len());
+    encode_bytes(&be[start..], out);
+}
+
+/// Write an RLP list header for a payload of `payload_len` bytes.
+fn encode_list_header(payload_len: usize, out: &mut Vec<u8>) {
+    alloy_rlp::Header {
+        list: true,
+        payload_length: payload_len,
+    }
+    .encode(out);
+}
+
+/// Encode an empty RLP list (`0xc0`).
+fn encode_empty_list(out: &mut Vec<u8>) {
+    encode_list_header(0, out);
 }
 
 /// A Tempo smart-wallet signer: a signing-key EOA whose on-chain sender is a
@@ -1104,5 +1265,199 @@ mod tests {
         // E5.
         let err = tempo_signer_from_whoami("{not json").unwrap_err();
         assert!(!err.to_string().is_empty());
+    }
+
+    // ===================================================================
+    // G. Tempo type-0x76 on-wire byte parity vs `tempo-go` (WS4a)
+    // ===================================================================
+    //
+    // The reference bytes below were produced by a `tempo-go v0.3.0` oracle
+    // (`tempoxyz/tempo-go/pkg/transaction.{GetSignPayload,SignTransaction,
+    // Serialize,ComputeHash}`) for the fixed inputs in each case. secp256k1
+    // signing is deterministic (RFC 6979) and low-S canonical in both
+    // go-ethereum (`crypto.Sign`) and alloy (`k256`), so the signed bytes —
+    // including `r`, `s`, and `yParity` — are reproducible and safe to pin.
+    //
+    // This is the byte-for-byte parity gate that pins the Rust [`TempoTx`] RLP
+    // layout, signing hash, signature-envelope encoding, and tx hash against
+    // tempo-go. It supersedes the prior bespoke domain-separated digest.
+
+    /// Hardhat account #0 key — the key `tempo_executor_test.go` and the
+    /// `tempo-go` oracle program both use.
+    const HARDHAT_KEY: &str = "ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+
+    /// One fixed `tempo-go` reference vector.
+    struct TempoVector {
+        chain_id: u64,
+        nonce: u64,
+        gas: u64,
+        max_priority_fee_per_gas: u128,
+        max_fee_per_gas: u128,
+        fee_token: &'static str, // "" → native (zero) fee token
+        /// `(to, decimal_value, data_hex)` calls in order.
+        calls: &'static [(&'static str, &'static str, &'static str)],
+        signing_hash_hex: &'static str,
+        signed_serialized_hex: &'static str,
+        tx_hash_hex: &'static str,
+    }
+
+    fn build_tx(v: &TempoVector) -> TempoTx {
+        let mut tx = TempoTx::new(v.chain_id)
+            .gas(v.gas)
+            .max_fee_per_gas(v.max_fee_per_gas)
+            .max_priority_fee_per_gas(v.max_priority_fee_per_gas)
+            .nonce(v.nonce);
+        if !v.fee_token.is_empty() {
+            tx = tx.fee_token(defi_evm::address::parse(v.fee_token).expect("fee token"));
+        }
+        for (to, value, data) in v.calls {
+            let to = defi_evm::address::parse(to).expect("call to");
+            let value = U256::from_str_radix(value, 10).expect("call value");
+            let data = hex::decode(data.trim_start_matches("0x")).expect("call data");
+            tx = tx.add_call(to, value, data);
+        }
+        tx
+    }
+
+    /// The fixed `tempo-go` golden vectors (captured offline; see header).
+    const TEMPO_VECTORS: &[TempoVector] = &[
+        // 1: batched approve+swap, AlphaUSD fee token, chain 4217, nonce 7.
+        TempoVector {
+            chain_id: 4217,
+            nonce: 7,
+            gas: 120_000,
+            max_priority_fee_per_gas: 100_000_000,
+            max_fee_per_gas: 1_500_000_000,
+            fee_token: "0x20c0000000000000000000000000000000000001",
+            calls: &[
+                ("0x00000000000000000000000000000000000000bb", "0", "0xabcdef"),
+                (
+                    "0xdec0000000000000000000000000000000000000",
+                    "1000",
+                    "0x12345678",
+                ),
+            ],
+            signing_hash_hex:
+                "0xb224a6ae8f3733980423d386628f3cfa020b2bd5f35b45dcc4ed687d8977268f",
+            signed_serialized_hex:
+                "0x76f8ab8210798405f5e1008459682f008301d4c0f839da9400000000000000000000000000000000000000bb8083abcdefdd94dec00000000000000000000000000000000000008203e88412345678c0800780809420c000000000000000000000000000000000000180c0b841c3fa895ec3931398c74719538a63ab2ba569b2a2188db5e5211a65da3945c237544e1a71b40bb10164c2ffa477a7e44183594f0af3644865daac177c01a7d64b00",
+            tx_hash_hex:
+                "0x05ce203b9f8b60690407c919f6625a4b16538bef9b5fd807b895fdf214083568",
+        },
+        // 2: single call, empty data, zero (native) fee token, chain 4217, nonce 0.
+        TempoVector {
+            chain_id: 4217,
+            nonce: 0,
+            gas: 21_000,
+            max_priority_fee_per_gas: 0,
+            max_fee_per_gas: 1_000_000_000,
+            fee_token: "",
+            calls: &[("0x5555555555555555555555555555555555555555", "0", "0x")],
+            signing_hash_hex:
+                "0xd7d01c5776031839c6cbe640b64e505f45f8f192211e4d3e650aebe36aad701f",
+            signed_serialized_hex:
+                "0x76f87082107980843b9aca00825208d8d79455555555555555555555555555555555555555558080c0808080808080c0b8418ab4adf434ed3e81862f456e5cb6e6df49fcd87345eb37aade939ab5dcb3996513b670bf49fcc9415748e528a5513b3718972901743cbb161c7b178c2a70636d01",
+            tx_hash_hex:
+                "0x22cbb02db622fa66cbc813e5558930d93088a48699cc8f4f13a239b78ed5efff",
+        },
+        // 3: single call with value, large nonce, moderato chain 42431.
+        TempoVector {
+            chain_id: 42431,
+            nonce: 1_000_000,
+            gas: 500_000,
+            max_priority_fee_per_gas: 2_000_000_000,
+            max_fee_per_gas: 3_000_000_000,
+            fee_token: "0x20c0000000000000000000000000000000000001",
+            calls: &[(
+                "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+                "123456789",
+                "0xdeadbeef",
+            )],
+            signing_hash_hex:
+                "0x0b1d773c4e5e03858a0879f92de93fa5669003d1f88cda219bf96f112c164fa9",
+            signed_serialized_hex:
+                "0x76f89482a5bf847735940084b2d05e008307a120e0df94abcdefabcdefabcdefabcdefabcdefabcdefabcd84075bcd1584deadbeefc080830f424080809420c000000000000000000000000000000000000180c0b8411faedd6b9c7dcd481ca66fff3a997b5687f0341e8dcd6053b84fa22b0f3f328452dc77716104dc188099cb9041f4f6147c94da842d15fb3641bf789441bf52cf00",
+            tx_hash_hex:
+                "0x0b5a843240419d81ae7d08647fc06d9455d42fedcd6df86c27c1a5cdee422f3c",
+        },
+    ];
+
+    #[test]
+    fn tempo_signing_hash_matches_tempo_go_oracle() {
+        // G1: the sender signing payload hash (`0x76 || rlp(13 fields)`) is
+        // byte-identical to tempo-go `GetSignPayload`. This pins the unsigned
+        // RLP layout independent of signing.
+        for v in TEMPO_VECTORS {
+            let tx = build_tx(v);
+            let got = format!("0x{}", hex::encode(tx.signing_hash().0));
+            assert_eq!(
+                got, v.signing_hash_hex,
+                "signing-hash parity drift for chain {} nonce {}",
+                v.chain_id, v.nonce
+            );
+        }
+    }
+
+    #[test]
+    fn tempo_serialized_bytes_match_tempo_go_oracle() {
+        // G2: the signed, broadcast-ready bytes (`0x76 || rlp(14 fields)`,
+        // including the secp256k1 signature envelope) are byte-identical to
+        // tempo-go `Serialize(tx, nil)`. This is the on-wire parity gate.
+        let wallet = wallet_addr("0x1111111111111111111111111111111111111111");
+        for v in TEMPO_VECTORS {
+            let signer = TempoWalletSigner::new(wallet, HARDHAT_KEY).expect("signer");
+            let mut tx = build_tx(v);
+            signer.sign_tempo_tx(&mut tx).expect("sign");
+
+            let got = format!("0x{}", hex::encode(tx.serialize().expect("serialize")));
+            assert_eq!(
+                got, v.signed_serialized_hex,
+                "serialized-byte parity drift for chain {} nonce {}",
+                v.chain_id, v.nonce
+            );
+        }
+    }
+
+    #[test]
+    fn tempo_tx_hash_matches_tempo_go_oracle() {
+        // G3: the on-chain tx hash (`keccak256(serialize())`) is byte-identical
+        // to tempo-go `ComputeHash(Serialize(tx, nil))`.
+        let wallet = wallet_addr("0x2222222222222222222222222222222222222222");
+        for v in TEMPO_VECTORS {
+            let signer = TempoWalletSigner::new(wallet, HARDHAT_KEY).expect("signer");
+            let mut tx = build_tx(v);
+            signer.sign_tempo_tx(&mut tx).expect("sign");
+
+            let got = format!("0x{}", hex::encode(tx.tx_hash().expect("tx hash")));
+            assert_eq!(
+                got, v.tx_hash_hex,
+                "tx-hash parity drift for chain {} nonce {}",
+                v.chain_id, v.nonce
+            );
+        }
+    }
+
+    #[test]
+    fn tempo_signature_recovers_to_key_after_real_layout() {
+        // G4: with the real tempo-go signing hash, the attached signature still
+        // recovers to the signing-key EOA (the property the smart-wallet sender
+        // path relies on). Guards against a hash/recovery mismatch.
+        let wallet = wallet_addr("0x3333333333333333333333333333333333333333");
+        let signer = TempoWalletSigner::new(wallet, HARDHAT_KEY).expect("signer");
+        let mut tx = build_tx(&TEMPO_VECTORS[0]);
+        signer.sign_tempo_tx(&mut tx).expect("sign");
+        assert_eq!(
+            tx.recover_signer().expect("recover").to_hex(),
+            signer.address().to_hex()
+        );
+    }
+
+    #[test]
+    fn tempo_serialize_unsigned_is_signer_error() {
+        // Serializing/hashing an unsigned tx is a typed Signer error (no panic).
+        let tx = build_tx(&TEMPO_VECTORS[0]);
+        assert_eq!(tx.serialize().unwrap_err().code, Code::Signer);
+        assert_eq!(tx.tx_hash().unwrap_err().code, Code::Signer);
+        assert_eq!(tx.recover_signer().unwrap_err().code, Code::Signer);
     }
 }

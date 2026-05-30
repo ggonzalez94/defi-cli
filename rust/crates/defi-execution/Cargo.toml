@@ -29,6 +29,7 @@ tokio = { workspace = true }
 rusqlite = { workspace = true }
 fd-lock = { workspace = true }
 alloy = { workspace = true }
+alloy-rlp = { workspace = true }
 rand = { workspace = true }
 hex = { workspace = true }
 reqwest = { workspace = true }

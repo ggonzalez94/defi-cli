@@ -1603,6 +1603,7 @@ name = "defi-execution"
 version = "0.5.0"
 dependencies = [
  "alloy",
+ "alloy-rlp",
  "async-trait",
  "chrono",
  "defi-cache",
