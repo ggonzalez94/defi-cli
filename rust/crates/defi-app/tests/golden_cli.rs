@@ -16,11 +16,11 @@
 //!     even under `--results-only` (the two `error-usage-missing-asset*`
 //!     fixtures are byte-identical, encoding that invariant).
 //!
-//! NOTE: the `schema` command's whole-document golden parity is intentionally
-//! NOT asserted here — wiring the full 19-command schema tree is deferred
-//! integration work (see the `schema` module's documented deferral + the
-//! remainder plan). Per-node parity for `version`/`schema` is covered by the
-//! `defi-app::schema` unit tests.
+//! The `schema` command's whole-document byte parity (WS6) IS asserted here:
+//! `defi schema` stdout must equal the full `schema.json` golden byte-for-byte
+//! after normalizing only the two volatile envelope fields (`request_id`,
+//! `timestamp`) at the string level. Per-node + scoped-subtree parity is also
+//! covered by the `defi-app::schema` unit tests.
 
 use std::path::PathBuf;
 use std::process::{Command, Output};
@@ -376,6 +376,80 @@ fn json_uses_two_space_indent_and_declaration_field_order() {
     let stderr = String::from_utf8(err_out.stderr).expect("utf8");
     assert!(stderr.contains("\"type\": \"usage_error\""));
     assert!(!stderr.contains("error_type"));
+}
+
+// ---------------------------------------------------------------------------
+// schema — whole-document byte parity (WS6).
+// ---------------------------------------------------------------------------
+
+/// String-level normalize the two volatile envelope fields so two captures of
+/// the same envelope compare byte-for-byte. Operates on the raw rendered text
+/// (NOT a parsed `Value`) so formatting/ordering differences are NOT masked.
+fn normalize_volatile_lines(text: &str) -> String {
+    text.lines()
+        .map(|line| {
+            let trimmed = line.trim_start();
+            if trimmed.starts_with("\"request_id\":") {
+                let indent = &line[..line.len() - trimmed.len()];
+                format!("{indent}\"request_id\": \"<request_id>\",")
+            } else if trimmed.starts_with("\"timestamp\":") {
+                let indent = &line[..line.len() - trimmed.len()];
+                format!("{indent}\"timestamp\": \"<timestamp>\",")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+#[test]
+fn schema_whole_document_matches_golden_byte_for_byte() {
+    let out = run(&["schema"]);
+    assert_eq!(out.status.code(), Some(0), "schema exits 0");
+    assert!(out.stderr.is_empty(), "schema writes nothing to stderr");
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+
+    let got = normalize_volatile_lines(stdout.trim_end_matches('\n'));
+    let golden = read_golden("schema");
+    let want = normalize_volatile_lines(golden.trim_end_matches('\n'));
+
+    assert_eq!(
+        got, want,
+        "`defi schema` must match the full Go golden schema.json byte-for-byte \
+         (after request_id/timestamp normalization)"
+    );
+}
+
+#[test]
+fn schema_scoped_path_matches_golden_subtree() {
+    // A scoped path returns exactly that node's subtree as the envelope `data`.
+    let out = run(&["schema", "lend", "supply", "plan"]);
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("schema envelope JSON");
+    let data = &v["data"];
+    assert_eq!(data["path"], Value::from("defi lend supply plan"));
+    assert_eq!(data["use"], Value::from("plan"));
+    assert_eq!(data["mutation"], Value::Bool(true));
+    // Bypass cache (metadata command).
+    assert_eq!(v["meta"]["cache"]["status"], Value::from("bypass"));
+}
+
+#[test]
+fn schema_unknown_path_is_wrapped_usage_error_on_stderr() {
+    let out = run(&["schema", "nope"]);
+    assert_eq!(out.status.code(), Some(2), "unknown schema path exits 2");
+    assert!(out.stdout.is_empty(), "error goes to stderr, not stdout");
+    let stderr = String::from_utf8(out.stderr).expect("utf8");
+    let v: Value = serde_json::from_str(&stderr).expect("error envelope JSON");
+    assert_eq!(v["success"], Value::Bool(false));
+    assert_eq!(v["error"]["code"], Value::from(2));
+    assert_eq!(v["error"]["type"], Value::from("usage_error"));
+    assert_eq!(
+        v["error"]["message"],
+        Value::from("build schema: command not found: nope")
+    );
 }
 
 #[test]
