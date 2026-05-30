@@ -83,6 +83,14 @@ Verify install:
 defi version --long
 ```
 
+### Rust port (preview)
+
+An in-progress Rust reimplementation lives under [`rust/`](rust). It preserves the exact CLI contract (JSON envelope, fields, ordering, exit codes, and CAIP identifiers) and is not yet the shipped binary. See the [completion plan](docs/superpowers/plans/2026-05-29-rust-migration-completion-plan.md) for status. The Go binary remains the supported build for now.
+
+```bash
+cargo build --release --manifest-path rust/Cargo.toml
+```
+
 ## Signing Backends
 
 Execution commands (`plan`, `submit`, `status`) support two signing backends:

@@ -1,0 +1,18 @@
+[package]
+name = "defi-httpx"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+defi-errors = { workspace = true }
+reqwest = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+wiremock = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

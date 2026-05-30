@@ -1,0 +1,31 @@
+[package]
+name = "defi-evm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+defi-errors = { workspace = true }
+alloy = { workspace = true, features = [
+    "dyn-abi",
+    "json-abi",
+    "consensus",
+    "consensus-secp256k1",
+    "eips",
+    "rpc-client",
+    "transport-http",
+    "reqwest",
+    "reqwest-rustls-tls",
+    "signer-local",
+    "signers",
+] }
+ruint = { workspace = true }
+num-bigint = { workspace = true }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+[dev-dependencies]
+hex = { workspace = true }
+wiremock = { workspace = true }

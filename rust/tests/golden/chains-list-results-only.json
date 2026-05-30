@@ -1,0 +1,255 @@
+[
+  {
+    "name": "Ethereum",
+    "slug": "ethereum",
+    "caip2": "eip155:1",
+    "namespace": "eip155",
+    "evm_chain_id": 1,
+    "aliases": [
+      "mainnet"
+    ]
+  },
+  {
+    "name": "Optimism",
+    "slug": "optimism",
+    "caip2": "eip155:10",
+    "namespace": "eip155",
+    "evm_chain_id": 10,
+    "aliases": [
+      "op mainnet",
+      "op-mainnet"
+    ]
+  },
+  {
+    "name": "Gnosis",
+    "slug": "gnosis",
+    "caip2": "eip155:100",
+    "namespace": "eip155",
+    "evm_chain_id": 100,
+    "aliases": [
+      "xdai"
+    ]
+  },
+  {
+    "name": "Polygon",
+    "slug": "polygon",
+    "caip2": "eip155:137",
+    "namespace": "eip155",
+    "evm_chain_id": 137
+  },
+  {
+    "name": "Monad",
+    "slug": "monad",
+    "caip2": "eip155:143",
+    "namespace": "eip155",
+    "evm_chain_id": 143
+  },
+  {
+    "name": "Sonic",
+    "slug": "sonic",
+    "caip2": "eip155:146",
+    "namespace": "eip155",
+    "evm_chain_id": 146
+  },
+  {
+    "name": "Taiko",
+    "slug": "taiko",
+    "caip2": "eip155:167000",
+    "namespace": "eip155",
+    "evm_chain_id": 167000,
+    "aliases": [
+      "taiko alethia",
+      "taiko-alethia"
+    ]
+  },
+  {
+    "name": "Taiko Hoodi",
+    "slug": "taiko-hoodi",
+    "caip2": "eip155:167013",
+    "namespace": "eip155",
+    "evm_chain_id": 167013,
+    "aliases": [
+      "hoodi",
+      "taiko hoodi"
+    ]
+  },
+  {
+    "name": "Fraxtal",
+    "slug": "fraxtal",
+    "caip2": "eip155:252",
+    "namespace": "eip155",
+    "evm_chain_id": 252
+  },
+  {
+    "name": "Tempo Devnet",
+    "slug": "tempo-devnet",
+    "caip2": "eip155:31318",
+    "namespace": "eip155",
+    "evm_chain_id": 31318,
+    "aliases": [
+      "tempo devnet"
+    ]
+  },
+  {
+    "name": "zkSync Era",
+    "slug": "zksync",
+    "caip2": "eip155:324",
+    "namespace": "eip155",
+    "evm_chain_id": 324,
+    "aliases": [
+      "zksync era",
+      "zksync-era"
+    ]
+  },
+  {
+    "name": "Citrea",
+    "slug": "citrea",
+    "caip2": "eip155:4114",
+    "namespace": "eip155",
+    "evm_chain_id": 4114
+  },
+  {
+    "name": "Arbitrum",
+    "slug": "arbitrum",
+    "caip2": "eip155:42161",
+    "namespace": "eip155",
+    "evm_chain_id": 42161
+  },
+  {
+    "name": "Tempo",
+    "slug": "tempo",
+    "caip2": "eip155:4217",
+    "namespace": "eip155",
+    "evm_chain_id": 4217,
+    "aliases": [
+      "presto",
+      "tempo mainnet",
+      "tempo-mainnet"
+    ]
+  },
+  {
+    "name": "Celo",
+    "slug": "celo",
+    "caip2": "eip155:42220",
+    "namespace": "eip155",
+    "evm_chain_id": 42220
+  },
+  {
+    "name": "Tempo Moderato",
+    "slug": "tempo-moderato",
+    "caip2": "eip155:42431",
+    "namespace": "eip155",
+    "evm_chain_id": 42431,
+    "aliases": [
+      "moderato",
+      "tempo testnet",
+      "tempo-testnet"
+    ]
+  },
+  {
+    "name": "Avalanche",
+    "slug": "avalanche",
+    "caip2": "eip155:43114",
+    "namespace": "eip155",
+    "evm_chain_id": 43114
+  },
+  {
+    "name": "MegaETH",
+    "slug": "megaeth",
+    "caip2": "eip155:4326",
+    "namespace": "eip155",
+    "evm_chain_id": 4326,
+    "aliases": [
+      "mega eth",
+      "mega-eth"
+    ]
+  },
+  {
+    "name": "World Chain",
+    "slug": "world-chain",
+    "caip2": "eip155:480",
+    "namespace": "eip155",
+    "evm_chain_id": 480,
+    "aliases": [
+      "world chain",
+      "worldchain"
+    ]
+  },
+  {
+    "name": "Mantle",
+    "slug": "mantle",
+    "caip2": "eip155:5000",
+    "namespace": "eip155",
+    "evm_chain_id": 5000
+  },
+  {
+    "name": "Scroll",
+    "slug": "scroll",
+    "caip2": "eip155:534352",
+    "namespace": "eip155",
+    "evm_chain_id": 534352
+  },
+  {
+    "name": "BSC",
+    "slug": "bsc",
+    "caip2": "eip155:56",
+    "namespace": "eip155",
+    "evm_chain_id": 56
+  },
+  {
+    "name": "Ink",
+    "slug": "ink",
+    "caip2": "eip155:57073",
+    "namespace": "eip155",
+    "evm_chain_id": 57073
+  },
+  {
+    "name": "Linea",
+    "slug": "linea",
+    "caip2": "eip155:59144",
+    "namespace": "eip155",
+    "evm_chain_id": 59144
+  },
+  {
+    "name": "Berachain",
+    "slug": "berachain",
+    "caip2": "eip155:80094",
+    "namespace": "eip155",
+    "evm_chain_id": 80094
+  },
+  {
+    "name": "Blast",
+    "slug": "blast",
+    "caip2": "eip155:81457",
+    "namespace": "eip155",
+    "evm_chain_id": 81457
+  },
+  {
+    "name": "Base",
+    "slug": "base",
+    "caip2": "eip155:8453",
+    "namespace": "eip155",
+    "evm_chain_id": 8453
+  },
+  {
+    "name": "HyperEVM",
+    "slug": "hyperevm",
+    "caip2": "eip155:999",
+    "namespace": "eip155",
+    "evm_chain_id": 999,
+    "aliases": [
+      "hyper evm",
+      "hyper-evm"
+    ]
+  },
+  {
+    "name": "Solana",
+    "slug": "solana",
+    "caip2": "solana:5eykt4UsFv8P8NJdTREpY1vzqKqZKvdp",
+    "namespace": "solana",
+    "aliases": [
+      "mainnet-beta",
+      "solana-mainnet"
+    ]
+  }
+]

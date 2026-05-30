@@ -1,0 +1,21 @@
+{
+  "version": "v1",
+  "success": false,
+  "data": [],
+  "error": {
+    "code": 2,
+    "type": "usage_error",
+    "message": "unsupported chain input: notarealchain"
+  },
+  "meta": {
+    "request_id": "968d4eba20cf5a05f90de5a0d4008d85",
+    "timestamp": "2026-05-28T18:48:18.949627Z",
+    "command": "assets resolve",
+    "cache": {
+      "status": "bypass",
+      "age_ms": 0,
+      "stale": false
+    },
+    "partial": false
+  }
+}

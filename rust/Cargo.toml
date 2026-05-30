@@ -1,0 +1,81 @@
+[workspace]
+resolver = "2"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.5.0"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/ggonzalez94/defi-cli"
+
+[workspace.dependencies]
+# CLI
+clap = { version = "4", features = ["derive"] }
+
+# Serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+serde_yaml = "0.9"
+indexmap = { version = "2", features = ["serde"] }
+
+# Errors
+thiserror = "2"
+anyhow = "1"
+
+# Async runtime + HTTP
+tokio = { version = "1", features = ["full"] }
+reqwest = { version = "0.13", default-features = false, features = ["json", "rustls"] }
+async-trait = "0.1"
+
+# Storage + locking
+# 0.40's libsqlite3-sys 0.38 build script uses the unstable `cfg_select!`
+# macro and fails on stable; 0.37 (libsqlite3-sys 0.35) is the nearest working
+# version on the stable toolchain.
+rusqlite = { version = "0.37", features = ["bundled"] }
+fd-lock = "4"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# EVM / crypto
+alloy = { version = "2", features = [
+    "providers",
+    "signer-local",
+    "signers",
+    "sol-types",
+    "rpc-types",
+    "consensus",
+    "network",
+    "json-abi",
+] }
+alloy-rlp = "0.3"
+ruint = "1"
+num-bigint = "0.4"
+hex = "0.4"
+rand = "0.9"
+sha1 = "0.10"
+sha2 = "0.10"
+
+# Dev dependencies
+wiremock = "0.6"
+assert_cmd = "2"
+insta = "1"
+predicates = "3"
+tempfile = "3"
+
+# Internal crates
+defi-errors = { path = "crates/defi-errors" }
+defi-schema = { path = "crates/defi-schema" }
+defi-policy = { path = "crates/defi-policy" }
+defi-id = { path = "crates/defi-id" }
+defi-model = { path = "crates/defi-model" }
+defi-evm = { path = "crates/defi-evm" }
+defi-config = { path = "crates/defi-config" }
+defi-httpx = { path = "crates/defi-httpx" }
+defi-cache = { path = "crates/defi-cache" }
+defi-registry = { path = "crates/defi-registry" }
+defi-out = { path = "crates/defi-out" }
+defi-ows = { path = "crates/defi-ows" }
+defi-execution = { path = "crates/defi-execution" }
+defi-providers = { path = "crates/defi-providers" }
+defi-app = { path = "crates/defi-app" }

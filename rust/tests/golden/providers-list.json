@@ -1,0 +1,235 @@
+[
+  {
+    "name": "defillama",
+    "type": "market+bridge-data",
+    "requires_key": false,
+    "capabilities": [
+      "chains.top",
+      "chains.assets",
+      "protocols.top",
+      "protocols.categories",
+      "protocols.fees",
+      "protocols.revenue",
+      "dexes.volume",
+      "stablecoins.top",
+      "stablecoins.chains",
+      "bridge.list",
+      "bridge.details"
+    ],
+    "key_env_var": "DEFI_DEFILLAMA_API_KEY",
+    "capability_auth": [
+      {
+        "capability": "chains.assets",
+        "key_env_var": "DEFI_DEFILLAMA_API_KEY",
+        "description": "Required for chain-level TVL by asset endpoint"
+      },
+      {
+        "capability": "bridge.details",
+        "key_env_var": "DEFI_DEFILLAMA_API_KEY",
+        "description": "Required for bridge analytics details endpoint"
+      },
+      {
+        "capability": "bridge.list",
+        "key_env_var": "DEFI_DEFILLAMA_API_KEY",
+        "description": "Required for bridge analytics list endpoint"
+      }
+    ]
+  },
+  {
+    "name": "aave",
+    "type": "lending+yield",
+    "requires_key": false,
+    "capabilities": [
+      "lend.markets",
+      "lend.rates",
+      "lend.positions",
+      "yield.opportunities",
+      "yield.positions",
+      "yield.history",
+      "lend.plan",
+      "lend.execute",
+      "yield.plan",
+      "yield.execute",
+      "rewards.plan",
+      "rewards.execute"
+    ]
+  },
+  {
+    "name": "morpho",
+    "type": "lending+yield",
+    "requires_key": false,
+    "capabilities": [
+      "lend.markets",
+      "lend.rates",
+      "lend.positions",
+      "yield.opportunities",
+      "yield.positions",
+      "yield.history",
+      "lend.plan",
+      "lend.execute",
+      "yield.plan",
+      "yield.execute"
+    ]
+  },
+  {
+    "name": "kamino",
+    "type": "lending+yield",
+    "requires_key": false,
+    "capabilities": [
+      "lend.markets",
+      "lend.rates",
+      "yield.opportunities",
+      "yield.history"
+    ]
+  },
+  {
+    "name": "moonwell",
+    "type": "lending+yield",
+    "requires_key": false,
+    "capabilities": [
+      "lend.markets",
+      "lend.rates",
+      "lend.positions",
+      "yield.opportunities",
+      "yield.positions",
+      "lend.plan",
+      "lend.execute",
+      "yield.plan",
+      "yield.execute"
+    ]
+  },
+  {
+    "name": "across",
+    "type": "bridge",
+    "requires_key": false,
+    "capabilities": [
+      "bridge.quote",
+      "bridge.plan",
+      "bridge.execute"
+    ]
+  },
+  {
+    "name": "lifi",
+    "type": "bridge",
+    "requires_key": false,
+    "capabilities": [
+      "bridge.quote",
+      "bridge.plan",
+      "bridge.execute"
+    ]
+  },
+  {
+    "name": "bungee",
+    "type": "bridge",
+    "requires_key": false,
+    "capabilities": [
+      "bridge.quote"
+    ],
+    "capability_auth": [
+      {
+        "capability": "bridge.quote",
+        "key_env_var": "DEFI_BUNGEE_API_KEY",
+        "description": "Optional dedicated backend mode (requires both API key and affiliate)"
+      },
+      {
+        "capability": "bridge.quote",
+        "key_env_var": "DEFI_BUNGEE_AFFILIATE",
+        "description": "Optional dedicated backend mode (requires both API key and affiliate)"
+      }
+    ]
+  },
+  {
+    "name": "1inch",
+    "type": "swap",
+    "requires_key": true,
+    "capabilities": [
+      "swap.quote"
+    ],
+    "key_env_var": "DEFI_1INCH_API_KEY",
+    "capability_auth": [
+      {
+        "capability": "swap.quote",
+        "key_env_var": "DEFI_1INCH_API_KEY"
+      }
+    ]
+  },
+  {
+    "name": "uniswap",
+    "type": "swap",
+    "requires_key": true,
+    "capabilities": [
+      "swap.quote"
+    ],
+    "key_env_var": "DEFI_UNISWAP_API_KEY",
+    "capability_auth": [
+      {
+        "capability": "swap.quote",
+        "key_env_var": "DEFI_UNISWAP_API_KEY"
+      }
+    ]
+  },
+  {
+    "name": "tempo",
+    "type": "swap",
+    "requires_key": false,
+    "capabilities": [
+      "swap.quote",
+      "swap.plan",
+      "swap.execute"
+    ]
+  },
+  {
+    "name": "taikoswap",
+    "type": "swap",
+    "requires_key": false,
+    "capabilities": [
+      "swap.quote",
+      "swap.plan",
+      "swap.execute"
+    ]
+  },
+  {
+    "name": "jupiter",
+    "type": "swap",
+    "requires_key": false,
+    "capabilities": [
+      "swap.quote"
+    ],
+    "key_env_var": "DEFI_JUPITER_API_KEY",
+    "capability_auth": [
+      {
+        "capability": "swap.quote",
+        "key_env_var": "DEFI_JUPITER_API_KEY",
+        "description": "Optional API key for higher Jupiter API limits"
+      }
+    ]
+  },
+  {
+    "name": "bungee",
+    "type": "swap",
+    "requires_key": false,
+    "capabilities": [
+      "swap.quote"
+    ],
+    "capability_auth": [
+      {
+        "capability": "swap.quote",
+        "key_env_var": "DEFI_BUNGEE_API_KEY",
+        "description": "Optional dedicated backend mode (requires both API key and affiliate)"
+      },
+      {
+        "capability": "swap.quote",
+        "key_env_var": "DEFI_BUNGEE_AFFILIATE",
+        "description": "Optional dedicated backend mode (requires both API key and affiliate)"
+      }
+    ]
+  },
+  {
+    "name": "fibrous",
+    "type": "swap",
+    "requires_key": false,
+    "capabilities": [
+      "swap.quote"
+    ]
+  }
+]

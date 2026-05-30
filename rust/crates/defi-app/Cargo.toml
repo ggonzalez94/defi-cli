@@ -1,0 +1,39 @@
+[package]
+name = "defi-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+defi-errors = { workspace = true }
+defi-schema = { workspace = true }
+defi-policy = { workspace = true }
+defi-id = { workspace = true }
+defi-model = { workspace = true }
+defi-evm = { workspace = true }
+defi-config = { workspace = true }
+defi-httpx = { workspace = true }
+defi-cache = { workspace = true }
+defi-registry = { workspace = true }
+defi-out = { workspace = true }
+defi-ows = { workspace = true }
+defi-execution = { workspace = true }
+defi-providers = { workspace = true }
+alloy = { workspace = true }
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+chrono = { workspace = true }
+indexmap = { workspace = true }
+sha2 = { workspace = true }
+hex = { workspace = true }
+
+[dev-dependencies]
+assert_cmd = { workspace = true }
+insta = { workspace = true }
+predicates = { workspace = true }
+wiremock = { workspace = true }
+tempfile = { workspace = true }
+async-trait = { workspace = true }

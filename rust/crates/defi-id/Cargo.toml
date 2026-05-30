@@ -1,0 +1,13 @@
+[package]
+name = "defi-id"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+defi-errors = { workspace = true }
+alloy = { workspace = true }
+ruint = { workspace = true }
+num-bigint = { workspace = true }
+serde = { workspace = true }

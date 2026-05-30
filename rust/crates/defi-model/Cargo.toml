@@ -1,0 +1,13 @@
+[package]
+name = "defi-model"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+# `raw_value` lets go_float emit Go-formatted numeric tokens verbatim so the
+# serializer cannot re-format (Ryū) them and reintroduce float drift (spec §7).
+serde_json = { workspace = true, features = ["raw_value"] }
+chrono = { workspace = true }
