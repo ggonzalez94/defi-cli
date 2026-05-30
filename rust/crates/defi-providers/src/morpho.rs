@@ -1139,7 +1139,7 @@ struct GraphqlError {
 
 #[derive(Debug, Default, Clone, Deserialize)]
 struct MorphoFloatDataPoint {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     x: f64,
     y: Option<f64>,
 }
@@ -1306,17 +1306,37 @@ struct LoanAsset {
 
 #[derive(Debug, Default, Deserialize)]
 struct MarketState {
-    #[serde(rename = "supplyApy", default)]
+    #[serde(
+        rename = "supplyApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     supply_apy: f64,
-    #[serde(rename = "borrowApy", default)]
+    #[serde(
+        rename = "borrowApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     borrow_apy: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     utilization: f64,
-    #[serde(rename = "supplyAssetsUsd", default)]
+    #[serde(
+        rename = "supplyAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     supply_assets_usd: f64,
-    #[serde(rename = "liquidityAssetsUsd", default)]
+    #[serde(
+        rename = "liquidityAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     liquidity_assets_usd: f64,
-    #[serde(rename = "totalLiquidityUsd", default)]
+    #[serde(
+        rename = "totalLiquidityUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     total_liquidity_usd: f64,
 }
 
@@ -1349,9 +1369,17 @@ struct PositionAsset {
 
 #[derive(Debug, Deserialize)]
 struct PositionMarketRates {
-    #[serde(rename = "supplyApy", default)]
+    #[serde(
+        rename = "supplyApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     supply_apy: f64,
-    #[serde(rename = "borrowApy", default)]
+    #[serde(
+        rename = "borrowApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     borrow_apy: f64,
 }
 
@@ -1359,15 +1387,27 @@ struct PositionMarketRates {
 struct MarketPositionState {
     #[serde(rename = "supplyAssets", default)]
     supply_assets: serde_json::Value,
-    #[serde(rename = "supplyAssetsUsd", default)]
+    #[serde(
+        rename = "supplyAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     supply_assets_usd: f64,
     #[serde(rename = "borrowAssets", default)]
     borrow_assets: serde_json::Value,
-    #[serde(rename = "borrowAssetsUsd", default)]
+    #[serde(
+        rename = "borrowAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     borrow_assets_usd: f64,
     #[serde(default)]
     collateral: serde_json::Value,
-    #[serde(rename = "collateralUsd", default)]
+    #[serde(
+        rename = "collateralUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     collateral_usd: f64,
 }
 
@@ -1397,7 +1437,11 @@ struct VaultPositionAsset {
 
 #[derive(Debug, Deserialize)]
 struct VaultNetApy {
-    #[serde(rename = "netApy", default)]
+    #[serde(
+        rename = "netApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     net_apy: f64,
 }
 
@@ -1407,7 +1451,11 @@ struct VaultPositionState {
     shares: serde_json::Value,
     #[serde(default)]
     assets: serde_json::Value,
-    #[serde(rename = "assetsUsd", default)]
+    #[serde(
+        rename = "assetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     assets_usd: f64,
 }
 
@@ -1430,9 +1478,17 @@ struct SimpleAsset {
 
 #[derive(Debug, Deserialize)]
 struct VaultStateFull {
-    #[serde(rename = "netApy", default)]
+    #[serde(
+        rename = "netApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     net_apy: f64,
-    #[serde(rename = "totalAssetsUsd", default)]
+    #[serde(
+        rename = "totalAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     total_assets_usd: f64,
     #[serde(default)]
     allocation: Vec<MarketAllocation>,
@@ -1440,7 +1496,7 @@ struct VaultStateFull {
 
 #[derive(Debug, Deserialize)]
 struct LiquidityUsd {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     usd: f64,
 }
 
@@ -1448,11 +1504,23 @@ struct LiquidityUsd {
 struct MorphoVaultV2 {
     #[serde(default)]
     address: String,
-    #[serde(rename = "netApy", default)]
+    #[serde(
+        rename = "netApy",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     net_apy: f64,
-    #[serde(rename = "totalAssetsUsd", default)]
+    #[serde(
+        rename = "totalAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     total_assets_usd: f64,
-    #[serde(rename = "liquidityUsd", default)]
+    #[serde(
+        rename = "liquidityUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     liquidity_usd: f64,
     asset: Option<SimpleAsset>,
     #[serde(rename = "liquidityData")]
@@ -1489,7 +1557,11 @@ struct MetaMorphoState {
 
 #[derive(Debug, Deserialize)]
 struct MarketAllocation {
-    #[serde(rename = "supplyAssetsUsd", default)]
+    #[serde(
+        rename = "supplyAssetsUsd",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     supply_assets_usd: f64,
     market: Option<AllocationMarket>,
 }

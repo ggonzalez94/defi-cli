@@ -6,6 +6,7 @@
 #![allow(dead_code, unused)]
 
 pub mod normalize;
+pub(crate) mod serde_util;
 pub mod traits;
 
 // One module per provider adapter.

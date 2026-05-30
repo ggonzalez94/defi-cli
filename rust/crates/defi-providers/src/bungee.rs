@@ -352,8 +352,11 @@ struct QuoteAutoRoute {
 
 #[derive(Debug, Default, Deserialize)]
 struct QuoteGasFee {
-    #[serde(default)]
-    #[serde(rename = "feeInUsd")]
+    #[serde(
+        default,
+        rename = "feeInUsd",
+        deserialize_with = "crate::serde_util::de_f64_null_default"
+    )]
     fee_in_usd: f64,
 }
 

@@ -195,7 +195,7 @@ struct QuoteResponse {
     dst_amount: String,
     /// Gas-unit estimate; decoded for completeness but not surfaced (Go reads it
     /// into `Gas` but never emits it).
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     #[allow(dead_code)]
     gas: f64,
 }

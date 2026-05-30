@@ -137,7 +137,7 @@ impl Client {
 struct ChainResp {
     #[serde(default)]
     name: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     tvl: f64,
 }
 
@@ -153,11 +153,15 @@ struct ProtocolResp {
     name: String,
     #[serde(default)]
     category: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     tvl: f64,
     #[serde(default)]
     chains: Vec<String>,
-    #[serde(rename = "chainTvls", default)]
+    #[serde(
+        rename = "chainTvls",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_map_null_default"
+    )]
     chain_tvls: HashMap<String, f64>,
 }
 
@@ -199,13 +203,28 @@ struct StablecoinResp {
     peg_type: String,
     #[serde(rename = "pegMechanism", default)]
     peg_mechanism: String,
-    #[serde(default)]
+    #[serde(
+        default,
+        deserialize_with = "crate::serde_util::de_f64_map_null_default"
+    )]
     circulating: HashMap<String, f64>,
-    #[serde(rename = "circulatingPrevDay", default)]
+    #[serde(
+        rename = "circulatingPrevDay",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_map_null_default"
+    )]
     circulating_prev_day: HashMap<String, f64>,
-    #[serde(rename = "circulatingPrevWeek", default)]
+    #[serde(
+        rename = "circulatingPrevWeek",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_map_null_default"
+    )]
     circulating_prev_week: HashMap<String, f64>,
-    #[serde(rename = "circulatingPrevMonth", default)]
+    #[serde(
+        rename = "circulatingPrevMonth",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_map_null_default"
+    )]
     circulating_prev_month: HashMap<String, f64>,
     #[serde(default)]
     chains: Vec<String>,
@@ -221,7 +240,11 @@ struct StablecoinsEnvelope {
 
 #[derive(Debug, Deserialize)]
 struct StablecoinChainResp {
-    #[serde(rename = "totalCirculatingUSD", default)]
+    #[serde(
+        rename = "totalCirculatingUSD",
+        default,
+        deserialize_with = "crate::serde_util::de_f64_map_null_default"
+    )]
     total_circulating_usd: HashMap<String, f64>,
     #[serde(default)]
     name: String,
@@ -229,9 +252,9 @@ struct StablecoinChainResp {
 
 #[derive(Debug, Default, Deserialize)]
 struct BridgeTxCountsResp {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     deposits: f64,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::serde_util::de_f64_null_default")]
     withdrawals: f64,
 }
 
@@ -1718,6 +1741,43 @@ mod tests {
         assert_eq!(items[0].chains, 1);
         assert_eq!(items[1].protocol, "Uniswap");
         assert_eq!(items[1].chains, 3);
+    }
+
+    /// Regression: the live `/protocols` response carries `"tvl": null` for
+    /// ~10% of rows (and may carry null `chainTvls` values). Go coerces these to
+    /// `0.0`; the Rust port must too (was: `invalid type: null, expected f64`).
+    #[tokio::test]
+    async fn protocols_top_tolerates_null_tvl() {
+        let server = MockServer::start().await;
+        Mock::given(method("GET"))
+            .and(path("/protocols"))
+            .respond_with(ResponseTemplate::new(200).set_body_raw(
+                r#"[
+                    {"name":"Fantom","category":"Chain","tvl":null,"chains":[],"chainTvls":{}},
+                    {"name":"Lido","category":"Liquid Staking","tvl":30000,"chains":["Ethereum"],"chainTvls":{"Ethereum":30000,"Ethereum-staking":null}},
+                    {"name":"Aave","category":"Lending","tvl":10000,"chains":["Ethereum"],"chainTvls":{"Ethereum":10000}}
+                ]"#,
+                "application/json",
+            ))
+            .mount(&server)
+            .await;
+
+        let mut client = Client::new(http(), "");
+        client.set_api_base(&server.uri());
+
+        let items = client
+            .protocols_top("", "", 0)
+            .await
+            .expect("protocols_top tolerates null tvl");
+        // The null-tvl row decodes (tvl -> 0.0) and sorts last; nothing errors.
+        assert_eq!(items.len(), 3);
+        assert_eq!(items[0].protocol, "Lido");
+        assert_eq!(items[0].tvl_usd, 30000.0);
+        let fantom = items
+            .iter()
+            .find(|p| p.protocol == "Fantom")
+            .expect("null-tvl row present");
+        assert_eq!(fantom.tvl_usd, 0.0);
     }
 
     // ----- D6: ProtocolsTop chain filter uses chain-specific TVL -----------
