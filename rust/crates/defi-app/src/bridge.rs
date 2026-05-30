@@ -3195,6 +3195,19 @@ mod submit_app_tests {
     //!      `--allow-max-approval` hint; the opt-in lets it complete.
     //!  S15. **Full-binary exit codes.** Via `run_with_args`: malformed
     //!      `--action-id` → exit 2; well-formed unknown `--action-id` → exit 2.
+    //!  S16. **Bridge provider-tx pre-sign gate + `--unsafe-provider-tx` opt-in.**
+    //!      A bridge action whose `bridge_send` step carries a valid Across
+    //!      settlement provider + canonical settlement endpoint but a
+    //!      NON-canonical execution target (not an allowed Across spoke-pool /
+    //!      execution contract) is rejected by default with a [`Code::ActionPlan`]
+    //!      error surfacing the documented `--unsafe-provider-tx` hint; the
+    //!      persisted status is untouched. With `--unsafe-provider-tx` the same
+    //!      action completes offline. This is the bridge-distinguishing pre-sign
+    //!      guardrail (Go `parseExecuteOptions` `UnsafeProviderTx` →
+    //!      `validateBridgePolicy`'s target/endpoint allowlist; the policy-layer
+    //!      unit matrix lives in `defi_execution::policy`, but the wiring through
+    //!      `bridge submit` is asserted HERE, mirroring S14's approval-guardrail
+    //!      end-to-end coverage).
     //!
     //! SKIPPED (owned elsewhere / wrong layer): the destination-settlement
     //! wait semantics (Across `/deposit/status`, LiFi `/status`) — owned by
@@ -3797,6 +3810,93 @@ mod submit_app_tests {
             value: "0".to_string(),
             calls: Vec::new(),
             expected_outputs: None,
+            tx_hash: String::new(),
+            error: String::new(),
+        }];
+        action
+    }
+
+    // --- S16: bridge provider-tx pre-sign gate + --unsafe-provider-tx ------
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn submit_non_canonical_bridge_target_requires_unsafe_provider_tx() {
+        // A bridge action whose `bridge_send` step carries a valid Across
+        // settlement provider + canonical settlement endpoint but a NON-canonical
+        // execution target must be rejected by the bridge provider-tx pre-sign
+        // guardrail unless `--unsafe-provider-tx` is set (Go `parseExecuteOptions`
+        // `UnsafeProviderTx` → `validateBridgePolicy` target allowlist). This is
+        // the bridge-distinguishing pre-sign check; S14 covers the (shared)
+        // bounded-approval gate, this covers the provider-tx gate end-to-end.
+        let tmp = TempDir::new().expect("tempdir");
+        let action = non_canonical_target_bridge_action(tmp.path());
+        save_action(tmp.path(), &action);
+
+        // Default submit (no opt-in) → ActionPlan rejection with the hint.
+        let err = run_submit(tmp.path(), base_submit_args(&action.action_id))
+            .await
+            .expect_err(
+                "a non-canonical bridge target must be rejected without --unsafe-provider-tx",
+            );
+        assert_eq!(err.code, Code::ActionPlan);
+        assert!(
+            err.to_string().contains("unsafe-provider-tx"),
+            "the rejection must surface the --unsafe-provider-tx hint: {err}"
+        );
+        // Nothing broadcast → status untouched.
+        assert_eq!(persisted_status(tmp.path(), &action.action_id), "planned");
+
+        // With the opt-in the same action completes offline.
+        let mut args = base_submit_args(&action.action_id);
+        args.unsafe_provider_tx = true;
+        let env = run_submit(tmp.path(), args)
+            .await
+            .expect("--unsafe-provider-tx lets the non-canonical bridge target through");
+        assert_eq!(data_of(&env)["status"], Value::from("completed"));
+    }
+
+    /// Build a `bridge` action with a single `bridge_send` step that carries a
+    /// VALID Across settlement provider + canonical settlement endpoint (so the
+    /// provider + settlement-endpoint guards pass) but a NON-canonical execution
+    /// `target` on chain 1 (an arbitrary address, NOT an allowed Across spoke-pool
+    /// / execution contract), so ONLY the bridge target guard trips by default.
+    /// The step has empty `expected_outputs.settlement_provider` defaulting NOT
+    /// used — the provider is stamped explicitly. `from_address` matches the
+    /// signer so the sender guard passes first. No `data`/`calls` are needed; the
+    /// pre-sign target guard runs before any broadcast.
+    fn non_canonical_target_bridge_action(dir: &Path) -> Action {
+        use defi_execution::action::{ActionStep, StepType};
+
+        let mut outs = serde_json::Map::new();
+        outs.insert("settlement_provider".into(), "across".into());
+        outs.insert(
+            "settlement_status_endpoint".into(),
+            "https://app.across.to/api/deposit/status".into(),
+        );
+
+        let mut action = Action::new(
+            "act_0123456789abcdef0123456789abcdef",
+            "bridge",
+            "eip155:1",
+            Default::default(),
+        );
+        action.provider = "across".to_string();
+        action.execution_backend = Some(ExecutionBackend::LegacyLocal);
+        action.from_address = SIGNER_ADDR.to_string();
+        action.input_amount = "1000000".to_string();
+        action.steps = vec![ActionStep {
+            step_id: "step-bridge".to_string(),
+            step_type: StepType::Bridge,
+            status: StepStatus::Pending,
+            chain_id: "eip155:1".to_string(),
+            rpc_url: format!("{}/rpc", dir.display()),
+            description: String::new(),
+            // A non-canonical target: NOT the Across spoke-pool / execution
+            // contract for chain 1 (`0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5`).
+            target: "0x000000000000000000000000000000000000dEaD".to_string(),
+            data: "0xad5425c6".to_string(),
+            value: "0".to_string(),
+            calls: Vec::new(),
+            expected_outputs: Some(outs),
             tx_hash: String::new(),
             error: String::new(),
         }];
