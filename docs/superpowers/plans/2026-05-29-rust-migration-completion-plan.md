@@ -251,3 +251,56 @@ must be done first (and is best done by a single focused agent, since the clap t
 source of truth). WS1–WS6 can fan out per command/group (disjoint files in `defi-app`, sequential
 within the crate to avoid cargo races, as before). WS7 is a small sequential pass. Recommend running
 WS0 + WS1 first as one workflow to get a demonstrably functional read-only CLI, review, then proceed.
+
+---
+
+## 8. Deferred to human sign-off
+
+The WS7 cutover landed only the **safe, additive** half: a parallel `rust-ci.yml`
+(fmt/clippy/test debug+release/build on ubuntu+macos), a CHANGELOG `Unreleased → Changed` note,
+a README "Rust port (preview)" pointer, and this subsection. The Go tree, Go CI, release pipeline,
+and canonical docs are **unchanged and still authoritative**.
+
+The remaining cutover steps are **destructive or release-affecting** and must NOT run until a human
+has signed off on full parity (WS5 + WS6 green, Tempo 0x76 + OWS byte-parity confirmed). Each step
+below is exact and reversible-by-revert.
+
+### 8.1 Swap the release build to Rust (`.goreleaser.yml`)
+- [ ] Replace the GoReleaser `builds:` block with a Rust matrix (linux/darwin × amd64/arm64) that
+  produces a single artifact still named `defi`. Options: drive `cargo build --release` per target
+  via a `before.hooks` + prebuilt `builds[].builder: prebuilt` block, or migrate to
+  `cargo-dist`/`cargo zigbuild` cross-compilation. Keep archive naming
+  (`defi_<version>_<os>_<arch>.tar.gz`, Windows `.zip`) and `checksums.txt` identical so
+  `scripts/install.sh` asset resolution keeps working.
+- [ ] Update `scripts/install.sh` only if archive/asset names change (target triples vs goos/goarch);
+  otherwise leave it untouched.
+- [ ] Verify locally with `goreleaser release --snapshot --clean` (or the cargo-dist equivalent) that
+  every target archive contains a runnable `defi` and checksums match.
+
+### 8.2 Update `.github/workflows/release.yml`
+- [ ] Point the tagged-release job at the Rust build path (toolchain + `rust/` working dir) while
+  keeping: artifact name `defi`, the GitHub Releases upload, and the `docs-live` force-sync that runs
+  **only** for stable (non-prerelease) tags.
+- [ ] Keep `rust-ci.yml` as the PR/push gate; do not delete `ci.yml` (Go CI) in this step.
+
+### 8.3 Retire the Go tree
+- [ ] Only after the Rust release pipeline has cut at least one verified tag: remove `internal/`,
+  `cmd/`, `go.mod`, `go.sum`, `.github/workflows/ci.yml`, and
+  `.github/workflows/nightly-execution-smoke.yml` (or port the nightly smoke to Rust first).
+- [ ] Remove the transient `go build -o defi` oracle references from agent docs.
+
+### 8.4 Rewrite AGENTS.md / CLAUDE.md and Mintlify docs
+- [ ] Rewrite "First 5 minutes" and the folder-structure block to describe `rust/` (16-crate
+  workspace) instead of the Go layout; update build/test commands to `cargo` equivalents.
+- [ ] Update README "Install / Build from source" + "Go install" sections to the Rust toolchain and
+  remove the "preview" framing once Rust is the shipped binary.
+- [ ] Update Mintlify build/install pages and re-run `npx --yes mint@4.2.378 validate`,
+  `broken-links`, and `a11y` from `docs/`.
+
+### 8.5 Sign-off gate (must all be true before 8.1–8.4)
+- [ ] WS5 full golden/wiremock parity sweep green (no unexplained drift).
+- [ ] WS6 `schema` full-tree byte parity green.
+- [ ] Tempo 0x76 (WS4a) and OWS e2e (WS4b) byte/contract parity confirmed.
+- [ ] `cargo fmt --all --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace`, `cargo test --workspace --release` all clean on `rust-ci.yml`.
+- [ ] Human reviewer explicitly approves retiring Go.

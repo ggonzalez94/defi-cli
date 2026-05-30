@@ -7,6 +7,11 @@ Format:
 - Group notes by section in this order: `Added`, `Changed`, `Deprecated`, `Fixed`, `Docs`, `Security`.
 - Keep bullets short and focused on user impact.
 
+## [Unreleased]
+
+### Changed
+- In-progress Rust reimplementation of the CLI (`rust/`); no contract change — JSON envelope, fields, ordering, exit codes, and identifiers are unchanged.
+
 ## [v0.5.0] - 2026-03-26
 
 ### Added
