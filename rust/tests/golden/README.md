@@ -1,12 +1,13 @@
 # Golden fixtures (Phase 0 oracle)
 
-These fixtures are the **primary success oracle** for the Go → Rust migration. They were
-captured from the Go reference binary (`go build -o defi ./cmd/defi`, version `0.5.0`) for
-deterministic, **offline** commands. The Rust CLI must reproduce them **byte-for-byte** after the
-volatile-field normalization described below.
+These fixtures are the **primary success oracle** for the Go -> Rust migration. They were
+captured from the pre-retirement Go reference binary (version `0.5.0`) for deterministic,
+**offline** commands. The Rust CLI must reproduce them **byte-for-byte** after the volatile-field
+normalization described below.
 
-> The Go `./defi` binary used to capture these is transient and is **not** committed. Re-capture
-> by rebuilding it and re-running the commands in the "Commands" table.
+> The Go reference tree has been retired. Re-capture these fixtures only from a tagged historical
+> checkout or from another explicitly approved oracle build, then re-run the commands in the
+> "Commands" table.
 
 ## File layout
 

@@ -4,22 +4,22 @@ project_name: defi
 
 builds:
   - id: defi
-    main: ./cmd/defi
+    builder: rust
+    dir: rust
     binary: defi
+    command: zigbuild
+    flags:
+      - --release
+      - -p=defi-cli
+    targets:
+      - x86_64-unknown-linux-gnu
+      - aarch64-unknown-linux-gnu
+      - x86_64-apple-darwin
+      - aarch64-apple-darwin
     env:
-      - CGO_ENABLED=0
-    goos:
-      - linux
-      - darwin
-      - windows
-    goarch:
-      - amd64
-      - arm64
-    ldflags:
-      - -s -w
-      - -X github.com/ggonzalez94/defi-cli/internal/version.CLIVersion={{ if .IsSnapshot }}{{ .Version }}-snapshot{{ else }}{{ .Tag }}{{ end }}
-      - -X github.com/ggonzalez94/defi-cli/internal/version.Commit={{ .ShortCommit }}
-      - -X github.com/ggonzalez94/defi-cli/internal/version.BuildDate={{ .Date }}
+      - DEFI_CLI_VERSION={{ if .IsSnapshot }}{{ .Version }}-snapshot{{ else }}{{ .Tag }}{{ end }}
+      - DEFI_BUILD_COMMIT={{ .ShortCommit }}
+      - DEFI_BUILD_DATE={{ .Date }}
 
 archives:
   - id: default
@@ -28,10 +28,6 @@ archives:
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
     formats:
       - tar.gz
-    format_overrides:
-      - goos: windows
-        formats:
-          - zip
 
 checksum:
   name_template: checksums.txt

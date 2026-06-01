@@ -1,25 +1,25 @@
-.PHONY: build test test-race vet fmt run release-check release-snapshot
+.PHONY: build test test-release clippy fmt run release-check release-snapshot
 
 build:
-	go build -o defi ./cmd/defi
+	cargo build --manifest-path rust/Cargo.toml --release -p defi-cli
 
 test:
-	go test ./...
+	cargo test --manifest-path rust/Cargo.toml --workspace
 
-test-race:
-	go test -race ./...
+test-release:
+	cargo test --manifest-path rust/Cargo.toml --workspace --release
 
-vet:
-	go vet ./...
+clippy:
+	cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
 
 fmt:
-	gofmt -w $$(find . -name '*.go' -type f)
+	cargo fmt --manifest-path rust/Cargo.toml --all
 
 run:
-	go run ./cmd/defi $(ARGS)
+	cargo run --manifest-path rust/Cargo.toml -p defi-cli -- $(ARGS)
 
 release-check:
 	goreleaser check
 
 release-snapshot:
-	goreleaser release --snapshot --clean
+	ulimit -n 8192 && goreleaser release --snapshot --clean --parallelism 1

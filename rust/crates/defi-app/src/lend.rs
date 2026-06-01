@@ -3712,23 +3712,49 @@ mod submit_app_tests {
 
     // --- wiremock JSON-RPC: every eth_call returns a fixed `result` word ----
 
-    /// A `wiremock` responder that wraps a fixed hex `result` in a JSON-RPC
+    /// A `wiremock` responder that wraps method-specific JSON-RPC results in a
     /// success envelope, echoing the incoming request `id` (mirrors the
     /// `plan_app_tests` / `defi-execution` planner `EchoIdResponder`).
     struct EchoIdResponder {
-        result: String,
+        allowance_word: String,
     }
 
     impl Respond for EchoIdResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
-            let id = serde_json::from_slice::<Value>(&request.body)
-                .ok()
+            let body = serde_json::from_slice::<Value>(&request.body).ok();
+            let id = body
+                .as_ref()
                 .and_then(|body| body.get("id").cloned())
                 .unwrap_or_else(|| Value::from(1));
+            let rpc_method = body
+                .as_ref()
+                .and_then(|body| body.get("method"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let result = match rpc_method {
+                "eth_chainId" => Value::from("0x1"),
+                "eth_call" => Value::from(self.allowance_word.clone()),
+                "eth_estimateGas" => Value::from("0x5208"),
+                "eth_getBlockByNumber" => serde_json::json!({
+                    "number": "0x10",
+                    "baseFeePerGas": "0x3b9aca00"
+                }),
+                "eth_maxPriorityFeePerGas" => Value::from("0x3b9aca00"),
+                "eth_getTransactionCount" => Value::from("0x7"),
+                "eth_sendRawTransaction" => Value::from(
+                    "0x1111111111111111111111111111111111111111111111111111111111111111",
+                ),
+                "eth_getTransactionReceipt" => serde_json::json!({
+                    "status": "0x1",
+                    "blockNumber": "0x11",
+                    "gasUsed": "0x5208"
+                }),
+                _ => Value::from(self.allowance_word.clone()),
+            };
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": self.result,
+                "result": result,
             }))
         }
     }
@@ -3743,7 +3769,7 @@ mod submit_app_tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(EchoIdResponder {
-                result: uint_word(allowance),
+                allowance_word: uint_word(allowance),
             })
             .mount(&server)
             .await;
@@ -3787,8 +3813,17 @@ mod submit_app_tests {
         allowance: u128,
     ) -> String {
         let server = allowance_rpc(allowance).await;
+        plan_lend_with_rpc(dir, verb, from_addr, &server.uri()).await
+    }
+
+    async fn plan_lend_with_rpc(
+        dir: &Path,
+        verb: defi_execution::builder::LendVerb,
+        from_addr: &str,
+        rpc_url: &str,
+    ) -> String {
         let ctx = AppCtx::new(exec_settings(dir));
-        let args = aave_args("", from_addr, &server.uri());
+        let args = aave_args("", from_addr, rpc_url);
         let cmd = match verb {
             defi_execution::builder::LendVerb::Supply => LendCmd::Supply(LendVerbCmd::Plan(args)),
             defi_execution::builder::LendVerb::Withdraw => {
@@ -3800,10 +3835,11 @@ mod submit_app_tests {
         let env = handle(&ctx, cmd)
             .await
             .expect("plan a lend action for the submit fixture");
-        env.data.expect("plan data")["action_id"]
+        let action_id = env.data.expect("plan data")["action_id"]
             .as_str()
             .expect("action_id")
-            .to_string()
+            .to_string();
+        action_id
     }
 
     /// Persist `action` directly (used for fixtures the plan path cannot build,
@@ -3882,8 +3918,10 @@ mod submit_app_tests {
     async fn submit_borrow_legacy_local_completes_and_emits_envelope() {
         use defi_execution::builder::LendVerb;
         let tmp = TempDir::new().expect("tempdir");
+        let server = allowance_rpc(0).await;
         // Borrow builds a SINGLE lend_call step (policy no-op); allowance is unused.
-        let action_id = plan_lend(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, 0).await;
+        let action_id =
+            plan_lend_with_rpc(tmp.path(), LendVerb::Borrow, SIGNER_ADDR, &server.uri()).await;
 
         let env = run_submit(tmp.path(), LendVerb::Borrow, base_submit_args(&action_id))
             .await
@@ -3916,9 +3954,11 @@ mod submit_app_tests {
     async fn submit_supply_bounded_two_step_completes_without_allow_max() {
         use defi_execution::builder::LendVerb;
         let tmp = TempDir::new().expect("tempdir");
+        let server = allowance_rpc(0).await;
         // Insufficient allowance (0 < 1000000) → the plan emits a leading approval
         // step whose amount == the planned input_amount (a BOUNDED approval).
-        let action_id = plan_lend(tmp.path(), LendVerb::Supply, SIGNER_ADDR, 0).await;
+        let action_id =
+            plan_lend_with_rpc(tmp.path(), LendVerb::Supply, SIGNER_ADDR, &server.uri()).await;
 
         // Sanity: the planned action has the bounded two-step shape.
         {

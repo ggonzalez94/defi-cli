@@ -13,47 +13,45 @@ Short guide for agents working on `defi-cli`.
 ## First 5 minutes
 
 ```bash
-go build -o defi ./cmd/defi
-go test ./...
-go test -race ./...
-go vet ./...
+cargo build --manifest-path rust/Cargo.toml --release -p defi-cli
+cargo fmt --manifest-path rust/Cargo.toml --all --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace
+cargo test --manifest-path rust/Cargo.toml --workspace --release
 
-./defi providers list --results-only
-./defi lend markets --provider aave --chain 1 --asset USDC --results-only
-./defi lend positions --provider aave --chain 1 --address 0x000000000000000000000000000000000000dEaD --type all --limit 3 --results-only
-./defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
-./defi yield positions --chain 1 --address 0x000000000000000000000000000000000000dEaD --providers aave,morpho --limit 5 --results-only
+rust/target/release/defi providers list --results-only
+rust/target/release/defi lend markets --provider aave --chain 1 --asset USDC --results-only
+rust/target/release/defi lend positions --provider aave --chain 1 --address 0x000000000000000000000000000000000000dEaD --type all --limit 3 --results-only
+rust/target/release/defi yield opportunities --chain 1 --asset USDC --providers aave,morpho --limit 5 --results-only
+rust/target/release/defi yield positions --chain 1 --address 0x000000000000000000000000000000000000dEaD --providers aave,morpho --limit 5 --results-only
 ```
 
 ## Folder structure
 
 ```text
-cmd/
-  defi/main.go                    # CLI entrypoint
+rust/
+  Cargo.toml                      # 16-crate Rust workspace
+  crates/
+    defi-cli/                     # thin binary entrypoint
+    defi-app/                     # clap command tree, routing, cache flow, envelopes
+    defi-providers/               # external adapters
+    defi-execution/               # action persistence, planners, signers, tx execution
+    defi-registry/                # canonical endpoints/contracts/ABIs + default RPC map
+    defi-config/                  # defaults + file/env/flags precedence
+    defi-cache/                   # sqlite cache + file lock
+    defi-id/                      # CAIP parsing + amount normalization
+    defi-model/                   # output envelope + domain models
+    defi-out/                     # json/plain rendering and field selection
+    defi-errors/                  # typed errors -> exit codes
+    defi-schema/                  # machine-readable command schema models
+    defi-policy/                  # command allowlist
+    defi-httpx/                   # shared HTTP client/retry behavior
+    defi-evm/                     # EVM ABI/signing/RPC helpers
+    defi-ows/                     # Open Wallet Standard command integration
 
-internal/
-  app/runner.go                   # command wiring, provider routing, cache flow
-  providers/                      # external adapters
-    aave/ morpho/ moonwell/       # lending + yield (read + execution)
-    defillama/                    # market/yield normalization + fallback + bridge analytics
-    across/ lifi/                 # bridge quotes + lifi execution planning
-    oneinch/ uniswap/ taikoswap/ tempo/ # swap quotes + execution planning providers
-    types.go                      # provider interfaces
-  execution/                      # action persistence + planner helpers + signer abstraction + tx execution
-  registry/                       # canonical execution endpoints/contracts/ABI fragments + default chain RPC map
-  config/                         # defaults + file/env/flags precedence
-  cache/                          # sqlite cache + file lock
-  id/                             # CAIP parsing + amount normalization
-  model/                          # output envelope + domain models
-  out/                            # json/plain rendering and field selection
-  errors/                         # typed errors -> exit codes
-  schema/                         # machine-readable command schema
-  policy/                         # command allowlist
-  httpx/                          # shared HTTP client/retry behavior
-
-.github/workflows/ci.yml          # CI (test/vet/build)
+.github/workflows/rust-ci.yml     # CI (fmt/clippy/test/build)
 .github/workflows/nightly-execution-smoke.yml # nightly execution planning drift checks
-.github/workflows/release.yml     # tagged release pipeline (GoReleaser)
+.github/workflows/release.yml     # tagged release pipeline (GoReleaser Rust builder)
 scripts/install.sh                # macOS/Linux installer from GitHub Releases
 .goreleaser.yml                   # cross-platform release artifact config
 assets/                            # static assets (logo, images)
@@ -85,9 +83,9 @@ README.md                         # user-facing usage + caveats
 - `--from-address` is the local signer identity input for planning; it produces `legacy_local` actions that use local key inputs for submit.
 - `schema` now includes inherited flags plus command/flag metadata (`required`, `enum`, `format`, `input_modes`, `auth`, and request/response structure hints).
 - Metadata ownership is split by intent:
-  - `internal/registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
-  - `internal/providers/*/client.go`: provider quote/read API base URLs.
-  - `internal/id/id.go`: bootstrap token symbol/address registry for deterministic asset parsing.
+  - `rust/crates/defi-registry`: canonical execution endpoints/contracts/ABIs and default chain RPC map (used when no `--rpc-url` is provided).
+  - `rust/crates/defi-providers/src/*`: provider quote/read API base URLs.
+  - `rust/crates/defi-id`: bootstrap token symbol/address registry for deterministic asset parsing.
 - Execution commands currently available:
   - `swap plan|submit|status`
   - `bridge plan|submit|status` (Across, LiFi)
@@ -143,14 +141,14 @@ README.md                         # user-facing usage + caveats
 ## Change patterns
 
 - New provider:
-  1. implement adapter in `internal/providers/<name>/client.go`
-  2. register routes/info in `internal/app/runner.go`
-  3. add `httptest`-based adapter tests
+  1. implement adapter in `rust/crates/defi-providers/src/<name>.rs`
+  2. register provider metadata/routes in `rust/crates/defi-app`
+  3. add `wiremock`-based adapter tests
   4. update README caveats if data quality/semantics differ
   5. document any command that requires an API key explicitly
 - Contract changes:
   1. treat as breaking unless explicitly intended
-  2. update `internal/model` + `internal/out` tests first
+  2. update `rust/crates/defi-model` + `rust/crates/defi-out` tests first
 - Behavior changes:
   1. keep cache keys deterministic
   2. add runner-level tests for routing/fallback/strict mode
@@ -161,9 +159,10 @@ README.md                         # user-facing usage + caveats
 
 ## Quality bar
 
-- `go test ./...` passes
-- `go test -race ./...` passes
-- `go vet ./...` passes
+- `cargo fmt --manifest-path rust/Cargo.toml --all --check` passes
+- `cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings` passes
+- `cargo test --manifest-path rust/Cargo.toml --workspace` passes
+- `cargo test --manifest-path rust/Cargo.toml --workspace --release` passes
 - smoke at least one command on each touched provider path
 - README updated for user-visible changes
 - CHANGELOG updated for user-visible changes

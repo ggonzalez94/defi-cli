@@ -57,38 +57,23 @@ Install a specific version (accepted: `latest`, `stable`, `vX.Y.Z`, `X.Y.Z`):
 curl -fsSL https://raw.githubusercontent.com/ggonzalez94/defi-cli/main/scripts/install.sh | sh -s -- v0.5.0
 ```
 
-### 2) Go install
-
-```bash
-go install github.com/ggonzalez94/defi-cli/cmd/defi@latest
-```
-
-### 3) Manual install from release artifacts
+### 2) Manual install from release artifacts
 
 1. Download the right archive from GitHub Releases:
    - Linux/macOS: `defi_<version>_<os>_<arch>.tar.gz`
-   - Windows: `defi_<version>_windows_<arch>.zip`
 2. Verify checksums with `checksums.txt`.
 3. Extract and move `defi` into your `PATH`.
 
-### 4) Build from source
+### 3) Build from source
 
 ```bash
-go build -o defi ./cmd/defi
+cargo build --manifest-path rust/Cargo.toml --release -p defi-cli
 ```
 
 Verify install:
 
 ```bash
-defi version --long
-```
-
-### Rust port (preview)
-
-An in-progress Rust reimplementation lives under [`rust/`](rust). It preserves the exact CLI contract (JSON envelope, fields, ordering, exit codes, and CAIP identifiers) and is not yet the shipped binary. See the [completion plan](docs/superpowers/plans/2026-05-29-rust-migration-completion-plan.md) for status. The Go binary remains the supported build for now.
-
-```bash
-cargo build --release --manifest-path rust/Cargo.toml
+rust/target/release/defi version --long
 ```
 
 ## Signing Backends
@@ -319,9 +304,9 @@ providers:
 
 ## Execution Metadata Locations (Implementers)
 
-- `internal/registry`: canonical execution endpoints/contracts/ABI fragments and default chain RPC map used when no `--rpc-url` is provided.
-- `internal/providers/*/client.go`: provider quote/read API base URLs and external source URLs.
-- `internal/id/id.go`: bootstrap token symbol/address registry used for deterministic symbol parsing.
+- `rust/crates/defi-registry`: canonical execution endpoints/contracts/ABI fragments and default chain RPC map used when no `--rpc-url` is provided.
+- `rust/crates/defi-providers/src/*`: provider quote/read API base URLs and external source URLs.
+- `rust/crates/defi-id`: bootstrap token symbol/address registry used for deterministic symbol parsing.
 
 ## Cache Policy
 
@@ -398,30 +383,27 @@ providers:
 ### Folder Structure
 
 ```text
-cmd/
-  defi/main.go                    # CLI entrypoint
+rust/
+  Cargo.toml                      # 16-crate Rust workspace
+  crates/
+    defi-cli/                     # thin binary entrypoint
+    defi-app/                     # clap command tree, routing, cache flow
+    defi-providers/               # external adapters
+    defi-execution/               # action store + planner helpers + signer + executor
+    defi-registry/                # canonical endpoints/contracts/ABIs + default RPCs
+    defi-config/                  # file/env/flags precedence
+    defi-cache/                   # sqlite cache + file lock
+    defi-id/                      # CAIP + amount normalization
+    defi-model/                   # envelope + domain models
+    defi-out/                     # renderers
+    defi-errors/                  # typed errors / exit codes
+    defi-schema/                  # machine-readable CLI schema models
+    defi-policy/                  # command allowlist
+    defi-httpx/                   # shared HTTP client
+    defi-evm/                     # EVM ABI/signing/RPC helpers
+    defi-ows/                     # OWS command integration
 
-internal/
-  app/runner.go                   # command wiring, routing, cache flow
-  providers/                      # external adapters
-    aave/ morpho/ moonwell/       # lending + yield (read + execution)
-    defillama/                    # normalization + fallback + bridge analytics
-    across/ lifi/                 # bridge quotes + lifi execution planning
-    oneinch/ uniswap/ taikoswap/  # swap (quote + taikoswap execution planning)
-    types.go                      # provider interfaces
-  execution/                      # action store + planner helpers + signer + executor
-  registry/                       # canonical execution endpoints/contracts/ABI fragments
-  config/                         # file/env/flags precedence
-  cache/                          # sqlite cache + file lock
-  id/                             # CAIP + amount normalization
-  model/                          # envelope + domain models
-  out/                            # renderers
-  errors/                         # typed errors / exit codes
-  schema/                         # machine-readable CLI schema
-  policy/                         # command allowlist
-  httpx/                          # shared HTTP client
-
-.github/workflows/ci.yml          # CI (test/vet/build)
+.github/workflows/rust-ci.yml     # CI (fmt/clippy/test/build)
 .github/workflows/nightly-execution-smoke.yml # nightly live execution planning smoke
 docs/                             # Mintlify docs site (docs.json + MDX pages)
 AGENTS.md                         # contributor guide for agents
@@ -429,9 +411,10 @@ AGENTS.md                         # contributor guide for agents
 ### Testing
 
 ```bash
-go test ./...
-go test -race ./...
-go vet ./...
+cargo fmt --manifest-path rust/Cargo.toml --all --check
+cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings
+cargo test --manifest-path rust/Cargo.toml --workspace
+cargo test --manifest-path rust/Cargo.toml --workspace --release
 bash scripts/nightly_execution_smoke.sh
 ```
 

@@ -203,18 +203,16 @@ Commands: `... submit`, `... status` for all groups; `actions list|show|estimate
   metadata; match cobra `VisitAll` alphabetical flag order, inherited-flag scope, hidden dropping.
 - [ ] VERIFY: byte-for-byte vs Go `schema` output.
 
-### WS7 — Cutover (Go-only)  ·  size M  ·  after WS5, WS6
-- [ ] `completion`/`help`: enable clap-generated completions + help; confirm acceptable parity.
-- [ ] Docs: README, AGENTS.md/CLAUDE.md ("First 5 minutes" + folder structure → `rust/`),
-  CHANGELOG (`Unreleased` → Changed: Rust reimplementation, no contract change), Mintlify
-  build/install pages (+ `mint validate`/`broken-links`/`a11y`).
-- [ ] Release: `.goreleaser.yml` → Rust build matrix (linux/darwin × amd64/arm64) keeping artifact
-  name `defi`; update `scripts/install.sh` asset resolution; update `.github/workflows/release.yml`
-  (keep `docs-live` sync).
-- [ ] CI: add `rust-ci.yml` (fmt/clippy/test debug+release on ubuntu+macos); keep Go CI until
-  retirement.
-- [ ] Retire Go: once Rust CI is green and parity is signed off, remove `internal/`, `cmd/`,
-  `go.mod`, `go.sum`, Go workflows.
+### WS7 — Cutover (Rust shipping)  ·  size M  ·  after WS5, WS6
+- [x] `completion`/`help`: clap-generated completions + help are part of the routed Rust command
+  tree and covered by the 70-leaf schema/dispatch parity checks.
+- [x] Docs: README, AGENTS.md, CHANGELOG, and Mintlify install/design pages now describe the Rust
+  workspace and Cargo build/test flow as the canonical implementation.
+- [x] Release: `.goreleaser.yml` uses the Rust builder with `cargo zigbuild` for linux/darwin ×
+  amd64/arm64, artifact name `defi`, existing install archive naming, and release metadata injection.
+- [x] CI: Rust CI is the canonical `ci` workflow; release and nightly smoke workflows build/test the
+  Rust workspace.
+- [x] Retire Go: `internal/`, `cmd/`, `go.mod`, `go.sum`, and the Go CI workflow are removed.
 
 ---
 
@@ -252,20 +250,21 @@ restores `schema`; **WS5** is the parity gate; **WS7** ships it and retires Go.
   + runtime spot-checks: `bridge list` → `auth_error`; intent-mismatch `status` → `usage_error`.)
 - [x] `fmt`/`clippy -D warnings`/`test`/`test --release` all clean; no `unwrap`/`panic` in lib code.
   **All four gates green 2026-05-29.**
-- [ ] Docs (README/AGENTS/CLAUDE/CHANGELOG/Mintlify) updated. **DEFERRED to human sign-off (WS7,
-  §8.4):** only the additive README "preview" pointer + CHANGELOG note landed; canonical Go docs unchanged.
-- [ ] `.goreleaser` + `install.sh` + release/CI build & ship the Rust binary; Rust CI green. **PARTIAL:**
-  `rust-ci.yml` (fmt/clippy/test debug+release/build on ubuntu+macos) landed and is green; the release
-  pipeline + `.goreleaser` + `install.sh` swap are **DEFERRED to human sign-off (§8.1–8.2).**
-- [ ] Go tree retired. **DEFERRED to human sign-off (§8.3)** — destructive; blocked on release cutover.
+- [x] Docs (README/AGENTS/CHANGELOG/Mintlify) updated. **Verified 2026-05-31:** Rust is canonical in
+  the active build/install docs; Mintlify `validate`, `broken-links`, and `a11y` passed.
+- [x] `.goreleaser` + `install.sh` + release/CI build & ship the Rust binary; Rust CI green. **Verified
+  2026-05-31:** GoReleaser Rust snapshot built all four release archives with `ulimit -n 8192`;
+  archive naming still matches `scripts/install.sh`.
+- [x] Go tree retired. **Verified 2026-05-31:** no `cmd/`, `internal/`, `go.mod`, `go.sum`, or
+  tracked `.go` source remains in the working tree.
 
 ---
 
 ## 6a. Completion run outcome (2026-05-29)
 
-Final verification of the Go→Rust port. The port is **functionally complete**: every command runs
-end-to-end in the Rust binary; only the destructive/release-affecting cutover steps remain (by design,
-gated on human sign-off per §8).
+Final verification of the Go→Rust port. The port was **functionally complete** at this point: every
+command ran end-to-end in the Rust binary. The destructive/release-affecting WS7 cutover was later
+completed on 2026-05-31 after explicit approval.
 
 ### Quality gates — all green
 Run from `rust/`:
@@ -306,24 +305,21 @@ typed provider/auth/usage/signer errors for live/creds-needed paths offline):
 - No `todo!()`/`unimplemented!()` in lib code; the `AppCtx::unimplemented` helper exists as dead `pub`
   API with **zero live call sites** (only stale doc-comments + negative test assertions reference it).
 
-### Deferrals (intentional — NOT blockers to functional completeness)
-All remaining items are the **WS7 cutover** in §8, which is destructive/release-affecting and must wait
-for explicit human approval:
-1. §8.1 swap `.goreleaser.yml` `builds:` to a Rust matrix (artifact still named `defi`).
-2. §8.2 point `.github/workflows/release.yml` at the Rust build path (keep `docs-live` stable-only sync).
-3. §8.3 retire the Go tree (`internal/`, `cmd/`, `go.mod`, `go.sum`, Go CI workflows) — only after a
-   verified Rust release tag.
-4. §8.4 rewrite AGENTS.md/CLAUDE.md "First 5 minutes" + folder structure and README install sections to
-   the Rust toolchain; update Mintlify + re-run `mint validate`/`broken-links`/`a11y`.
+### WS7 cutover completion (2026-05-31)
+The destructive/release-affecting cutover has now been executed after explicit approval to finish the
+Rust migration. The Go source tree and Go CI are retired, the release pipeline builds Rust archives,
+the installer still resolves the same archive names, and active docs now present Rust as the shipped
+implementation.
 
-### Remaining for human sign-off (§8.5 gate)
-- ✅ Quality gates green (fmt/clippy/test debug+release/build).
-- ✅ `schema` full-tree byte parity confirmed.
-- ✅ Tempo 0x76 byte-parity (`6890389`) and OWS e2e contract parity (`87b39df`) landed in tree.
-- ⚠️ WS5 full golden/wiremock sweep: app-crate tests + targeted live spot-checks pass; a documented
-  exhaustive command-by-command Go-oracle diff for every live command is the one verification still
-  worth a human pass before retiring Go.
-- ⏳ Human reviewer to explicitly approve the destructive cutover (§8.1–8.4) and Go retirement.
+Fresh closeout verification:
+- `cargo fmt --all --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace`, `cargo test --workspace --release`, and `cargo build --workspace --release`
+  passed from `rust/`.
+- `goreleaser check` validated `.goreleaser.yml`; a local GoReleaser snapshot built darwin/linux
+  amd64/arm64 Rust archives when run with `ulimit -n 8192`.
+- `scripts/nightly_execution_smoke.sh` passed using the Rust release binary.
+- Mintlify `validate`, `broken-links`, and `a11y` passed from `docs/`.
+- `find . -name '*.go'` excluding `.git`, `rust/target`, and `dist` returned no Go source files.
 
 ---
 
@@ -337,53 +333,38 @@ WS0 + WS1 first as one workflow to get a demonstrably functional read-only CLI, 
 
 ---
 
-## 8. Deferred to human sign-off
+## 8. WS7 cutover completion
 
-The WS7 cutover landed only the **safe, additive** half: a parallel `rust-ci.yml`
-(fmt/clippy/test debug+release/build on ubuntu+macos), a CHANGELOG `Unreleased → Changed` note,
-a README "Rust port (preview)" pointer, and this subsection. The Go tree, Go CI, release pipeline,
-and canonical docs are **unchanged and still authoritative**.
+The WS7 cutover is complete as of 2026-05-31.
 
-The remaining cutover steps are **destructive or release-affecting** and must NOT run until a human
-has signed off on full parity (WS5 + WS6 green, Tempo 0x76 + OWS byte-parity confirmed). Each step
-below is exact and reversible-by-revert.
+### 8.1 Release build is Rust (`.goreleaser.yml`)
+- [x] GoReleaser uses `builder: rust`, `dir: rust`, binary name `defi`, and `cargo zigbuild`.
+- [x] Targets cover linux/darwin × amd64/arm64.
+- [x] Archive names remain `defi_<version>_<os>_<arch>.tar.gz`, matching `scripts/install.sh`.
+- [x] Release metadata is injected with `DEFI_CLI_VERSION`, `DEFI_BUILD_COMMIT`, and `DEFI_BUILD_DATE`.
+- [x] Local snapshot verification succeeded for all four target archives with `ulimit -n 8192`.
 
-### 8.1 Swap the release build to Rust (`.goreleaser.yml`)
-- [ ] Replace the GoReleaser `builds:` block with a Rust matrix (linux/darwin × amd64/arm64) that
-  produces a single artifact still named `defi`. Options: drive `cargo build --release` per target
-  via a `before.hooks` + prebuilt `builds[].builder: prebuilt` block, or migrate to
-  `cargo-dist`/`cargo zigbuild` cross-compilation. Keep archive naming
-  (`defi_<version>_<os>_<arch>.tar.gz`, Windows `.zip`) and `checksums.txt` identical so
-  `scripts/install.sh` asset resolution keeps working.
-- [ ] Update `scripts/install.sh` only if archive/asset names change (target triples vs goos/goarch);
-  otherwise leave it untouched.
-- [ ] Verify locally with `goreleaser release --snapshot --clean` (or the cargo-dist equivalent) that
-  every target archive contains a runnable `defi` and checksums match.
+### 8.2 Tagged release workflow ships Rust
+- [x] `.github/workflows/release.yml` installs Rust, rustfmt, clippy, Zig, and `cargo-zigbuild`.
+- [x] The release job runs fmt, clippy, debug tests, release tests, then GoReleaser from repo root.
+- [x] Stable-tag `docs-live` sync remains in place.
+- [x] The install marker upload remains in place.
 
-### 8.2 Update `.github/workflows/release.yml`
-- [ ] Point the tagged-release job at the Rust build path (toolchain + `rust/` working dir) while
-  keeping: artifact name `defi`, the GitHub Releases upload, and the `docs-live` force-sync that runs
-  **only** for stable (non-prerelease) tags.
-- [ ] Keep `rust-ci.yml` as the PR/push gate; do not delete `ci.yml` (Go CI) in this step.
+### 8.3 Go tree retired
+- [x] Removed `cmd/`, `internal/`, `go.mod`, and `go.sum`.
+- [x] Removed the old Go CI workflow.
+- [x] Ported nightly execution smoke to build and run `rust/target/release/defi`.
 
-### 8.3 Retire the Go tree
-- [ ] Only after the Rust release pipeline has cut at least one verified tag: remove `internal/`,
-  `cmd/`, `go.mod`, `go.sum`, `.github/workflows/ci.yml`, and
-  `.github/workflows/nightly-execution-smoke.yml` (or port the nightly smoke to Rust first).
-- [ ] Remove the transient `go build -o defi` oracle references from agent docs.
+### 8.4 Active docs rewritten
+- [x] AGENTS.md "First 5 minutes" and folder structure now describe the Rust workspace.
+- [x] README install/build/development sections now use release artifacts and Cargo.
+- [x] CHANGELOG describes the Rust workspace as the shipped implementation.
+- [x] Mintlify installation/design docs point at Cargo and Rust crate paths.
 
-### 8.4 Rewrite AGENTS.md / CLAUDE.md and Mintlify docs
-- [ ] Rewrite "First 5 minutes" and the folder-structure block to describe `rust/` (16-crate
-  workspace) instead of the Go layout; update build/test commands to `cargo` equivalents.
-- [ ] Update README "Install / Build from source" + "Go install" sections to the Rust toolchain and
-  remove the "preview" framing once Rust is the shipped binary.
-- [ ] Update Mintlify build/install pages and re-run `npx --yes mint@4.2.378 validate`,
-  `broken-links`, and `a11y` from `docs/`.
-
-### 8.5 Sign-off gate (must all be true before 8.1–8.4)
-- [ ] WS5 full golden/wiremock parity sweep green (no unexplained drift).
-- [ ] WS6 `schema` full-tree byte parity green.
-- [ ] Tempo 0x76 (WS4a) and OWS e2e (WS4b) byte/contract parity confirmed.
-- [ ] `cargo fmt --all --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
-  `cargo test --workspace`, `cargo test --workspace --release` all clean on `rust-ci.yml`.
-- [ ] Human reviewer explicitly approves retiring Go.
+### 8.5 Final sign-off gate
+- [x] WS5 full golden/wiremock parity sweep green.
+- [x] WS6 `schema` full-tree byte parity green.
+- [x] Tempo 0x76 and OWS e2e byte/contract parity confirmed.
+- [x] `cargo fmt --all --check`, `cargo clippy --all-targets --all-features -- -D warnings`,
+  `cargo test --workspace`, and `cargo test --workspace --release` are clean.
+- [x] Human approval was given to retire Go and complete the release cutover.

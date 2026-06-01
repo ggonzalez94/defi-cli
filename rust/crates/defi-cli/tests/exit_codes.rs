@@ -1,13 +1,4 @@
-//! # Success criteria — `defi-cli` (L6 thin binary; Go: `cmd/defi/main.go`)
-//!
-//! `cmd/defi/main.go` is twelve lines:
-//!
-//! ```go
-//! func main() {
-//!     runner := app.NewRunner()
-//!     os.Exit(runner.Run(os.Args[1:]))
-//! }
-//! ```
+//! # Success criteria — `defi-cli` (L6 thin binary)
 //!
 //! Its ENTIRE job — and therefore the only contract this crate owns — is to
 //! faithfully translate the `int` the runner returns into the **OS process exit

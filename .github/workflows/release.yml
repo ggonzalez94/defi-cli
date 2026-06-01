@@ -10,25 +10,44 @@ permissions:
 
 jobs:
   goreleaser:
-    runs-on: ubuntu-latest
+    runs-on: macos-latest
+    defaults:
+      run:
+        working-directory: rust
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - uses: actions/setup-go@v5
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          go-version-file: go.mod
+          components: rustfmt, clippy
 
-      - run: go test ./...
-      - run: go vet ./...
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
-      - name: release
+      - uses: mlugg/setup-zig@v2
+
+      - run: cargo install --locked cargo-zigbuild
+      - run: cargo fmt --all --check
+      - run: cargo clippy --all-targets --all-features -- -D warnings
+      - run: cargo test --workspace
+      - run: cargo test --workspace --release
+
+      - name: install GoReleaser
         uses: goreleaser/goreleaser-action@v6
         with:
           distribution: goreleaser
           version: "~> v2"
-          args: release --clean
+          install-only: true
+          workdir: .
+
+      - name: release
+        run: |
+          ulimit -n 8192
+          goreleaser release --clean --parallelism 1
+        working-directory: .
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 

@@ -3,7 +3,7 @@
 //! Companion to `exit_codes.rs`. Where that file pins the i32 -> process-status
 //! cast, this file proves the **assembled `defi` executable** (the thing the L6
 //! crate actually produces, located via `CARGO_BIN_EXE_defi`) wires the runner
-//! to the real stdio + exit-status boundary the way `cmd/defi/main.go` does.
+//! to the real stdio + exit-status boundary.
 //!
 //! The exhaustive per-command golden parity lives in `defi-app`'s
 //! `tests/golden_cli.rs`; here we assert only the binary-level invariants the
@@ -27,6 +27,9 @@
 //!      encode).
 //!  B5. **`version` is a bare line, not JSON, exit 0, stdout only.** The
 //!      `version` command bypasses the envelope entirely.
+//!  B6. **`completion <shell>` is a bare completion script.** Completion
+//!      generation is clap-native output, not the JSON envelope, and must stay
+//!      wired because the machine-readable schema advertises those leaves.
 
 use std::process::Command;
 
@@ -189,5 +192,43 @@ fn version_long_is_bare_line() {
             "{} (commit: unknown, built: unknown)\n",
             env!("CARGO_PKG_VERSION")
         )
+    );
+}
+
+// ----- B6 ------------------------------------------------------------------
+
+#[test]
+fn completion_bash_is_bare_script() {
+    let r = run(&["completion", "bash"]);
+    assert_eq!(r.code, Some(0));
+    assert!(r.stderr.is_empty());
+    assert!(
+        r.stdout.contains("_defi") && r.stdout.contains("complete -F"),
+        "bash completion should be a shell script on stdout, got: {:?}",
+        r.stdout
+    );
+    assert!(
+        serde_json::from_str::<Value>(r.stdout.trim_end()).is_err(),
+        "completion output must NOT be JSON"
+    );
+}
+
+#[test]
+fn completion_bash_tolerates_broken_pipe() {
+    let script = format!(
+        "set -o pipefail\n\"{}\" completion bash | head -n 1 >/dev/null",
+        defi_bin()
+    );
+    let out = Command::new("/bin/bash")
+        .arg("-lc")
+        .arg(script)
+        .env_clear()
+        .env("HOME", std::env::temp_dir())
+        .output()
+        .expect("run completion pipeline");
+    assert!(
+        out.status.success(),
+        "completion should exit cleanly when the reader closes early; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
     );
 }

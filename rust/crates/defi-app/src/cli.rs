@@ -15,7 +15,8 @@
 
 use std::ffi::OsString;
 
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, CommandFactory, Parser, Subcommand};
+use clap_complete::{Generator, Shell};
 use defi_config::{Env, GlobalFlags};
 use defi_errors::{exit_code, Code, Error};
 use defi_model::Envelope;
@@ -120,6 +121,11 @@ pub enum TopCommand {
     Version(crate::version::cli::VersionArgs),
     /// Print machine-readable command schema.
     Schema(crate::schema::cli::SchemaArgs),
+    /// Generate shell completion scripts.
+    Completion {
+        #[command(subcommand)]
+        shell: CompletionShell,
+    },
     /// Provider commands.
     Providers {
         #[command(subcommand)]
@@ -197,12 +203,49 @@ pub enum TopCommand {
     },
 }
 
+/// Supported completion script targets.
+#[derive(Subcommand, Debug, Clone, Copy)]
+pub enum CompletionShell {
+    /// Generate Bash completions.
+    Bash,
+    /// Generate Fish completions.
+    Fish,
+    /// Generate PowerShell completions.
+    #[command(name = "powershell")]
+    PowerShell,
+    /// Generate Zsh completions.
+    Zsh,
+}
+
+impl CompletionShell {
+    fn path(self) -> &'static str {
+        match self {
+            CompletionShell::Bash => "bash",
+            CompletionShell::Fish => "fish",
+            CompletionShell::PowerShell => "powershell",
+            CompletionShell::Zsh => "zsh",
+        }
+    }
+}
+
+impl From<CompletionShell> for Shell {
+    fn from(value: CompletionShell) -> Self {
+        match value {
+            CompletionShell::Bash => Shell::Bash,
+            CompletionShell::Fish => Shell::Fish,
+            CompletionShell::PowerShell => Shell::PowerShell,
+            CompletionShell::Zsh => Shell::Zsh,
+        }
+    }
+}
+
 impl TopCommand {
     /// The space-joined command path for envelope `meta.command` / schema keys.
     fn command_path(&self) -> String {
         match self {
             TopCommand::Version(_) => "version".to_string(),
             TopCommand::Schema(_) => "schema".to_string(),
+            TopCommand::Completion { shell } => format!("completion {}", shell.path()),
             TopCommand::Providers { cmd } => format!("providers {}", cmd.path()),
             TopCommand::Assets { cmd } => format!("assets {}", cmd.path()),
             TopCommand::Wallet { cmd } => format!("wallet {}", cmd.path()),
@@ -247,6 +290,12 @@ where
         return 0;
     }
 
+    // `completion` also bypasses Settings/envelope entirely (plain script,
+    // exit 0) and must work without config/cache initialization.
+    if let TopCommand::Completion { shell } = &cli.command {
+        return emit_completion(*shell);
+    }
+
     let flags = cli.global.to_global_flags();
     let settings = match defi_config::Settings::load(&flags, env) {
         Ok(s) => s,
@@ -271,6 +320,8 @@ async fn dispatch(ctx: &AppCtx, command: TopCommand) -> Result<Envelope, Error> 
     match command {
         // version is handled before dispatch (plain text).
         TopCommand::Version(_) => unreachable!("version handled before dispatch"),
+        // completion is handled before dispatch (plain text).
+        TopCommand::Completion { .. } => unreachable!("completion handled before dispatch"),
         TopCommand::Schema(args) => crate::schema::cli::handle(ctx, args),
         TopCommand::Providers { cmd } => crate::providers::cli::handle(ctx, cmd).await,
         TopCommand::Assets { cmd } => crate::assets::cli::handle(ctx, cmd).await,
@@ -310,6 +361,24 @@ fn emit_success(ctx: &AppCtx, mut envelope: Envelope) -> i32 {
         Err(err) => emit_error(
             &envelope.meta.command,
             &Error::wrap(Code::Internal, "render output", err),
+        ),
+    }
+}
+
+/// Print shell completion source to stdout and return the process exit code.
+fn emit_completion(shell: CompletionShell) -> i32 {
+    let mut cmd = Cli::command();
+    let name = cmd.get_name().to_string();
+    cmd.set_bin_name(name);
+    cmd.build();
+
+    let generator = Shell::from(shell);
+    match generator.try_generate(&cmd, &mut std::io::stdout()) {
+        Ok(()) => 0,
+        Err(err) if err.kind() == std::io::ErrorKind::BrokenPipe => 0,
+        Err(err) => emit_error(
+            &format!("completion {}", shell.path()),
+            &Error::wrap(Code::Internal, "generate completion", err),
         ),
     }
 }
@@ -424,10 +493,10 @@ mod tests {
     //! single source of truth for the whole command surface. "Correct" for WS0
     //! means:
     //!
-    //! 1. **Every real Go command routes to a handler.** Each of the 65 real
+    //! 1. **Every real Go command routes to a handler.** Each of the 69 real
     //!    leaf command paths (the full 19-group tree captured in
-    //!    `rust/tests/golden/schema.json`, excluding the cobra-native `help` /
-    //!    `completion` leaves deferred to WS7) parses through the clap [`Cli`]
+    //!    `rust/tests/golden/schema.json`, excluding the cobra-native `help`
+    //!    leaf) parses through the clap [`Cli`]
     //!    tree AND its [`TopCommand::command_path`] equals the expected
     //!    space-joined path. No real command falls through to an "unknown
     //!    command" usage error (design spec §2.5; completion-plan WS0
@@ -449,7 +518,7 @@ mod tests {
     //! SKIPPED (owned elsewhere / later workstreams): per-handler request
     //! validation and provider/cache I/O (the group modules' own unit tests +
     //! WS1–WS4 wiremock tests), full `schema` tree parity (WS6), and clap-native
-    //! `help`/`completion` generation (WS7).
+    //! `help` generation (WS7).
 
     use super::*;
     use defi_config::Settings;
@@ -484,16 +553,19 @@ mod tests {
         }
     }
 
-    /// The full set of **real** leaf command paths (65) with a minimal valid
+    /// The full set of **real** leaf command paths (69) with a minimal valid
     /// argv that parses through the clap tree. Mirrors the leaves enumerated in
-    /// `rust/tests/golden/schema.json` minus the cobra-native `help` and four
-    /// `completion <shell>` leaves (deferred to WS7). Each entry is
-    /// `(expected_command_path, &[argv_after_program_name])`.
+    /// `rust/tests/golden/schema.json` minus the cobra-native `help` leaf. Each
+    /// entry is `(expected_command_path, &[argv_after_program_name])`.
     fn all_real_commands() -> Vec<(&'static str, Vec<&'static str>)> {
         vec![
             // --- metadata / read groups ------------------------------------
             ("version", vec!["version"]),
             ("schema", vec!["schema"]),
+            ("completion bash", vec!["completion", "bash"]),
+            ("completion fish", vec!["completion", "fish"]),
+            ("completion powershell", vec!["completion", "powershell"]),
+            ("completion zsh", vec!["completion", "zsh"]),
             ("providers list", vec!["providers", "list"]),
             ("assets resolve", vec!["assets", "resolve"]),
             ("wallet balance", vec!["wallet", "balance"]),
@@ -706,8 +778,9 @@ mod tests {
                 full.join(" ")
             );
 
-            // version is handled before dispatch (plain text); skip dispatch.
-            if expected_path == "version" {
+            // version/completion are handled before dispatch (plain text);
+            // skip dispatch.
+            if expected_path == "version" || expected_path.starts_with("completion ") {
                 continue;
             }
 
@@ -744,10 +817,10 @@ mod tests {
     #[test]
     fn all_real_command_paths_are_unique_and_cover_the_tree() {
         let cmds = all_real_commands();
-        // The Go `schema.json` golden has 70 leaves; subtracting the cobra-native
-        // `help` leaf and the four `completion <shell>` leaves (all deferred to
-        // WS7) leaves exactly 65 real commands the Rust port must route.
-        assert_eq!(cmds.len(), 65, "expected the 65 real Go leaf commands");
+        // The Go `schema.json` golden has 70 leaves; subtracting only the
+        // cobra-native `help` leaf leaves exactly 69 real commands the Rust port
+        // must route.
+        assert_eq!(cmds.len(), 69, "expected the 69 real Go leaf commands");
         let mut seen = std::collections::BTreeSet::new();
         for (path, _) in &cmds {
             assert!(seen.insert(*path), "duplicate command path: {path}");

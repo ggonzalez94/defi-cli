@@ -1510,7 +1510,7 @@ mod app_tests {
     use defi_errors::{exit_code, Code, Error};
     use defi_execution::store::Store as ActionStore;
     use defi_model::Envelope;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -2163,7 +2163,7 @@ mod compound_app_tests {
     use defi_errors::{exit_code, Code, Error};
     use defi_execution::store::Store as ActionStore;
     use defi_model::Envelope;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
@@ -2825,11 +2825,12 @@ mod claim_submit_app_tests {
     use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
     use defi_execution::store::Store as ActionStore;
     use defi_model::Envelope;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
-    use wiremock::MockServer;
+    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // --- contract constants ------------------------------------------------
 
@@ -2904,10 +2905,50 @@ mod claim_submit_app_tests {
         }
     }
 
-    /// A non-dialed RPC sentinel for the planned step (the policed EVM step path
-    /// does not reach the network in this build; this keeps the action
-    /// well-formed). The controller override avoids any plan-time eth_call.
-    const DEAD_RPC: &str = "http://127.0.0.1:0";
+    const EXPECTED_TX_HASH: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
+
+    async fn mock_rpc_method(server: &MockServer, rpc_method: &'static str, result: Value) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "method": rpc_method })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result,
+            })))
+            .mount(server)
+            .await;
+    }
+
+    async fn standard_submit_rpc() -> MockServer {
+        let server = MockServer::start().await;
+        mock_rpc_method(&server, "eth_chainId", json!("0x1")).await;
+        mock_rpc_method(&server, "eth_call", json!("0x")).await;
+        mock_rpc_method(&server, "eth_estimateGas", json!("0x5208")).await;
+        mock_rpc_method(
+            &server,
+            "eth_getBlockByNumber",
+            json!({
+                "number": "0x10",
+                "baseFeePerGas": "0x3b9aca00"
+            }),
+        )
+        .await;
+        mock_rpc_method(&server, "eth_maxPriorityFeePerGas", json!("0x3b9aca00")).await;
+        mock_rpc_method(&server, "eth_getTransactionCount", json!("0x7")).await;
+        mock_rpc_method(&server, "eth_sendRawTransaction", json!(EXPECTED_TX_HASH)).await;
+        mock_rpc_method(
+            &server,
+            "eth_getTransactionReceipt",
+            json!({
+                "status": "0x1",
+                "blockNumber": "0x11",
+                "gasUsed": "0x5208"
+            }),
+        )
+        .await;
+        server
+    }
 
     /// Plan + persist a canonical `claim_rewards` action against `dir`, returning
     /// its `action_id`. `from_addr` becomes the action's `from_address`. Plans
@@ -2915,9 +2956,11 @@ mod claim_submit_app_tests {
     /// identical to production. `--controller-address` is set so no plan-time
     /// eth_call is needed (a parseable wiremock URI is still required by connect).
     async fn plan_claim(dir: &Path, from_addr: &str) -> String {
-        // A wiremock server only to provide a parseable, connectable URI for the
-        // plan path (no eth_call is made with the controller override).
-        let rpc = MockServer::start().await;
+        let rpc = standard_submit_rpc().await;
+        plan_claim_with_rpc(dir, from_addr, &rpc.uri()).await
+    }
+
+    async fn plan_claim_with_rpc(dir: &Path, from_addr: &str, rpc_url: &str) -> String {
         let ctx = AppCtx::new(exec_settings(dir));
         let args = ClaimPlanArgs {
             chain: Some("1".to_string()),
@@ -2928,7 +2971,7 @@ mod claim_submit_app_tests {
             controller_address: Some(CONTROLLER.to_string()),
             pool_address_provider: None,
             provider: Some("aave".to_string()),
-            rpc_url: Some(rpc.uri()),
+            rpc_url: Some(rpc_url.to_string()),
             simulate: true,
             identity: PlanIdentityFlags {
                 wallet: None,
@@ -2943,16 +2986,6 @@ mod claim_submit_app_tests {
             .as_str()
             .expect("action_id")
             .to_string();
-        // Re-point the persisted step rpc_url at a non-dialed sentinel so the
-        // offline policed-EVM submit path is robust to the wiremock server
-        // shutting down.
-        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
-            .expect("open store");
-        let mut action = store.get(&action_id).expect("load");
-        for step in &mut action.steps {
-            step.rpc_url = DEAD_RPC.to_string();
-        }
-        store.save(&action).expect("persist sentinel rpc_url");
         action_id
     }
 
@@ -2998,7 +3031,8 @@ mod claim_submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_legacy_local_completes_and_emits_envelope() {
         let tmp = TempDir::new().expect("tempdir");
-        let action_id = plan_claim(tmp.path(), SIGNER_ADDR).await;
+        let rpc = standard_submit_rpc().await;
+        let action_id = plan_claim_with_rpc(tmp.path(), SIGNER_ADDR, &rpc.uri()).await;
 
         // No --allow-max-approval needed: the single `claim` step is not an
         // approval step, so the bounded-approval guardrail does not apply.
@@ -3399,7 +3433,8 @@ mod compound_submit_app_tests {
     /// Aave pool (`--pool-address` override) — short-circuits the `getPool()`
     /// lookup, so the only plan-time eth_call is the allowance check.
     const POOL: &str = "0x00000000000000000000000000000000000000cc";
-    const DEAD_RPC: &str = "http://127.0.0.1:0";
+    const EXPECTED_TX_HASH: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     // --- harness -----------------------------------------------------------
 
@@ -3448,22 +3483,46 @@ mod compound_submit_app_tests {
         }
     }
 
-    // --- wiremock JSON-RPC: every eth_call returns a fixed uint word --------
+    // --- wiremock JSON-RPC: allowance reads plus submit execution methods ---
 
     struct EchoIdResponder {
-        result: String,
+        allowance_word: String,
     }
 
     impl Respond for EchoIdResponder {
         fn respond(&self, request: &Request) -> ResponseTemplate {
-            let id = serde_json::from_slice::<Value>(&request.body)
-                .ok()
+            let body = serde_json::from_slice::<Value>(&request.body).ok();
+            let id = body
+                .as_ref()
                 .and_then(|body| body.get("id").cloned())
                 .unwrap_or_else(|| Value::from(1));
+            let rpc_method = body
+                .as_ref()
+                .and_then(|body| body.get("method"))
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+            let result = match rpc_method {
+                "eth_chainId" => Value::from("0x1"),
+                "eth_call" => Value::from(self.allowance_word.clone()),
+                "eth_estimateGas" => Value::from("0x5208"),
+                "eth_getBlockByNumber" => serde_json::json!({
+                    "number": "0x10",
+                    "baseFeePerGas": "0x3b9aca00"
+                }),
+                "eth_maxPriorityFeePerGas" => Value::from("0x3b9aca00"),
+                "eth_getTransactionCount" => Value::from("0x7"),
+                "eth_sendRawTransaction" => Value::from(EXPECTED_TX_HASH),
+                "eth_getTransactionReceipt" => serde_json::json!({
+                    "status": "0x1",
+                    "blockNumber": "0x11",
+                    "gasUsed": "0x5208"
+                }),
+                _ => Value::from(self.allowance_word.clone()),
+            };
             ResponseTemplate::new(200).set_body_json(serde_json::json!({
                 "jsonrpc": "2.0",
                 "id": id,
-                "result": self.result,
+                "result": result,
             }))
         }
     }
@@ -3480,7 +3539,7 @@ mod compound_submit_app_tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .respond_with(EchoIdResponder {
-                result: uint_word(allowance),
+                allowance_word: uint_word(allowance),
             })
             .mount(&server)
             .await;
@@ -3490,10 +3549,14 @@ mod compound_submit_app_tests {
     /// Plan + persist a canonical `compound_rewards` action against `dir`,
     /// returning its `action_id`. `allowance` controls whether the persisted plan
     /// carries an `approval` step (insufficient → yes). After planning, the
-    /// persisted step `rpc_url`s are re-pointed at a non-dialed sentinel so the
-    /// offline policed-EVM submit path is robust to the wiremock shutdown.
+    /// persisted step `rpc_url`s point at the same JSON-RPC mock, which also
+    /// answers the submit-time execution methods.
     async fn plan_compound(dir: &Path, from_addr: &str, allowance: u128) -> String {
         let rpc = allowance_rpc(allowance).await;
+        plan_compound_with_rpc(dir, from_addr, &rpc.uri()).await
+    }
+
+    async fn plan_compound_with_rpc(dir: &Path, from_addr: &str, rpc_url: &str) -> String {
         let ctx = AppCtx::new(exec_settings(dir));
         let args = CompoundPlanArgs {
             chain: Some("1".to_string()),
@@ -3506,7 +3569,7 @@ mod compound_submit_app_tests {
             pool_address: Some(POOL.to_string()),
             pool_address_provider: None,
             provider: Some("aave".to_string()),
-            rpc_url: Some(rpc.uri()),
+            rpc_url: Some(rpc_url.to_string()),
             simulate: true,
             identity: PlanIdentityFlags {
                 wallet: None,
@@ -3521,13 +3584,6 @@ mod compound_submit_app_tests {
             .as_str()
             .expect("action_id")
             .to_string();
-        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
-            .expect("open store");
-        let mut action = store.get(&action_id).expect("load");
-        for step in &mut action.steps {
-            step.rpc_url = DEAD_RPC.to_string();
-        }
-        store.save(&action).expect("persist sentinel rpc_url");
         action_id
     }
 
@@ -3566,9 +3622,10 @@ mod compound_submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_legacy_local_completes_and_emits_envelope() {
         let tmp = TempDir::new().expect("tempdir");
+        let rpc = allowance_rpc(10_000_000).await;
         // Sufficient allowance => [claim, lend_call] (no approval step), so no
         // bounded-approval opt-in is needed for the happy path.
-        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 10_000_000).await;
+        let action_id = plan_compound_with_rpc(tmp.path(), SIGNER_ADDR, &rpc.uri()).await;
 
         let env = run_submit(tmp.path(), base_submit_args(&action_id))
             .await
@@ -3650,7 +3707,8 @@ mod compound_submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_inflated_approval_accepted_with_allow_max() {
         let tmp = TempDir::new().expect("tempdir");
-        let action_id = plan_compound(tmp.path(), SIGNER_ADDR, 0).await;
+        let rpc = allowance_rpc(0).await;
+        let action_id = plan_compound_with_rpc(tmp.path(), SIGNER_ADDR, &rpc.uri()).await;
         {
             let store = ActionStore::open(
                 tmp.path().join("actions.db"),

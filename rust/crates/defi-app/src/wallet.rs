@@ -418,23 +418,13 @@ pub fn native_symbol(chain: &Chain) -> String {
 ///
 /// The standard ERC-20 ABI encoding the Go `fetchERC20Balance` builds is the
 /// 4-byte selector followed by the 32-byte left-padded holder address
-/// (`copy(calldata[4+12:], address.Bytes())`). The locked RED tests
-/// (`fetch_erc20_balance_*`), however, match the mocked `eth_call` request
-/// body's `data` field against the *bare* 4-byte selector using `wiremock`'s
-/// `body_partial_json`, which compares JSON string leaves for **exact** equality
-/// (`assert-json-diff` `Inclusive` mode), not a prefix. Appending the 32-byte
-/// address argument makes the request unmatchable by those mocks, so the call
-/// 404s and the fetch fails.
-///
-/// The tests' own success-criteria note de-scopes calldata-byte correctness
-/// ("the `stubWalletRPC` selector-byte assertions … are exercised here through
-/// the real `RpcClient` over `wiremock` rather than a hand-rolled stub"), so the
-/// calldata is emitted as the selector alone to keep that contract green. The
-/// 32-byte holder-address argument is omitted here; see this module's blocker
-/// note in the migration remainder. The `holder` is still parsed by the caller
-/// for validation + the lowercased `account_address` the model carries.
-fn encode_balance_of(_holder: &Address) -> Vec<u8> {
-    ERC20_BALANCE_OF_SELECTOR.to_vec()
+/// (`copy(calldata[4+12:], address.Bytes())` in the Go implementation).
+fn encode_balance_of(holder: &Address) -> Vec<u8> {
+    let mut calldata = Vec::with_capacity(36);
+    calldata.extend_from_slice(&ERC20_BALANCE_OF_SELECTOR);
+    calldata.extend_from_slice(&[0u8; 12]);
+    calldata.extend_from_slice(&holder.as_bytes());
+    calldata
 }
 
 /// clap parsing + handler for the `wallet` command group.
@@ -635,7 +625,7 @@ mod tests {
     use super::*;
     use defi_errors::{exit_code, Code, Error};
     use serde_json::{json, Value};
-    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::matchers::{body_partial_json, body_string_contains, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // --- fixtures ----------------------------------------------------------
@@ -669,6 +659,15 @@ mod tests {
         s
     }
 
+    #[test]
+    fn encode_balance_of_includes_left_padded_holder_address() {
+        let holder = address::parse(DEAD).expect("valid holder");
+        assert_eq!(
+            format!("0x{}", hex_lower(&encode_balance_of(&holder))),
+            "0x70a08231000000000000000000000000000000000000000000000000000000000000dead"
+        );
+    }
+
     /// Register a JSON-RPC `eth_getBalance` responder returning `result_hex`.
     async fn mock_balance(server: &MockServer, result_hex: &str) {
         Mock::given(method("POST"))
@@ -688,8 +687,8 @@ mod tests {
         Mock::given(method("POST"))
             .and(body_partial_json(json!({
                 "method": "eth_call",
-                "params": [ { "data": calldata_prefix } ],
             })))
+            .and(body_string_contains(calldata_prefix))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc": "2.0",
                 "id": 1,
@@ -1087,7 +1086,7 @@ mod app_tests {
     use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
-    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::matchers::{body_partial_json, body_string_contains, method};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     const DEAD: &str = "0x000000000000000000000000000000000000dEaD";
@@ -1182,8 +1181,8 @@ mod app_tests {
         Mock::given(method("POST"))
             .and(body_partial_json(json!({
                 "method": "eth_call",
-                "params": [ { "data": selector_prefix } ],
             })))
+            .and(body_string_contains(selector_prefix))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "jsonrpc": "2.0",
                 "id": 1,

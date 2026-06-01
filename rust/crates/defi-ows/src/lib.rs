@@ -80,6 +80,59 @@ pub struct CommandOutput {
     pub run_error: Option<String>,
 }
 
+/// Production command runner backed by the local filesystem and subprocesses.
+pub struct SystemCommandRunner;
+
+impl CommandRunner for SystemCommandRunner {
+    fn look_path(&self, file: &str) -> Result<String, std::io::Error> {
+        let candidate = std::path::Path::new(file);
+        if candidate.components().count() > 1 {
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().into_owned());
+            }
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::NotFound,
+                format!("{file} not found"),
+            ));
+        }
+
+        let path = std::env::var_os("PATH").unwrap_or_default();
+        for dir in std::env::split_paths(&path) {
+            let candidate = dir.join(file);
+            if candidate.is_file() {
+                return Ok(candidate.to_string_lossy().into_owned());
+            }
+        }
+        Err(std::io::Error::new(
+            std::io::ErrorKind::NotFound,
+            format!("{file} not found in PATH"),
+        ))
+    }
+
+    fn run(&self, bin: &str, args: &[String], env: &[(String, String)]) -> CommandOutput {
+        let mut cmd = std::process::Command::new(bin);
+        cmd.args(args);
+        for (key, value) in env {
+            cmd.env(key, value);
+        }
+        match cmd.output() {
+            Ok(output) => CommandOutput {
+                stdout: output.stdout,
+                stderr: output.stderr,
+                run_error: if output.status.success() {
+                    None
+                } else {
+                    Some(format!("process exited with status {}", output.status))
+                },
+            },
+            Err(err) => CommandOutput {
+                run_error: Some(err.to_string()),
+                ..CommandOutput::default()
+            },
+        }
+    }
+}
+
 /// Sign and broadcast an unsigned EVM transaction via the `ows` CLI.
 ///
 /// Mirrors Go `SendUnsignedTx`. Validates inputs, requires the `ows` binary on
@@ -140,6 +193,7 @@ fn classify_command_failure(output: &CommandOutput) -> Error {
     if detail.is_empty() {
         detail = String::from_utf8_lossy(&output.stdout).trim().to_string();
     }
+    let detail = sanitize_command_detail(&detail);
 
     if is_policy_denied_detail(&detail) {
         if detail.is_empty() {
@@ -160,6 +214,46 @@ fn classify_command_failure(output: &CommandOutput) -> Error {
         "ows send-tx command failed",
         DetailError(detail),
     )
+}
+
+/// Redact high-entropy key material that can appear in downstream OWS errors.
+fn sanitize_command_detail(detail: &str) -> String {
+    let chars: Vec<char> = detail.chars().collect();
+    let mut out = String::with_capacity(detail.len());
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] == '0'
+            && i + 2 < chars.len()
+            && matches!(chars[i + 1], 'x' | 'X')
+            && chars[i + 2].is_ascii_hexdigit()
+        {
+            let mut j = i + 2;
+            while j < chars.len() && chars[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j - (i + 2) >= 64 {
+                out.push_str("0x<redacted-hex>");
+                i = j;
+                continue;
+            }
+        }
+
+        if chars[i].is_ascii_hexdigit() {
+            let mut j = i;
+            while j < chars.len() && chars[j].is_ascii_hexdigit() {
+                j += 1;
+            }
+            if j - i >= 64 {
+                out.push_str("<redacted-hex>");
+                i = j;
+                continue;
+            }
+        }
+
+        out.push(chars[i]);
+        i += 1;
+    }
+    out
 }
 
 /// Whether a command's stderr/stdout `detail` signals an OWS policy denial.
@@ -742,6 +836,29 @@ mod tests {
         let err = send_unsigned_tx(&runner, Some("pass"), "wallet-1", "eip155:1", &[0x02], "")
             .expect_err("generic command failure must fail");
         assert_code(&err, Code::Signer);
+    }
+
+    #[test]
+    fn send_redacts_key_material_from_command_failures() {
+        let secret_a = "a8502a7d50f296649b8885664047d061975c88a831da5c854006acf4af05b425";
+        let secret_b = "155368a417201d228b3b9210e5e1f98b6c1bedc65834d1dcb60071dd3c48e5ab";
+        let stderr = format!(
+            "error: invalid mnemonic phrase: the word `{{\"ed25519\":\"{secret_a}\",\"secp256k1\":\"{secret_b}\"}}` is invalid"
+        );
+        let runner = FakeRunner::failing(&stderr);
+        let err = send_unsigned_tx(&runner, Some("pass"), "wallet-1", "eip155:1", &[0x02], "")
+            .expect_err("generic command failure must fail");
+
+        assert_code(&err, Code::Signer);
+        let rendered = err.to_string();
+        assert!(
+            !rendered.contains(secret_a) && !rendered.contains(secret_b),
+            "error detail must not leak key material: {rendered}"
+        );
+        assert!(
+            rendered.contains("<redacted-hex>"),
+            "error should keep useful context with redaction marker: {rendered}"
+        );
     }
 
     #[test]

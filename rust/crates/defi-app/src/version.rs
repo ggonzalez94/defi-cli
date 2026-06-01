@@ -23,9 +23,23 @@
 /// The CLI binary name (mirrors Go `version.CLIName`).
 pub const CLI_NAME: &str = "defi";
 
-/// The CLI semantic version, sourced from the crate version so it tracks the
-/// workspace version (`0.5.0`) and the Go `version.CLIVersion`.
-pub const CLI_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Resolve the CLI semantic version from release metadata when present,
+/// otherwise from the crate version.
+pub const fn configured_cli_version(
+    release_version: Option<&'static str>,
+    crate_version: &'static str,
+) -> &'static str {
+    match release_version {
+        Some(version) => version,
+        None => crate_version,
+    }
+}
+
+/// The CLI semantic version. Local builds use the crate/workspace version;
+/// release builds may inject `DEFI_CLI_VERSION` to preserve tagged-release
+/// output parity with the historical Go binary.
+pub const CLI_VERSION: &str =
+    configured_cli_version(option_env!("DEFI_CLI_VERSION"), env!("CARGO_PKG_VERSION"));
 
 /// The build commit hash. Defaults to `"unknown"` (matching Go), overridable at
 /// compile time via `DEFI_BUILD_COMMIT` (the Rust analogue of Go `-ldflags`).
@@ -137,8 +151,8 @@ mod tests {
     // ----- V2: long form matches the Go golden ----------------------------
     #[test]
     fn long_matches_go_golden_with_default_build_metadata() {
-        // The golden was captured from a `go build` with no `-ldflags`, so commit
-        // and build date are the Go defaults (`"unknown"`). The Rust defaults are
+        // The golden was captured with no release metadata, so commit and build
+        // date are the historical defaults (`"unknown"`). The Rust defaults are
         // identical unless DEFI_BUILD_* were injected; only assert byte parity in
         // the (default) un-injected case so an instrumented build does not fail.
         if COMMIT == "unknown" && BUILD_DATE == "unknown" {
@@ -162,6 +176,12 @@ mod tests {
     fn cli_version_tracks_crate_version() {
         assert_eq!(CLI_VERSION, env!("CARGO_PKG_VERSION"));
         assert_eq!(CLI_NAME, "defi");
+    }
+
+    #[test]
+    fn configured_cli_version_prefers_injected_release_version() {
+        assert_eq!(configured_cli_version(Some("v9.9.9"), "0.5.0"), "v9.9.9");
+        assert_eq!(configured_cli_version(None, "0.5.0"), "0.5.0");
     }
 
     // ----- V4: render dispatches on the long flag -------------------------

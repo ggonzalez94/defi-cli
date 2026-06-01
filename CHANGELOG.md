@@ -10,7 +10,7 @@ Format:
 ## [Unreleased]
 
 ### Changed
-- In-progress Rust reimplementation of the CLI (`rust/`); no contract change — JSON envelope, fields, ordering, exit codes, and identifiers are unchanged.
+- CLI implementation and release artifacts now build from the Rust workspace (`rust/`); JSON envelope, fields, ordering, exit codes, and identifiers are unchanged.
 
 ## [v0.5.0] - 2026-03-26
 

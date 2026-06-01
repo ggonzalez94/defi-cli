@@ -39,7 +39,7 @@ const MARKETS_QUERY: &str = r#"query Markets($first:Int,$where:MarketFilters,$or
   markets(first:$first, where:$where, orderBy:$orderBy, orderDirection:$orderDirection){
     items{
       id
-      uniqueKey
+      marketId
       irmAddress
       loanAsset{ address symbol decimals chain{ id network } }
       collateralAsset{ address symbol }
@@ -53,7 +53,7 @@ const POSITIONS_QUERY: &str = r#"query Positions($first:Int,$where:MarketPositio
     items{
       id
       market{
-        uniqueKey
+        marketId
         loanAsset{ address symbol decimals chain{ id network } }
         collateralAsset{ address symbol decimals }
         state{ supplyApy borrowApy }
@@ -571,7 +571,7 @@ impl LendingProvider for Client {
                 provider: "morpho".to_string(),
                 chain_id: chain.caip2.clone(),
                 asset_id: canonical_asset_id(&asset, &m.loan_asset.address),
-                provider_native_id: m.unique_key.trim().to_string(),
+                provider_native_id: m.market_id.trim().to_string(),
                 provider_native_id_kind: model::NATIVE_ID_KIND_MARKET_ID.to_string(),
                 supply_apy,
                 borrow_apy,
@@ -619,7 +619,7 @@ impl LendingProvider for Client {
                 provider: "morpho".to_string(),
                 chain_id: chain.caip2.clone(),
                 asset_id: canonical_asset_id(&asset, &m.loan_asset.address),
-                provider_native_id: m.unique_key.trim().to_string(),
+                provider_native_id: m.market_id.trim().to_string(),
                 provider_native_id_kind: model::NATIVE_ID_KIND_MARKET_ID.to_string(),
                 supply_apy: m.state.supply_apy * 100.0,
                 borrow_apy: m.state.borrow_apy * 100.0,
@@ -719,7 +719,7 @@ impl LendingPositionsProvider for Client {
                             account_address: account.clone(),
                             position_type: LendPositionType::Supply.as_str().to_string(),
                             asset_id: loan_asset_id.clone(),
-                            provider_native_id: item.market.unique_key.trim().to_string(),
+                            provider_native_id: item.market.market_id.trim().to_string(),
                             provider_native_id_kind: model::NATIVE_ID_KIND_MARKET_ID.to_string(),
                             amount: amount_info_from_base(&base, item.market.loan_asset.decimals),
                             amount_usd: state.supply_assets_usd,
@@ -752,7 +752,7 @@ impl LendingPositionsProvider for Client {
                             account_address: account.clone(),
                             position_type: LendPositionType::Borrow.as_str().to_string(),
                             asset_id: loan_asset_id.clone(),
-                            provider_native_id: item.market.unique_key.trim().to_string(),
+                            provider_native_id: item.market.market_id.trim().to_string(),
                             provider_native_id_kind: model::NATIVE_ID_KIND_MARKET_ID.to_string(),
                             amount: amount_info_from_base(&base, item.market.loan_asset.decimals),
                             amount_usd: state.borrow_assets_usd,
@@ -783,7 +783,7 @@ impl LendingPositionsProvider for Client {
                             account_address: account.clone(),
                             position_type: LendPositionType::Collateral.as_str().to_string(),
                             asset_id: collateral_asset_id,
-                            provider_native_id: item.market.unique_key.trim().to_string(),
+                            provider_native_id: item.market.market_id.trim().to_string(),
                             provider_native_id_kind: model::NATIVE_ID_KIND_MARKET_ID.to_string(),
                             amount: amount_info_from_base(&base, collateral_asset.decimals),
                             amount_usd: state.collateral_usd,
@@ -1287,8 +1287,8 @@ struct VaultV2HistoricalState {
 
 #[derive(Debug, Deserialize)]
 struct MorphoMarket {
-    #[serde(rename = "uniqueKey", default)]
-    unique_key: String,
+    #[serde(rename = "marketId", default)]
+    market_id: String,
     #[serde(rename = "loanAsset", default)]
     loan_asset: LoanAsset,
     state: MarketState,
@@ -1348,8 +1348,8 @@ struct MorphoMarketPosition {
 
 #[derive(Debug, Deserialize)]
 struct PositionMarket {
-    #[serde(rename = "uniqueKey", default)]
-    unique_key: String,
+    #[serde(rename = "marketId", default)]
+    market_id: String,
     #[serde(rename = "loanAsset", default)]
     loan_asset: PositionAsset,
     #[serde(rename = "collateralAsset")]
@@ -2146,7 +2146,7 @@ mod tests {
                         "items": [
                             {{
                                 "id": "4f598145-0188-44dc-9e18-38a2817020a1",
-                                "uniqueKey": "m1",
+                                "marketId": "m1",
                                 "irmAddress": "0x870aC11D48B15DB9a138Cf899d20F13F79Ba00BC",
                                 "loanAsset": {{"address": "{USDC_ETH}", "symbol": "USDC", "decimals": 6, "chain": {{"id": 1, "network": "ethereum"}}}},
                                 "collateralAsset": {{"address": "0x111", "symbol": "WETH"}},
@@ -2476,7 +2476,7 @@ mod tests {
                             {{
                                 "id": "position-1",
                                 "market": {{
-                                    "uniqueKey": "market-1",
+                                    "marketId": "market-1",
                                     "loanAsset": {{"address": "{USDC_ETH}", "symbol": "USDC", "decimals": 6, "chain": {{"id": 1, "network": "ethereum"}}}},
                                     "collateralAsset": {{"address": "0x4200000000000000000000000000000000000006", "symbol": "WETH", "decimals": 18}},
                                     "state": {{"supplyApy": 0.02, "borrowApy": 0.03}}

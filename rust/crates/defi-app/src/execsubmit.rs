@@ -26,6 +26,7 @@
 //! * [`execute_resolved`] — Go `executeActionWithTimeout` → `ExecuteAction`:
 //!   broadcast through the engine, persisting each transition.
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use defi_errors::{Code, Error};
@@ -124,11 +125,26 @@ pub fn resolve_action_execution_backend(
             }
             let sender = resolve_persisted_ows_sender(action)?;
             let sender_addr = address::parse(&sender)?;
+            let send_hook = Arc::new(
+                |wallet_id: &str, chain_id: &str, tx_bytes: &[u8], rpc_url: &str| {
+                    let runner = defi_ows::SystemCommandRunner;
+                    let token = std::env::var(defi_ows::ENV_OWS_TOKEN).ok();
+                    let result = defi_ows::send_unsigned_tx(
+                        &runner,
+                        token.as_deref(),
+                        wallet_id,
+                        chain_id,
+                        tx_bytes,
+                        rpc_url,
+                    )?;
+                    Ok(result.tx_hash)
+                },
+            );
             Ok(ResolvedSubmitExecution {
-                backend: ResolvedBackend::Ows(OwsSubmitBackend::new(
-                    action.wallet_id.clone(),
-                    sender_addr,
-                )),
+                backend: ResolvedBackend::Ows(
+                    OwsSubmitBackend::new(action.wallet_id.clone(), sender_addr)
+                        .with_send_hook(send_hook),
+                ),
                 sender,
             })
         }

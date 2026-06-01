@@ -153,7 +153,6 @@ pub mod cli {
     #[derive(Args, Debug, Clone, Default)]
     pub struct SchemaArgs {
         /// Optional command path to scope the schema document (e.g. `yield plan`).
-        #[arg(trailing_var_arg = true)]
         pub path: Vec<String>,
     }
 

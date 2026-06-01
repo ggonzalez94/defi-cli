@@ -1,7 +1,7 @@
 # Execution Component Design (`plan|submit|status`)
 
-Status: Implemented (v1)  
-Last Updated: 2026-02-24  
+Status: Implemented (v1)
+Last Updated: 2026-05-31
 Scope: Current implementation in this branch (not a forward-looking proposal)
 
 ## 1. Purpose
@@ -18,7 +18,7 @@ Execution is integrated inside existing domain commands (for example `swap`, `br
 
 | Domain | Commands | Selector Requirement | Execution Coverage |
 |---|---|---|---|
-| Swap | `swap plan|submit|status` | `--provider` required | `taikoswap` execution today |
+| Swap | `swap plan|submit|status` | `--provider` required | `tempo` and `taikoswap` execution |
 | Bridge | `bridge plan|submit|status` | `--provider` required | `across`, `lifi` execution |
 | Transfer | `transfer plan|submit|status` | no provider selector | native ERC-20 wallet transfer execution |
 | Lend | `lend (supply|withdraw|borrow|repay) plan|submit|status` | `--provider` required | `aave`, `morpho`, `moonwell` execution (`morpho` requires `--market-id`) |
@@ -35,14 +35,15 @@ Notes:
 
 ### 3.1 Command Integration
 
-Execution wiring lives in `internal/app/runner.go` and domain files:
+Execution wiring lives in `rust/crates/defi-app`:
 
-- `internal/app/bridge_execution_commands.go`
-- `internal/app/lend_execution_commands.go`
-- `internal/app/yield_execution_commands.go`
-- `internal/app/rewards_command.go`
-- `internal/app/approvals_command.go`
-- `internal/app/transfer_command.go`
+- `rust/crates/defi-app/src/bridge.rs`
+- `rust/crates/defi-app/src/lend.rs`
+- `rust/crates/defi-app/src/yield.rs`
+- `rust/crates/defi-app/src/rewards.rs`
+- `rust/crates/defi-app/src/approvals.rs`
+- `rust/crates/defi-app/src/transfer.rs`
+- `rust/crates/defi-app/src/swap.rs`
 
 Design decision:
 
@@ -56,7 +57,7 @@ Tradeoff:
 
 Command handlers route action construction through a shared registry:
 
-- `internal/execution/actionbuilder/registry.go`
+- `rust/crates/defi-execution/src/builder.rs`
 
 Registry responsibility:
 
@@ -74,12 +75,12 @@ Tradeoff:
 
 ### 3.3 Capability Interfaces
 
-Execution providers are opt-in capability interfaces in `internal/providers/types.go`:
+Execution providers are opt-in capability traits in `rust/crates/defi-execution/src/builder.rs`:
 
-- `SwapExecutionProvider`
-- `BridgeExecutionProvider`
+- `SwapActionBuilder`
+- `BridgeActionBuilder`
 
-Lend/yield/rewards/approvals/transfer currently use internal planners in `internal/execution/planner` instead of provider interfaces.
+Lend/yield/rewards/approvals/transfer use internal planners in `rust/crates/defi-execution/src/planner.rs` instead of provider interfaces.
 
 Design decision:
 
@@ -91,7 +92,7 @@ Tradeoff:
 
 ### 3.4 Action Model
 
-Canonical action model is in `internal/execution/types.go`:
+Canonical action model is in `rust/crates/defi-execution/src/action.rs`:
 
 - `Action`: intent metadata + ordered steps
 - `ActionStep`: executable transaction step
@@ -106,7 +107,7 @@ Step order is the dependency model (no separate DAG). This keeps execution deter
 
 ### 3.5 Persistence
 
-Persistence is in `internal/execution/store.go` (SQLite + file lock):
+Persistence is in `rust/crates/defi-execution/src/store.rs` (SQLite + file lock):
 
 - single `actions` table
 - full action JSON blob stored in `payload`
@@ -144,13 +145,16 @@ Tradeoff:
 
 Signer abstractions:
 
-- Interface: `internal/execution/signer/signer.go`
-- Local signer implementation: `internal/execution/signer/local.go`
-- Command-level signer setup: `newExecutionSigner(...)` in `internal/app/runner.go`
+- Local signer implementation: `rust/crates/defi-execution/src/signer.rs` + `rust/crates/defi-evm`
+- OWS command integration: `rust/crates/defi-ows`
+- Tempo submit path: `rust/crates/defi-execution/src/tempo_executor.rs`
+- Command-level submit/backend resolution: `rust/crates/defi-app/src/execsubmit.rs`
 
-Supported backend today:
+Supported backends today:
 
-- `--signer local` only (other backends intentionally not implemented yet)
+- Local signer actions planned with `--from-address`
+- OWS-backed standard EVM actions planned with `--wallet`
+- Tempo-native swap submit with `--signer tempo`
 
 Key sources:
 
@@ -174,29 +178,31 @@ Key sources:
 Security controls:
 
 - optional `--from-address` signer-address check in submit flows
+- wallet-backed submit rejects legacy signer flags and requires `DEFI_OWS_TOKEN`
+- Tempo submit rejects owner-mode private keys and uses the Tempo CLI signer
 
 Design decision:
 
-- Local key signing first, with backend abstraction retained for future expansion.
+- Standard EVM planning is OWS-first while retaining local signer compatibility; Tempo stays on its native type 0x76 execution path.
 
 Tradeoff:
 
-- Fast delivery and low integration complexity now, but no hardware wallet, Safe, or remote signer support yet.
+- Safer agent default for EVM actions, with a separate Tempo path that matches Tempo's execution model.
 
 ## 6. Endpoint, Contract, and ABI Management
 
-Canonical execution metadata is split under `internal/registry/`:
+Canonical execution metadata is split under `rust/crates/defi-registry`:
 
-- `endpoints.go`:
+- endpoint constants:
   - LiFi quote/status endpoints
   - Across quote/status endpoints
   - Morpho GraphQL endpoint used by execution planners
-- `rpc.go`:
+- default RPC map:
   - Default chain RPC map used by execution planners/providers when `--rpc-url` is not set
-- `contracts.go`:
+- contract constants:
   - Uniswap V3-compatible contracts by chain (used by TaikoSwap today)
   - Aave PoolAddressesProvider by chain
-- `abis.go`:
+- ABI fragments:
   - ERC-20 minimal
   - Uniswap V3 quoter/router
   - Aave pool/rewards/provider
@@ -208,7 +214,7 @@ Important nuance:
 
 Design decision:
 
-- Compile-time Go registry values instead of external YAML/JSON loading.
+- Compile-time Rust registry values instead of external YAML/JSON loading.
 
 Tradeoff:
 
@@ -216,7 +222,10 @@ Tradeoff:
 
 ## 7. Execution Engine, Simulation, and Consistency
 
-Core executor: `internal/execution/executor.go`.
+Core executors:
+
+- `rust/crates/defi-execution/src/evm_executor.rs`
+- `rust/crates/defi-execution/src/tempo_executor.rs`
 
 Per step execution flow:
 
@@ -226,7 +235,7 @@ Per step execution flow:
 4. Gas estimation (`eth_estimateGas`) with configurable multiplier.
 5. EIP-1559 fee resolution (suggested or overridden by flags).
 6. Nonce resolution from pending state.
-7. Local signing and broadcast.
+7. Local, OWS, or Tempo signing and broadcast.
 8. Receipt polling until success/failure/timeout.
 
 Bridge-specific consistency:
@@ -263,7 +272,7 @@ Decision:
 Rationale:
 
 - Runtime binary dependency increases installation complexity.
-- Native Go (`go-ethereum`) gives deterministic behavior in CI and releases.
+- Native Rust EVM code (`alloy`) gives deterministic behavior in CI and releases.
 
 Tradeoff:
 
@@ -273,9 +282,10 @@ Tradeoff:
 
 Standard quality gates:
 
-- `go test ./...`
-- `go test -race ./...`
-- `go vet ./...`
+- `cargo fmt --manifest-path rust/Cargo.toml --all --check`
+- `cargo clippy --manifest-path rust/Cargo.toml --all-targets --all-features -- -D warnings`
+- `cargo test --manifest-path rust/Cargo.toml --workspace`
+- `cargo test --manifest-path rust/Cargo.toml --workspace --release`
 
 Execution-related tests include planner, executor, settlement polling, and command wiring coverage.
 
@@ -299,7 +309,7 @@ Tradeoff:
 |---|---|---|
 | Keep execution under domain commands | Consistent CLI API and easier discoverability | More domain-specific wiring |
 | Remove defaults for multi-provider commands | Avoid ambiguous behavior and future provider-addition regressions | More required flags for users |
-| Local signer only for v1 | Fast, reliable implementation | No external signer ecosystems yet |
+| OWS-first EVM planning with local signer compatibility | Safer default for agent workflows | Requires OWS setup for the recommended path |
 | Store action payload as JSON blob | Easy persistence and replay semantics | Limited SQL-native analytics on steps |
 | Compile-time registry | Type-safe and deterministic | Slower metadata hotfix cadence |
 | Runtime simulation + settlement polling | Better safety and finality confidence | Longer execution time and external API dependency |
@@ -308,7 +318,7 @@ Tradeoff:
 ## 11. Known Gaps and Next Increments
 
 - Additional signer backends (`safe`, hardware wallets, remote signers).
-- Swap execution for additional providers beyond `taikoswap`.
+- Swap execution for additional providers beyond `tempo` and `taikoswap`.
 - Registry centralization for all execution endpoints (not just selected constants).
 - Stronger destination-chain verification for bridge completion beyond provider API status.
 - Plan freshness/revalidation policy (block drift / quote drift thresholds) before submit.

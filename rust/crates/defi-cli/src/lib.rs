@@ -1,12 +1,11 @@
 //! Library surface for the thin `defi` binary.
 //!
-//! `cmd/defi/main.go` is a twelve-line `os.Exit(runner.Run(...))` shim. Its only
-//! contract is to translate the `i32` the runner returns into the **OS process
-//! exit status** unmangled. That cast is the one piece of logic the L6 crate
-//! owns, so it lives here as a small, pure, unit-testable helper instead of being
-//! buried inside `main`. The per-command output contract (envelope shape, JSON
-//! declaration order, plain key-sort, projection, golden parity) is owned and
-//! exhaustively tested by the `defi-app` (L5) crate.
+//! The binary shim's only contract is to translate the `i32` the runner returns
+//! into the **OS process exit status** unmangled. That cast is the one piece of
+//! logic the L6 crate owns, so it lives here as a small, pure, unit-testable
+//! helper instead of being buried inside `main`. The per-command output contract
+//! (envelope shape, JSON declaration order, plain key-sort, projection, golden
+//! parity) is owned and exhaustively tested by the `defi-app` (L5) crate.
 
 /// Map a runner exit code to the `u8` process status the OS observes.
 ///

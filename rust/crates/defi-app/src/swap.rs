@@ -3032,6 +3032,10 @@ mod plan_app_tests {
     }
 
     fn rpc_result(id: &Value, result: &str) -> ResponseTemplate {
+        rpc_result_value(id, Value::from(result))
+    }
+
+    fn rpc_result_value(id: &Value, result: Value) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -3958,6 +3962,10 @@ mod submit_app_tests {
     /// production.
     pub(super) async fn plan_taikoswap(dir: &Path, from_addr: &str, allowance: u128) -> String {
         let server = taiko_rpc(allowance).await;
+        plan_taikoswap_with_rpc(dir, from_addr, &server.uri()).await
+    }
+
+    async fn plan_taikoswap_with_rpc(dir: &Path, from_addr: &str, rpc_url: &str) -> String {
         let ctx = AppCtx::new(exec_settings(dir));
         let args = PlanArgs {
             chain: Some("taiko".to_string()),
@@ -3971,7 +3979,7 @@ mod submit_app_tests {
             amount_out_decimal: None,
             recipient: None,
             slippage_bps: 50,
-            rpc_url: Some(server.uri()),
+            rpc_url: Some(rpc_url.to_string()),
             simulate: true,
             identity: PlanIdentityFlags {
                 wallet: None,
@@ -3982,10 +3990,11 @@ mod submit_app_tests {
         let env = handle(&ctx, SwapCmd::Plan(args))
             .await
             .expect("plan a taikoswap swap action for the submit fixture");
-        env.data.expect("plan data")["action_id"]
+        let action_id = env.data.expect("plan data")["action_id"]
             .as_str()
             .expect("action_id")
-            .to_string()
+            .to_string();
+        action_id
     }
 
     /// Plan + persist a canonical Tempo `swap` action against `dir`, returning its
@@ -4078,6 +4087,10 @@ mod submit_app_tests {
     }
 
     fn rpc_result(id: &Value, result: &str) -> ResponseTemplate {
+        rpc_result_value(id, Value::from(result))
+    }
+
+    fn rpc_result_value(id: &Value, result: Value) -> ResponseTemplate {
         ResponseTemplate::new(200).set_body_json(json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -4131,7 +4144,32 @@ mod submit_app_tests {
             let id = body.get("id").cloned().unwrap_or(json!(1));
             let method_name = body.get("method").and_then(Value::as_str).unwrap_or("");
             if method_name != "eth_call" {
-                return rpc_error(&id, -32601, "method not supported in test");
+                return match method_name {
+                    "eth_chainId" => rpc_result(&id, "0x1"),
+                    "eth_estimateGas" => rpc_result(&id, "0x5208"),
+                    "eth_getBlockByNumber" => rpc_result_value(
+                        &id,
+                        json!({
+                            "number": "0x10",
+                            "baseFeePerGas": "0x3b9aca00"
+                        }),
+                    ),
+                    "eth_maxPriorityFeePerGas" => rpc_result(&id, "0x3b9aca00"),
+                    "eth_getTransactionCount" => rpc_result(&id, "0x7"),
+                    "eth_sendRawTransaction" => rpc_result(
+                        &id,
+                        "0x1111111111111111111111111111111111111111111111111111111111111111",
+                    ),
+                    "eth_getTransactionReceipt" => rpc_result_value(
+                        &id,
+                        json!({
+                            "status": "0x1",
+                            "blockNumber": "0x11",
+                            "gasUsed": "0x5208"
+                        }),
+                    ),
+                    _ => rpc_error(&id, -32601, "method not supported in test"),
+                };
             }
             let index = self.call_count.fetch_add(1, Ordering::SeqCst) + 1;
             if index == 5 {
@@ -4310,8 +4348,9 @@ mod submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_taikoswap_legacy_local_completes_and_emits_envelope() {
         let tmp = TempDir::new().expect("tempdir");
+        let server = taiko_rpc(u128::MAX).await;
         // Sufficient allowance => single swap step (no leading approval).
-        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, u128::MAX).await;
+        let action_id = plan_taikoswap_with_rpc(tmp.path(), SIGNER_ADDR, &server.uri()).await;
 
         let env = run_submit(tmp.path(), base_submit_args(&action_id))
             .await
@@ -4344,9 +4383,10 @@ mod submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_taikoswap_bounded_approval_completes_without_override() {
         let tmp = TempDir::new().expect("tempdir");
+        let server = taiko_rpc(0).await;
         // Insufficient allowance => [approval, swap]; the approval amount equals
         // input_amount (a BOUNDED approval), so no --allow-max-approval is needed.
-        let action_id = plan_taikoswap(tmp.path(), SIGNER_ADDR, 0).await;
+        let action_id = plan_taikoswap_with_rpc(tmp.path(), SIGNER_ADDR, &server.uri()).await;
 
         let env = run_submit(tmp.path(), base_submit_args(&action_id))
             .await

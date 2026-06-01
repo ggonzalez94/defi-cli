@@ -1416,7 +1416,7 @@ mod app_tests {
     use defi_config::{MapEnv, Settings};
     use defi_errors::{exit_code, Code, Error};
     use defi_model::Envelope;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
     use wiremock::matchers::{method, path, query_param};
@@ -3227,11 +3227,11 @@ mod submit_app_tests {
     use defi_execution::action::{Action, ActionStatus, ExecutionBackend, StepStatus};
     use defi_execution::store::Store as ActionStore;
     use defi_model::Envelope;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
-    use wiremock::matchers::{method, path};
+    use wiremock::matchers::{body_partial_json, method, path};
     use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // --- contract constants ------------------------------------------------
@@ -3245,6 +3245,8 @@ mod submit_app_tests {
     const SIGNER_ADDR: &str = "0x14DDBd1fe5026E58A12eE8691cAEbFD24bb10eef";
     /// A DIFFERENT canonical address — used to force the sender-mismatch guards.
     const OTHER_ADDR: &str = "0x1111111111111111111111111111111111111111";
+    const EXPECTED_TX_HASH: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     // --- harness -----------------------------------------------------------
 
@@ -3337,11 +3339,64 @@ mod submit_app_tests {
             ))
             .mount(&server)
             .await;
+        mount_standard_submit_rpc(&server).await;
+        mount_across_settlement(&server).await;
         server
     }
 
+    async fn mock_rpc_method(server: &MockServer, rpc_method: &'static str, result: Value) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "method": rpc_method })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result,
+            })))
+            .mount(server)
+            .await;
+    }
+
+    async fn mount_standard_submit_rpc(server: &MockServer) {
+        mock_rpc_method(server, "eth_chainId", json!("0x1")).await;
+        mock_rpc_method(server, "eth_call", json!("0x")).await;
+        mock_rpc_method(server, "eth_estimateGas", json!("0x5208")).await;
+        mock_rpc_method(
+            server,
+            "eth_getBlockByNumber",
+            json!({
+                "number": "0x10",
+                "baseFeePerGas": "0x3b9aca00"
+            }),
+        )
+        .await;
+        mock_rpc_method(server, "eth_maxPriorityFeePerGas", json!("0x3b9aca00")).await;
+        mock_rpc_method(server, "eth_getTransactionCount", json!("0x7")).await;
+        mock_rpc_method(server, "eth_sendRawTransaction", json!(EXPECTED_TX_HASH)).await;
+        mock_rpc_method(
+            server,
+            "eth_getTransactionReceipt",
+            json!({
+                "status": "0x1",
+                "blockNumber": "0x11",
+                "gasUsed": "0x5208"
+            }),
+        )
+        .await;
+    }
+
+    async fn mount_across_settlement(server: &MockServer) {
+        Mock::given(method("GET"))
+            .and(path("/deposit/status"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "status": "filled",
+                "fillTx": "0x2222222222222222222222222222222222222222222222222222222222222222"
+            })))
+            .mount(server)
+            .await;
+    }
+
     /// An Across `bridge plan` `PlanArgs` (USDC 1→10, legacy `--from-address`).
-    fn across_plan_args(from_addr: &str) -> PlanArgs {
+    fn across_plan_args(from_addr: &str, rpc_url: &str) -> PlanArgs {
         PlanArgs {
             from: Some("1".to_string()),
             to: Some("10".to_string()),
@@ -3353,7 +3408,7 @@ mod submit_app_tests {
             from_amount_for_gas: None,
             recipient: None,
             slippage_bps: 50,
-            rpc_url: None,
+            rpc_url: Some(rpc_url.to_string()),
             simulate: true,
             identity: PlanIdentityFlags {
                 wallet: None,
@@ -3369,14 +3424,45 @@ mod submit_app_tests {
     /// base seam) so the persisted shape is identical to production.
     pub(super) async fn plan_across(dir: &Path, from_addr: &str) -> String {
         let server = across_swap_approval_mock().await;
+        plan_across_with_server(dir, from_addr, &server).await
+    }
+
+    async fn plan_across_with_server(dir: &Path, from_addr: &str, server: &MockServer) -> String {
         let ctx = AppCtx::new(exec_settings(dir)).with_bridge_base(&server.uri());
-        let env = handle(&ctx, BridgeCmd::Plan(across_plan_args(from_addr)))
-            .await
-            .expect("plan an across bridge action for the submit fixture");
-        env.data.expect("plan data")["action_id"]
+        let env = handle(
+            &ctx,
+            BridgeCmd::Plan(across_plan_args(from_addr, &server.uri())),
+        )
+        .await
+        .expect("plan an across bridge action for the submit fixture");
+        let action_id = env.data.expect("plan data")["action_id"]
             .as_str()
             .expect("action_id")
-            .to_string()
+            .to_string();
+        point_bridge_settlement_to_mock(dir, &action_id, &server.uri());
+        action_id
+    }
+
+    fn point_bridge_settlement_to_mock(dir: &Path, action_id: &str, server_uri: &str) {
+        let store = ActionStore::open(dir.join("actions.db"), dir.join("actions.lock"))
+            .expect("open action store");
+        let mut action = store.get(action_id).expect("load planned bridge");
+        let endpoint = format!("{server_uri}/deposit/status");
+        for step in &mut action.steps {
+            if let Some(outputs) = step.expected_outputs.as_mut() {
+                if outputs
+                    .get("settlement_provider")
+                    .and_then(|v| v.as_str())
+                    .map(|v| v.eq_ignore_ascii_case("across"))
+                    .unwrap_or(false)
+                {
+                    outputs.insert("settlement_status_endpoint".into(), endpoint.clone().into());
+                }
+            }
+        }
+        store
+            .save(&action)
+            .expect("persist settlement mock endpoint");
     }
 
     /// Persist `action` directly (used for fixtures the plan path cannot build,
@@ -3423,7 +3509,8 @@ mod submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_across_legacy_local_completes_and_emits_envelope() {
         let tmp = TempDir::new().expect("tempdir");
-        let action_id = plan_across(tmp.path(), SIGNER_ADDR).await;
+        let server = across_swap_approval_mock().await;
+        let action_id = plan_across_with_server(tmp.path(), SIGNER_ADDR, &server).await;
 
         let env = run_submit(tmp.path(), base_submit_args(&action_id))
             .await
@@ -3750,7 +3837,9 @@ mod submit_app_tests {
         // `presign_validate_action`). Built directly so the approval calldata
         // encodes an over-bound amount.
         let tmp = TempDir::new().expect("tempdir");
-        let action = inflated_approval_bridge_action(tmp.path());
+        let rpc = MockServer::start().await;
+        mount_standard_submit_rpc(&rpc).await;
+        let action = inflated_approval_bridge_action(&rpc.uri());
         save_action(tmp.path(), &action);
 
         // Default submit (no opt-in) → ActionPlan rejection with the hint.
@@ -3780,7 +3869,7 @@ mod submit_app_tests {
     /// step targets an arbitrary token and carries a (fake but well-formed)
     /// `rpc_url` so the offline-policed engine can confirm it once the bound check
     /// passes. No `bridge_send` step is needed (the approval gate runs first).
-    fn inflated_approval_bridge_action(dir: &Path) -> Action {
+    fn inflated_approval_bridge_action(rpc_url: &str) -> Action {
         use defi_execution::action::{ActionStep, StepType};
 
         // approve(spender, u128::MAX) — selector 0x095ea7b3.
@@ -3803,7 +3892,7 @@ mod submit_app_tests {
             step_type: StepType::Approval,
             status: StepStatus::Pending,
             chain_id: "eip155:1".to_string(),
-            rpc_url: format!("{}/rpc", dir.display()),
+            rpc_url: rpc_url.to_string(),
             description: String::new(),
             target: "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48".to_string(),
             data: approve_data,
@@ -3828,7 +3917,13 @@ mod submit_app_tests {
         // the bridge-distinguishing pre-sign check; S14 covers the (shared)
         // bounded-approval gate, this covers the provider-tx gate end-to-end.
         let tmp = TempDir::new().expect("tempdir");
-        let action = non_canonical_target_bridge_action(tmp.path());
+        let rpc = MockServer::start().await;
+        mount_standard_submit_rpc(&rpc).await;
+        mount_across_settlement(&rpc).await;
+        let action = non_canonical_target_bridge_action(
+            &rpc.uri(),
+            &format!("{}/deposit/status", rpc.uri()),
+        );
         save_action(tmp.path(), &action);
 
         // Default submit (no opt-in) → ActionPlan rejection with the hint.
@@ -3863,14 +3958,14 @@ mod submit_app_tests {
     /// used — the provider is stamped explicitly. `from_address` matches the
     /// signer so the sender guard passes first. No `data`/`calls` are needed; the
     /// pre-sign target guard runs before any broadcast.
-    fn non_canonical_target_bridge_action(dir: &Path) -> Action {
+    fn non_canonical_target_bridge_action(rpc_url: &str, settlement_endpoint: &str) -> Action {
         use defi_execution::action::{ActionStep, StepType};
 
         let mut outs = serde_json::Map::new();
         outs.insert("settlement_provider".into(), "across".into());
         outs.insert(
             "settlement_status_endpoint".into(),
-            "https://app.across.to/api/deposit/status".into(),
+            settlement_endpoint.into(),
         );
 
         let mut action = Action::new(
@@ -3888,7 +3983,7 @@ mod submit_app_tests {
             step_type: StepType::Bridge,
             status: StepStatus::Pending,
             chain_id: "eip155:1".to_string(),
-            rpc_url: format!("{}/rpc", dir.display()),
+            rpc_url: rpc_url.to_string(),
             description: String::new(),
             // A non-canonical target: NOT the Across spoke-pool / execution
             // contract for chain 1 (`0x5c7BCd6E7De5423a257D81B442095A1a6ced35C5`).

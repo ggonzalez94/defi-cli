@@ -22,6 +22,7 @@ defi-execution = { workspace = true }
 defi-providers = { workspace = true }
 alloy = { workspace = true }
 clap = { workspace = true }
+clap_complete = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 tokio = { workspace = true }

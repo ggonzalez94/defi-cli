@@ -1279,16 +1279,14 @@ mod submit_app_tests {
     //!   already-completed short-circuit, backend selection, sender match,
     //!   execute-option validation) all fire BEFORE any network and are fully
     //!   deterministic.
-    //! * **Local-signer broadcast/completion** is exercised OFFLINE through the
+    //! * **Local-signer broadcast/completion** is exercised through the
     //!   `--private-key` override (a deterministic in-args secp256k1 key whose
-    //!   address is pinned in `defi-evm`): in this build the EVM step path enforces
-    //!   the pre-sign policy and (matching the engine's own `execute_action` tests,
-    //!   which never dial the step `rpc_url` for a policed EVM step) transitions the
-    //!   action to `completed` without a network call. Unlike `approvals submit`, a
-    //!   transfer step needs NO `--allow-max-approval` to pass the policy (there is
-    //!   no approval bound to inflate). The full RPC-backed sign+broadcast
-    //!   (chain-id/gas/nonce/`sendRawTransaction`/receipt) is integration/`wiremock`-RPC
-    //!   territory (WS5) and is recorded as a deferral — it is NOT asserted here.
+    //!   address is pinned in `defi-evm`) against a `wiremock` JSON-RPC server.
+    //!   The success path validates simulation, gas/fee/nonce reads,
+    //!   `eth_sendRawTransaction`, receipt polling, terminal persistence, and the
+    //!   recorded `tx_hash`. Unlike `approvals submit`, a transfer step needs NO
+    //!   `--allow-max-approval` to pass the policy (there is no approval bound to
+    //!   inflate).
     //! * **OWS `--wallet` backend** resolves through the OWS vault/CLI (WS4b e2e),
     //!   so only its OFFLINE guard rejections are asserted (missing persisted
     //!   `wallet_id`; legacy signer flags on a wallet-backed action). The OWS
@@ -1391,8 +1389,6 @@ mod submit_app_tests {
     //!     stderr, spec §2.1).
     //!
     //! SKIPPED (covered elsewhere / wrong unit / deferred):
-    //!   * the full RPC-backed sign+broadcast (chain-id/gas/fee/nonce/
-    //!     `sendRawTransaction`/receipt) — WS5 `wiremock`-RPC integration deferral;
     //!   * the OWS happy-path resolve + send-hook broadcast — WS4b e2e deferral;
     //!   * Tempo (type 0x76) submit — Tempo is a separate execution path
     //!     (`--signer tempo` / `execution_backend == "tempo"`), byte-parity is
@@ -1416,10 +1412,12 @@ mod submit_app_tests {
     use defi_execution::action::{Action, ActionStatus, ExecutionBackend};
     use defi_execution::store::Store as ActionStore;
     use defi_model::Envelope;
-    use serde_json::Value;
+    use serde_json::{json, Value};
     use std::path::Path;
     use std::time::Duration;
     use tempfile::TempDir;
+    use wiremock::matchers::{body_partial_json, method};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     // --- contract constants ------------------------------------------------
 
@@ -1436,6 +1434,8 @@ mod submit_app_tests {
     /// Recipient for planned transfers (matches the `defi-evm` transfer golden
     /// recipient `0x..CC` so the planned step shape is identical to production).
     const RECIPIENT: &str = "0x00000000000000000000000000000000000000CC";
+    const EXPECTED_TX_HASH: &str =
+        "0x1111111111111111111111111111111111111111111111111111111111111111";
 
     /// A non-dialed RPC sentinel for the step (the policed EVM step path does not
     /// reach the network in this build; this keeps the action well-formed).
@@ -1500,7 +1500,12 @@ mod submit_app_tests {
     /// the transferred base-unit amount (which is also the planned `input_amount`).
     /// Plans through the real `cli::handle` plan path so the persisted shape is
     /// identical to production.
-    async fn plan_transfer(dir: &Path, from_addr: &str, amount: &str) -> String {
+    async fn plan_transfer_with_rpc(
+        dir: &Path,
+        from_addr: &str,
+        amount: &str,
+        rpc_url: &str,
+    ) -> String {
         let ctx = AppCtx::new(exec_settings(dir));
         let args = PlanArgs {
             chain: Some("1".to_string()),
@@ -1508,7 +1513,7 @@ mod submit_app_tests {
             recipient: Some(RECIPIENT.to_string()),
             amount: Some(amount.to_string()),
             amount_decimal: None,
-            rpc_url: Some(DEAD_RPC.to_string()),
+            rpc_url: Some(rpc_url.to_string()),
             simulate: true,
             identity: PlanIdentityFlags {
                 wallet: None,
@@ -1523,6 +1528,10 @@ mod submit_app_tests {
             .as_str()
             .expect("action_id")
             .to_string()
+    }
+
+    async fn plan_transfer(dir: &Path, from_addr: &str, amount: &str) -> String {
+        plan_transfer_with_rpc(dir, from_addr, amount, DEAD_RPC).await
     }
 
     /// Persist `action` directly (used for fixtures the plan path cannot build,
@@ -1550,6 +1559,48 @@ mod submit_app_tests {
         handle(&ctx, TransferCmd::Submit(args)).await
     }
 
+    async fn mock_rpc_method(server: &MockServer, rpc_method: &'static str, result: Value) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "method": rpc_method })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result,
+            })))
+            .mount(server)
+            .await;
+    }
+
+    async fn standard_submit_rpc() -> MockServer {
+        let server = MockServer::start().await;
+        mock_rpc_method(&server, "eth_chainId", json!("0x1")).await;
+        mock_rpc_method(&server, "eth_call", json!("0x")).await;
+        mock_rpc_method(&server, "eth_estimateGas", json!("0x5208")).await;
+        mock_rpc_method(
+            &server,
+            "eth_getBlockByNumber",
+            json!({
+                "number": "0x10",
+                "baseFeePerGas": "0x3b9aca00"
+            }),
+        )
+        .await;
+        mock_rpc_method(&server, "eth_maxPriorityFeePerGas", json!("0x3b9aca00")).await;
+        mock_rpc_method(&server, "eth_getTransactionCount", json!("0x7")).await;
+        mock_rpc_method(&server, "eth_sendRawTransaction", json!(EXPECTED_TX_HASH)).await;
+        mock_rpc_method(
+            &server,
+            "eth_getTransactionReceipt",
+            json!({
+                "status": "0x1",
+                "blockNumber": "0x11",
+                "gasUsed": "0x5208"
+            }),
+        )
+        .await;
+        server
+    }
+
     fn usage_exit(err: &Error) -> i32 {
         exit_code(&Err(Error::new(err.code, "")))
     }
@@ -1563,8 +1614,10 @@ mod submit_app_tests {
     #[tokio::test(flavor = "multi_thread")]
     async fn submit_legacy_local_completes_and_emits_envelope() {
         let tmp = TempDir::new().expect("tempdir");
+        let rpc = standard_submit_rpc().await;
         // Plan a transfer whose sender matches the deterministic local signer.
-        let action_id = plan_transfer(tmp.path(), SIGNER_ADDR, "1000000").await;
+        let action_id =
+            plan_transfer_with_rpc(tmp.path(), SIGNER_ADDR, "1000000", &rpc.uri()).await;
 
         // No --allow-max-approval needed: a transfer step is never an approval, so
         // the bounded-approval pre-sign policy does not apply.
@@ -1588,6 +1641,7 @@ mod submit_app_tests {
         let steps = data["steps"].as_array().expect("steps array");
         assert_eq!(steps.len(), 1);
         assert_eq!(steps[0]["status"], Value::from("confirmed"));
+        assert_eq!(steps[0]["tx_hash"], Value::from(EXPECTED_TX_HASH));
 
         // Persisted terminal state (criterion 2).
         assert_eq!(persisted_status(tmp.path(), &action_id), "completed");

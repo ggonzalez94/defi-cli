@@ -230,6 +230,7 @@ use async_trait::async_trait;
 use defi_errors::{Code, Error};
 use defi_evm::abi::{decode_revert_reason, Function};
 use defi_evm::address::{self, Address};
+use defi_evm::rpc::{resolve_fee_cap, resolve_tip_cap, CallRequest, RpcClient};
 use defi_evm::signer::{Eip1559Tx, LocalSigner};
 use defi_registry::{ACROSS_SETTLEMENT_URL, ERC20_MINIMAL_ABI, LIFI_SETTLEMENT_URL};
 use tokio::sync::Mutex as AsyncMutex;
@@ -484,6 +485,73 @@ impl EvmStepExecutor {
     pub fn effective_sender(&self) -> Address {
         self.backend.effective_sender()
     }
+
+    /// Simulate, price, submit, and confirm a single standard-EVM step.
+    async fn execute_step(
+        &self,
+        step: &mut ActionStep,
+        opts: &ExecuteOptions,
+    ) -> Result<(), Error> {
+        if !step.calls.is_empty() {
+            return Err(Error::new(
+                Code::Unsupported,
+                "batched EVM step calls are not supported by the standard EVM executor",
+            ));
+        }
+
+        let rpc_url = step.rpc_url.trim();
+        let client = RpcClient::connect(rpc_url)?;
+        let chain_id = client.chain_id().await?;
+        let from = self.effective_sender();
+        let to = address::parse(step.target.trim())?;
+        let data = decode_hex(&step.data)
+            .map_err(|e| Error::wrap(Code::Usage, "decode step calldata", to_cause(e)))?;
+        let value = parse_step_value(&step.value)?;
+        let call = CallRequest::new(Some(from), Some(to), value, data.clone());
+
+        if opts.simulate {
+            client.call(&call).await.map_err(|e| {
+                wrap_evm_execution_error_from_typed(Code::ActionSim, "simulate step", e)
+            })?;
+            step.status = StepStatus::Simulated;
+        }
+
+        let estimated_gas = client.estimate_gas(&call).await.map_err(|e| {
+            wrap_evm_execution_error_from_typed(Code::Unavailable, "estimate gas", e)
+        })?;
+        let gas_limit = apply_gas_multiplier(estimated_gas, opts.gas_multiplier)?;
+        let tip_cap = resolve_tip_cap(&client, &opts.max_priority_fee_gwei).await?;
+        let base_fee = match client.base_fee().await? {
+            Some(v) => v,
+            None => client.gas_price().await?,
+        };
+        let fee_cap = resolve_fee_cap(base_fee, tip_cap, &opts.max_fee_gwei)?;
+        let nonce = client.pending_nonce(&from).await?;
+
+        let tx = Eip1559Tx {
+            chain_id,
+            nonce,
+            max_priority_fee_per_gas: u256_to_u128(tip_cap, "max priority fee")?,
+            max_fee_per_gas: u256_to_u128(fee_cap, "max fee")?,
+            gas_limit,
+            to: Some(to),
+            value,
+            input: data,
+        };
+
+        let hash = self
+            .backend
+            .submit_dynamic_fee_tx(rpc_url, chain_id, &tx)
+            .await?;
+        let tx_hash = format!("0x{}", hex::encode(hash));
+        step.tx_hash = tx_hash.clone();
+        step.status = StepStatus::Submitted;
+
+        wait_for_receipt(&client, &hash, opts).await?;
+        verify_bridge_settlement(step, &tx_hash, opts).await?;
+        step.status = StepStatus::Confirmed;
+        Ok(())
+    }
 }
 
 // =============================================================================
@@ -636,7 +704,7 @@ async fn execute_evm_step(
 ) -> Result<(), Error> {
     match executor {
         ResolvedExecutor::Tempo(t) => t.execute_step(None, None, step, opts.clone()).await,
-        ResolvedExecutor::Evm(_) => {
+        ResolvedExecutor::Evm(e) => {
             // Pre-sign policy is enforced before any sign/broadcast, WITH the
             // action context so bounded ERC-20 approval bounds can be checked
             // against `action.input_amount` (Go `validateStepPolicy(action, ...)`).
@@ -659,14 +727,68 @@ async fn execute_evm_step(
                     unsafe_provider_tx: opts.unsafe_provider_tx,
                 },
             )?;
-            // The offline policed EVM path does not dial the step rpc_url; once the
-            // pre-sign policy passes the step is marked confirmed so the action's
-            // terminal step status is consistent with its `completed` status. The
-            // full RPC-backed sign/broadcast (which sets Submitted → Confirmed with
-            // a real tx hash) is exercised by integration tests.
-            step.status = StepStatus::Confirmed;
-            Ok(())
+            e.execute_step(step, opts).await
         }
+    }
+}
+
+fn parse_step_value(value: &str) -> Result<U256, Error> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(U256::ZERO);
+    }
+    if let Some(hex) = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+    {
+        return U256::from_str_radix(hex, 16)
+            .map_err(|e| Error::wrap(Code::Usage, "parse step value", to_cause(e)));
+    }
+    U256::from_str_radix(trimmed, 10)
+        .map_err(|e| Error::wrap(Code::Usage, "parse step value", to_cause(e)))
+}
+
+fn u256_to_u128(v: U256, what: &str) -> Result<u128, Error> {
+    if v > U256::from(u128::MAX) {
+        return Err(Error::new(
+            Code::Unavailable,
+            format!("{what} exceeds u128 range"),
+        ));
+    }
+    Ok(v.to::<u128>())
+}
+
+fn apply_gas_multiplier(gas: u64, multiplier: f64) -> Result<u64, Error> {
+    let multiplied = (gas as f64) * multiplier;
+    if !multiplied.is_finite() || multiplied > u64::MAX as f64 {
+        return Err(Error::new(Code::Usage, "gas limit overflows"));
+    }
+    Ok(multiplied.ceil() as u64)
+}
+
+async fn wait_for_receipt(
+    client: &RpcClient,
+    hash: &[u8; 32],
+    opts: &ExecuteOptions,
+) -> Result<(), Error> {
+    let deadline = Instant::now() + opts.step_timeout;
+    loop {
+        if let Some(receipt) = client.transaction_receipt(hash).await? {
+            if receipt.success() {
+                return Ok(());
+            }
+            return Err(Error::new(
+                Code::Unavailable,
+                "transaction receipt status indicates failure",
+            ));
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::new(
+                Code::ActionTimeout,
+                "timed out waiting for transaction receipt",
+            ));
+        }
+        tokio::time::sleep(opts.poll_interval).await;
     }
 }
 
@@ -1486,6 +1608,9 @@ mod tests {
     use defi_evm::abi::Function;
     use defi_evm::address::{self, Address};
     use defi_registry::ERC20_MINIMAL_ABI;
+    use serde_json::{json, Value};
+    use wiremock::matchers::{body_partial_json, method, query_param};
+    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     use crate::action::{
         Action, ActionStatus, ActionStep, Constraints, ExecutionBackend, StepStatus, StepType,
@@ -1609,8 +1734,20 @@ mod tests {
             _chain_id: u64,
             _tx: &defi_evm::signer::Eip1559Tx,
         ) -> Result<[u8; 32], defi_errors::Error> {
-            Ok([0u8; 32])
+            Ok([0x11u8; 32])
         }
+    }
+
+    async fn mock_rpc_method(server: &MockServer, rpc_method: &'static str, result: Value) {
+        Mock::given(method("POST"))
+            .and(body_partial_json(json!({ "method": rpc_method })))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "result": result,
+            })))
+            .mount(server)
+            .await;
     }
 
     // =====================================================================
@@ -1875,6 +2012,71 @@ mod tests {
         assert_eq!(err.code, Code::Usage);
     }
 
+    #[tokio::test]
+    async fn execute_action_broadcasts_evm_step_and_records_tx_hash() {
+        let server = MockServer::start().await;
+        mock_rpc_method(&server, "eth_chainId", json!("0x1")).await;
+        mock_rpc_method(&server, "eth_call", json!("0x")).await;
+        mock_rpc_method(&server, "eth_estimateGas", json!("0x5208")).await;
+        mock_rpc_method(
+            &server,
+            "eth_getBlockByNumber",
+            json!({
+                "number": "0x5",
+                "hash": "0x00",
+                "parentHash": "0x00",
+                "timestamp": "0x0",
+                "baseFeePerGas": "0x3b9aca00"
+            }),
+        )
+        .await;
+        mock_rpc_method(&server, "eth_maxPriorityFeePerGas", json!("0x3b9aca00")).await;
+        mock_rpc_method(&server, "eth_getTransactionCount", json!("0x7")).await;
+        mock_rpc_method(
+            &server,
+            "eth_getTransactionReceipt",
+            json!({
+                "status": "0x1",
+                "blockNumber": "0x6",
+                "gasUsed": "0x5208"
+            }),
+        )
+        .await;
+
+        let mut action = make_action("transfer", "eip155:1");
+        action.from_address = addr_aa().to_hex();
+        action.input_amount = "1".to_string();
+        let mut metadata = serde_json::Map::new();
+        metadata.insert("asset_address".to_string(), json!(addr_bb().to_hex()));
+        action.metadata = Some(metadata);
+        let mut step = make_step(
+            StepType::Transfer,
+            "eip155:1",
+            &server.uri(),
+            &addr_bb().to_hex(),
+        );
+        step.data = format!("0x{}", hex::encode(transfer_calldata(addr_cc(), 1)));
+        action.steps.push(step);
+
+        let backend = StubBackend { sender: addr_aa() };
+        execute_action(
+            None,
+            &mut action,
+            Some(static_signer()),
+            Some(backend),
+            default_execute_options(),
+        )
+        .await
+        .expect("execute action");
+
+        assert_eq!(action.status, ActionStatus::Completed);
+        assert_eq!(action.steps[0].status, StepStatus::Confirmed);
+        assert_eq!(
+            action.steps[0].tx_hash,
+            "0x1111111111111111111111111111111111111111111111111111111111111111"
+        );
+    }
+
     // =====================================================================
     // E. Revert decoding
     // =====================================================================
@@ -2132,9 +2334,6 @@ mod tests {
     // =====================================================================
     // J. Bridge settlement verification (wiremock)
     // =====================================================================
-
-    use wiremock::matchers::{method, query_param};
-    use wiremock::{Mock, MockServer, ResponseTemplate};
 
     fn bridge_step(outputs: serde_json::Map<String, serde_json::Value>) -> ActionStep {
         let mut step = make_step(StepType::Bridge, "eip155:1", "", "");

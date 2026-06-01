@@ -437,6 +437,21 @@ fn schema_scoped_path_matches_golden_subtree() {
 }
 
 #[test]
+fn schema_scoped_path_allows_inherited_flags_after_path() {
+    let out = run(&["schema", "lend", "supply", "plan", "--results-only"]);
+    assert_eq!(out.status.code(), Some(0));
+    assert!(
+        out.stderr.is_empty(),
+        "schema success must not write stderr"
+    );
+    let stdout = String::from_utf8(out.stdout).expect("utf8");
+    let v: Value = serde_json::from_str(&stdout).expect("schema results JSON");
+    assert_eq!(v["path"], Value::from("defi lend supply plan"));
+    assert_eq!(v["use"], Value::from("plan"));
+    assert_eq!(v["mutation"], Value::Bool(true));
+}
+
+#[test]
 fn schema_unknown_path_is_wrapped_usage_error_on_stderr() {
     let out = run(&["schema", "nope"]);
     assert_eq!(out.status.code(), Some(2), "unknown schema path exits 2");
