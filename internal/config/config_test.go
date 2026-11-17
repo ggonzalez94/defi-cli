@@ -81,6 +81,17 @@ func TestLoadJupiterAPIKeyFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadLCXAPIKeyFromEnv(t *testing.T) {
+	t.Setenv("DEFI_LCX_API_KEY", "lcx-key")
+	settings, err := Load(GlobalFlags{})
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+	if settings.LCXAPIKey != "lcx-key" {
+		t.Fatalf("expected LCX API key from env, got %q", settings.LCXAPIKey)
+	}
+}
+
 func TestLoadBungeeDedicatedSettingsFromEnv(t *testing.T) {
 	t.Setenv("DEFI_BUNGEE_API_KEY", "bungee-key")
 	t.Setenv("DEFI_BUNGEE_AFFILIATE", "affiliate-id")

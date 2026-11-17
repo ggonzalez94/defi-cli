@@ -36,6 +36,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/fibrous"
 	"github.com/ggonzalez94/defi-cli/internal/providers/jupiter"
 	"github.com/ggonzalez94/defi-cli/internal/providers/kamino"
+	"github.com/ggonzalez94/defi-cli/internal/providers/lcx"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
 	"github.com/ggonzalez94/defi-cli/internal/providers/moonwell"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
@@ -190,6 +191,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					"jupiter":   jupiterProvider,
 					"bungee":    bungee.NewSwap(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
 					"fibrous":   fibrous.New(httpClient),
+					"lcx":       lcx.New(httpClient, settings.LCXAPIKey),
 				}
 				s.providerInfos = []model.ProviderInfo{
 					llama.Info(),
@@ -207,6 +209,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					s.swapProviders["jupiter"].Info(),
 					s.swapProviders["bungee"].Info(),
 					s.swapProviders["fibrous"].Info(),
+					s.swapProviders["lcx"].Info(),
 				}
 			}
 			if s.actionBuilder == nil {
@@ -1056,7 +1059,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := providers.NormalizeSwapProvider(quoteProviderArg)
 			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
+				return clierr.New(clierr.CodeUsage, "--provider is required (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee|lcx)")
 			}
 			provider, ok := s.swapProviders[providerName]
 			if !ok {
@@ -1124,7 +1127,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			}))
 		},
 	}
-	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
+	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee|lcx)")
 	quoteCmd.Flags().StringVar(&quoteChainArg, "chain", "", "Chain identifier")
 	quoteCmd.Flags().StringVar(&quoteFromAssetArg, "from-asset", "", "Input asset")
 	quoteCmd.Flags().StringVar(&quoteToAssetArg, "to-asset", "", "Output asset")
@@ -1171,6 +1174,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				Optional:    true,
 				When:        map[string][]string{"provider": []string{"jupiter"}},
 				Description: "Jupiter API keys are optional and mainly increase rate limits.",
+			},
+			{
+				Kind:        "api_key",
+				EnvVars:     []string{"DEFI_LCX_API_KEY"},
+				When:        map[string][]string{"provider": []string{"lcx"}},
+				Description: "LCX Liberty DEX quote requests require an LCX API key.",
 			},
 		},
 		Response: &swapQuoteResponse,

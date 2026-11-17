@@ -13,7 +13,7 @@ Built for AI agents and scripts. Stable JSON output, canonical identifiers (CAIP
 - **Lending** — query markets/rates from Aave/Morpho/Kamino/Moonwell, account positions from Aave/Morpho/Moonwell, and execute loan actions (`lend supply|withdraw|borrow|repay`).
 - **Yield** — compare opportunities, query positions, fetch historical series, and execute deposit/withdraw flows (Aave, Morpho, Moonwell).
 - **Bridging** — get cross-chain quotes (Across, LiFi, Bungee), bridge analytics, and execute bridge plans (Across, LiFi).
-- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee) and execute swap plans (Tempo with native type 0x76 transactions and batched calls, TaikoSwap).
+- **Swapping** — get swap quotes (1inch, Uniswap, Jupiter, Tempo, TaikoSwap, Fibrous, Bungee, LCX Liberty DEX) and execute swap plans (Tempo with native type 0x76 transactions and batched calls, TaikoSwap).
 - **Approvals, transfers & rewards** — ERC-20 approvals/transfers and Aave rewards claim/compound flows.
 - **Wallet** — query native and ERC-20 token balances on any supported EVM chain (no API key required).
 - **Chains & protocols** — browse top chains by TVL, inspect chain TVL by asset, query live gas prices, discover protocols, track stablecoin market caps, resolve asset identifiers.
@@ -198,6 +198,7 @@ defi swap quote --provider 1inch --chain 1 --from-asset USDC --to-asset DAI --am
 defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --amount 1000000 --from-address 0xYourEOA --results-only  # requires DEFI_UNISWAP_API_KEY
 defi swap quote --provider uniswap --chain 1 --from-asset USDC --to-asset DAI --type exact-output --amount-out 1000000000000000000 --from-address 0xYourEOA --results-only
 defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset USDC.e --type exact-output --amount-out 1000000 --results-only
+defi swap quote --provider lcx --chain base --from-asset USDC --to-asset WETH --amount 1000000 --results-only   # requires DEFI_LCX_API_KEY
 defi bridge quote --provider lifi --from 1 --to 8453 --asset USDC --amount 1000000 --from-amount-for-gas 100000 --results-only
 ```
 
@@ -209,6 +210,7 @@ When a provider requires authentication, bring your own key:
 
 - `defi swap quote --provider 1inch` -> `DEFI_1INCH_API_KEY`
 - `defi swap quote --provider uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `defi swap quote --provider lcx` -> `DEFI_LCX_API_KEY`
 - `defi chains assets` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge list` -> `DEFI_DEFILLAMA_API_KEY`
 - `defi bridge details` -> `DEFI_DEFILLAMA_API_KEY`
@@ -221,6 +223,7 @@ When a provider requires authentication, bring your own key:
 
 - `DEFI_1INCH_API_KEY` (required for `swap quote --provider 1inch`)
 - `DEFI_UNISWAP_API_KEY` (required for `swap quote --provider uniswap`)
+- `DEFI_LCX_API_KEY` (required for `swap quote --provider lcx`; free key at https://dex.lcx.com/dashboard)
 - `DEFI_DEFILLAMA_API_KEY` (required for `chains assets`, `bridge list`, and `bridge details`)
 
 Configure keys with environment variables (recommended):
@@ -228,6 +231,7 @@ Configure keys with environment variables (recommended):
 ```bash
 export DEFI_1INCH_API_KEY=...
 export DEFI_UNISWAP_API_KEY=...
+export DEFI_LCX_API_KEY=...
 export DEFI_DEFILLAMA_API_KEY=...
 ```
 
@@ -352,6 +356,7 @@ providers:
 - Tempo swap execution settles to the sender only; omit `--recipient` or keep it equal to `--from-address`.
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields instead of native-gas EIP-1559 pricing).
 - `fibrous` currently supports `base`, `hyperevm`, and `citrea`.
+- `lcx` (LCX Liberty DEX) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there). A quote is rejected unless it matches the requested chain, tokens, and amount and names the published LCX Liberty DEX router as spender.
 - Bungee dedicated backend requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 
 ### Execution

@@ -62,7 +62,7 @@ defi swap quote --provider tempo --chain tempo --from-asset pathUSD --to-asset U
 
 Flags:
 
-- `--provider string` (`1inch|uniswap|tempo|jupiter|fibrous|bungee|taikoswap`) required
+- `--provider string` (`1inch|uniswap|tempo|jupiter|fibrous|bungee|taikoswap|lcx`) required
 - `--chain string` required
 - `--from-asset string` required
 - `--to-asset string` required
@@ -78,12 +78,13 @@ Type support:
 
 - `uniswap`: `exact-input`, `exact-output`
 - `tempo`: `exact-input`, `exact-output`
-- `1inch`, `jupiter`, `fibrous`, `bungee`, `taikoswap`: `exact-input` only
+- `1inch`, `jupiter`, `fibrous`, `bungee`, `taikoswap`, `lcx`: `exact-input` only
 
 Auth requirements:
 
 - `1inch` -> `DEFI_1INCH_API_KEY`
 - `uniswap` -> `DEFI_UNISWAP_API_KEY`
+- `lcx` -> `DEFI_LCX_API_KEY`
 - `jupiter` -> `DEFI_JUPITER_API_KEY` (optional for higher limits)
 - `tempo`, `fibrous`, `bungee`, `taikoswap` -> keyless by default
 

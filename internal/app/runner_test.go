@@ -395,6 +395,16 @@ func TestRunnerProvidersList(t *testing.T) {
 	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
 		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
 	}
+	lcxInfo, ok := findProviderInfo(out, "lcx")
+	if !ok {
+		t.Fatalf("expected lcx provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := lcxInfo["requires_key"].(bool); !ok || !requiresKey {
+		t.Fatalf("expected lcx requires_key=true, got %#v", lcxInfo["requires_key"])
+	}
+	if keyEnv, _ := lcxInfo["key_env_var"].(string); keyEnv != "DEFI_LCX_API_KEY" {
+		t.Fatalf("expected lcx key_env_var=DEFI_LCX_API_KEY, got %#v", lcxInfo["key_env_var"])
+	}
 	jupiterCount := 0
 	for _, item := range out {
 		name, _ := item["name"].(string)

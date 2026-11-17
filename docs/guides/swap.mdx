@@ -1,6 +1,6 @@
 ---
 title: Swap
-description: Get swap quotes across 1inch, Uniswap, Tempo, Jupiter, Fibrous, Bungee, and TaikoSwap.
+description: Get swap quotes across 1inch, Uniswap, Tempo, Jupiter, Fibrous, Bungee, TaikoSwap, and LCX Liberty DEX.
 ---
 
 ## 1inch (key required)
@@ -47,6 +47,15 @@ defi swap quote --provider jupiter --chain solana --from-asset USDC --to-asset S
 ```bash
 defi swap quote --provider fibrous --chain hyperevm --from-asset USDC --to-asset WHYPE --amount 1000000 --results-only
 ```
+
+## LCX Liberty DEX (key required)
+
+```bash
+export DEFI_LCX_API_KEY=...
+defi swap quote --provider lcx --chain base --from-asset USDC --to-asset WETH --amount 1000000 --results-only
+```
+
+A free key is available at https://dex.lcx.com/dashboard.
 
 ## TaikoSwap (keyless, on-chain)
 
@@ -107,3 +116,4 @@ defi swap submit --action-id <id> --signer tempo --results-only
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
 - Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.
+- LCX Liberty DEX (`lcx`) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there).

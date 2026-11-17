@@ -7,6 +7,26 @@ Format:
 - Group notes by section in this order: `Added`, `Changed`, `Deprecated`, `Fixed`, `Docs`, `Security`.
 - Keep bullets short and focused on user impact.
 
+## [Unreleased]
+
+### Added
+- Added the `lcx` swap provider (LCX Liberty DEX) for `swap quote` on 22 EVM chains; requires `DEFI_LCX_API_KEY`.
+
+### Changed
+- None yet.
+
+### Deprecated
+- None yet.
+
+### Fixed
+- None yet.
+
+### Docs
+- Documented `lcx` provider support and `DEFI_LCX_API_KEY` in README, AGENTS, and Mintlify docs.
+
+### Security
+- None yet.
+
 ## [v0.5.0] - 2026-03-26
 
 ### Added
