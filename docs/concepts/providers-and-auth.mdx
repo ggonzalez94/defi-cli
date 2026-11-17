@@ -65,7 +65,7 @@ If either is missing, bungee quotes use public backend.
 - Solana devnet/testnet and custom Solana CAIP-2 references are unsupported.
 - Bungee quote support is chain + token dependent.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea` (`monad` temporarily disabled).
-- LCX Liberty DEX (`lcx`) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there). Quotes are rejected unless they match the request and name the published LCX Liberty DEX router as spender.
+- LCX Liberty DEX (`lcx`) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there). Quotes are rejected unless they match the request, name the published LCX Liberty DEX router as spender, and are neither stale nor expired. `--amount-decimal` is refused when the input token is not in the bootstrap registry; pass `--amount` in base units.
 - Bungee quote requests use deterministic placeholder sender/receiver addresses for quote-only resolution (`0x000...001`).
 - Across may omit native USD fee fields for some routes; when missing, `estimated_fee_usd` can fall back to a stable-asset approximation while token-unit fees remain in `fee_breakdown`.
 - Tempo Stablecoin DEX currently supports USD-denominated TIP-20 assets only; supported pairs are auto-routed on-chain through quote-token relationships.

@@ -14,6 +14,14 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
+)
+
+var (
+	testNow        = time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC)
+	testExpiresAt  = testNow.Unix() + 120
+	routerBase, _  = registry.LCXLibertyRouter(8453)
+	routerHyper, _ = registry.LCXLibertyRouter(999)
 )
 
 type quoteReq struct {
@@ -34,7 +42,7 @@ func quoteBody(chainID int64, spender, tokenIn, tokenOut, amountIn, amountOut st
 		"gasEstimateWei":"120000000000",
 		"spender":"` + spender + `",
 		"venues":["uniswap_v3","aerodrome_slipstream"],
-		"expiresAt":1790000120,
+		"expiresAt":` + jsonInt(testExpiresAt) + `,
 		"stale":false
 	}}}`
 }
@@ -50,6 +58,7 @@ func newTestClient(t *testing.T, handler http.HandlerFunc) *Client {
 	t.Cleanup(srv.Close)
 	c := New(httpx.New(1*time.Second, 0), "test-key")
 	c.baseURL = srv.URL
+	c.now = func() time.Time { return testNow }
 	return c
 }
 
@@ -77,10 +86,8 @@ func TestQuoteSwapSendsRequestAndParsesResponse(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, quoteBody(8453, strings.ToLower(router1), got.TokenIn, got.TokenOut, got.AmountIn, "312500000000000"))
+		_, _ = io.WriteString(w, quoteBody(8453, strings.ToLower(routerBase), got.TokenIn, got.TokenOut, got.AmountIn, "312500000000000"))
 	})
-	fixedNow := time.Date(2026, time.November, 17, 9, 0, 0, 0, time.UTC)
-	c.now = func() time.Time { return fixedNow }
 
 	quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
 		Chain:           chain,
@@ -121,7 +128,7 @@ func TestQuoteSwapSendsRequestAndParsesResponse(t *testing.T) {
 	if quote.Route != "uniswap_v3, aerodrome_slipstream" {
 		t.Fatalf("unexpected route: %s", quote.Route)
 	}
-	if quote.FetchedAt != fixedNow.Format(time.RFC3339) {
+	if quote.FetchedAt != testNow.Format(time.RFC3339) {
 		t.Fatalf("unexpected fetched_at: %s", quote.FetchedAt)
 	}
 }
@@ -138,7 +145,7 @@ func TestQuoteSwapSendsZeroAddressForNativeCoin(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = io.WriteString(w, quoteBody(999, router2, got.TokenIn, got.TokenOut, got.AmountIn, "25000000"))
+		_, _ = io.WriteString(w, quoteBody(999, routerHyper, got.TokenIn, got.TokenOut, got.AmountIn, "25000000"))
 	})
 
 	quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
@@ -162,6 +169,62 @@ func TestQuoteSwapSendsZeroAddressForNativeCoin(t *testing.T) {
 	}
 }
 
+func TestQuoteSwapUsesQuotedDecimalsForUnregisteredTokens(t *testing.T) {
+	chain, _ := id.ParseChain("130")
+	assetIn, _ := id.ParseAsset("0x078d782b760474a361dda0af3839290b0ef57ad6", chain)
+	assetOut, _ := id.ParseAsset("0x4200000000000000000000000000000000000006", chain)
+	if assetIn.Decimals != 0 || assetOut.Decimals != 0 {
+		t.Fatalf("expected unregistered tokens to parse without decimals, got %d/%d", assetIn.Decimals, assetOut.Decimals)
+	}
+	routerUnichain, _ := registry.LCXLibertyRouter(130)
+
+	cases := []struct {
+		name          string
+		strip         bool
+		wantInDecimal string
+		wantInDec     int
+		wantOutDec    int
+	}{
+		{"decimals reported", false, "2.5", 6, 18},
+		{"decimals not reported", true, "2500000", 0, 0},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+				var req quoteReq
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					http.Error(w, "invalid JSON payload", http.StatusBadRequest)
+					return
+				}
+				body := quoteBody(130, routerUnichain, req.TokenIn, req.TokenOut, req.AmountIn, "800000000000000")
+				if tc.strip {
+					body = strings.Replace(body, `,"decimals":6`, ``, 1)
+					body = strings.Replace(body, `,"decimals":18`, ``, 1)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = io.WriteString(w, body)
+			})
+			quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+				Chain:           chain,
+				FromAsset:       assetIn,
+				ToAsset:         assetOut,
+				AmountBaseUnits: "2500000",
+				// What the runner derives with its 18-decimal fallback; it must not be echoed.
+				AmountDecimal: "0.0000000000025",
+			})
+			if err != nil {
+				t.Fatalf("QuoteSwap failed: %v", err)
+			}
+			if quote.InputAmount.AmountBaseUnits != "2500000" || quote.InputAmount.AmountDecimal != tc.wantInDecimal || quote.InputAmount.Decimals != tc.wantInDec {
+				t.Fatalf("unexpected input amount: %+v", quote.InputAmount)
+			}
+			if quote.EstimatedOut.Decimals != tc.wantOutDec {
+				t.Fatalf("unexpected output decimals: %+v", quote.EstimatedOut)
+			}
+		})
+	}
+}
+
 func TestQuoteSwapRejectsMismatchedQuote(t *testing.T) {
 	chain, _ := id.ParseChain("base")
 	assetIn, _ := id.ParseAsset("USDC", chain)
@@ -177,25 +240,46 @@ func TestQuoteSwapRejectsMismatchedQuote(t *testing.T) {
 			return quoteBody(8453, other, req.TokenIn, req.TokenOut, req.AmountIn, "1")
 		}},
 		{"other chain router", "spender", func(req quoteReq) string {
-			return quoteBody(8453, router2, req.TokenIn, req.TokenOut, req.AmountIn, "1")
+			return quoteBody(8453, routerHyper, req.TokenIn, req.TokenOut, req.AmountIn, "1")
 		}},
 		{"missing spender", "spender", func(req quoteReq) string {
-			return strings.Replace(quoteBody(8453, router1, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"spender":"`+router1+`"`, `"spender":null`, 1)
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"spender":"`+routerBase+`"`, `"spender":null`, 1)
 		}},
 		{"wrong chain", "chain", func(req quoteReq) string {
-			return quoteBody(1, router1, req.TokenIn, req.TokenOut, req.AmountIn, "1")
+			return quoteBody(1, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1")
 		}},
 		{"wrong input amount", "input amount", func(req quoteReq) string {
-			return quoteBody(8453, router1, req.TokenIn, req.TokenOut, "999", "1")
+			return quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, "999", "1")
 		}},
 		{"wrong input token", "tokens", func(req quoteReq) string {
-			return quoteBody(8453, router1, other, req.TokenOut, req.AmountIn, "1")
+			return quoteBody(8453, routerBase, other, req.TokenOut, req.AmountIn, "1")
 		}},
 		{"wrong output token", "tokens", func(req quoteReq) string {
-			return quoteBody(8453, router1, req.TokenIn, other, req.AmountIn, "1")
+			return quoteBody(8453, routerBase, req.TokenIn, other, req.AmountIn, "1")
 		}},
 		{"missing output amount", "output amount", func(req quoteReq) string {
-			return quoteBody(8453, router1, req.TokenIn, req.TokenOut, req.AmountIn, "")
+			return quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "")
+		}},
+		{"stale", "stale", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"stale":false`, `"stale":true`, 1)
+		}},
+		{"expired", "expired", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"expiresAt":`+jsonInt(testExpiresAt), `"expiresAt":`+jsonInt(testNow.Unix()-1), 1)
+		}},
+		{"missing expiry", "expired", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"expiresAt":`+jsonInt(testExpiresAt)+`,`, ``, 1)
+		}},
+		{"output decimals too large", "decimals", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"decimals":18`, `"decimals":1000000000`, 1)
+		}},
+		{"output decimals above uint256", "decimals", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"decimals":18`, `"decimals":78`, 1)
+		}},
+		{"negative output decimals", "decimals", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"decimals":18`, `"decimals":-1`, 1)
+		}},
+		{"input decimals too large", "decimals", func(req quoteReq) string {
+			return strings.Replace(quoteBody(8453, routerBase, req.TokenIn, req.TokenOut, req.AmountIn, "1"), `"decimals":6`, `"decimals":1000000000`, 1)
 		}},
 		{"success false", "success=false", func(req quoteReq) string {
 			return `{"success":false,"code":"no_route","error":"no_route","message":"No route"}`

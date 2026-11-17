@@ -13,44 +13,18 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/httpx"
 	"github.com/ggonzalez94/defi-cli/internal/model"
 	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/ggonzalez94/defi-cli/internal/registry"
 )
 
 const defaultBase = "https://swap-api.lcx.com"
 
 const (
-	router1 = "0x0000000000b1ae06c96aB73FF4360d7AeAaB56F0"
-	router2 = "0x0000000000654902B6Ed6cC240cc81CB4c4a3dff"
-
 	nativeToken       = "0x0000000000000000000000000000000000000000"
 	nativePlaceholder = "0xeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
-)
 
-// routers is the published LCX Liberty DEX router per supported chain ID.
-// Quotes whose spender is not this address are rejected.
-var routers = map[int64]string{
-	1:     router1,
-	10:    router1,
-	8453:  router1,
-	42161: router1,
-	25:    router2,
-	56:    router2,
-	100:   router2,
-	130:   router2,
-	137:   router2,
-	143:   router2,
-	146:   router2,
-	324:   router2,
-	480:   router2,
-	999:   router2,
-	1868:  router2,
-	4326:  router2,
-	4663:  router2,
-	5042:  router2,
-	9745:  router2,
-	43114: router2,
-	57073: router2,
-	59144: router2,
-}
+	// maxTokenDecimals bounds provider-reported decimals: 10^78 exceeds uint256.
+	maxTokenDecimals = 77
+)
 
 type Client struct {
 	http    *httpx.Client
@@ -84,8 +58,9 @@ func (c *Client) Info() model.ProviderInfo {
 type quote struct {
 	ChainID int64 `json:"chainId"`
 	Input   struct {
-		Token  string `json:"token"`
-		Amount string `json:"amount"`
+		Token    string `json:"token"`
+		Amount   string `json:"amount"`
+		Decimals *int   `json:"decimals"`
 	} `json:"input"`
 	Output struct {
 		Token    string `json:"token"`
@@ -96,6 +71,8 @@ type quote struct {
 	GasFeeUSD      *float64 `json:"gasFeeUSD"`
 	Spender        string   `json:"spender"`
 	Venues         []string `json:"venues"`
+	ExpiresAt      int64    `json:"expiresAt"`
+	Stale          bool     `json:"stale"`
 }
 
 type quoteResponse struct {
@@ -113,7 +90,7 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	if !req.Chain.IsEVM() {
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, "lcx swap quotes support only EVM chains")
 	}
-	router, ok := routers[req.Chain.EVMChainID]
+	router, ok := registry.LCXLibertyRouter(req.Chain.EVMChainID)
 	if !ok {
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnsupported, fmt.Sprintf("lcx does not support chain %s", req.Chain.CAIP2))
 	}
@@ -142,13 +119,23 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 		return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "lcx quote returned success=false")
 	}
 	q := resp.Data.Quote
-	if err := validateQuote(q, req.Chain.EVMChainID, router, tokenIn, tokenOut, req.AmountBaseUnits); err != nil {
+	if err := validateQuote(q, req.Chain.EVMChainID, router, tokenIn, tokenOut, req.AmountBaseUnits, c.now()); err != nil {
 		return model.SwapQuote{}, err
 	}
 
+	// Tokens outside the bootstrap registry parse with decimals 0; use the
+	// decimals the quote reports so amount_decimal and decimals agree.
+	inputAmount := model.AmountInfo{
+		AmountBaseUnits: req.AmountBaseUnits,
+		AmountDecimal:   req.AmountDecimal,
+		Decimals:        req.FromAsset.Decimals,
+	}
+	if req.FromAsset.Decimals <= 0 {
+		inputAmount = providers.AmountInfoFromBase(req.AmountBaseUnits, intOrZero(q.Input.Decimals))
+	}
 	outDecimals := req.ToAsset.Decimals
-	if outDecimals <= 0 && q.Output.Decimals != nil {
-		outDecimals = *q.Output.Decimals
+	if outDecimals <= 0 {
+		outDecimals = intOrZero(q.Output.Decimals)
 	}
 	gasUSD := 0.0
 	if q.GasFeeUSD != nil {
@@ -164,16 +151,12 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	}
 
 	return model.SwapQuote{
-		Provider:    "lcx",
-		ChainID:     req.Chain.CAIP2,
-		FromAssetID: req.FromAsset.AssetID,
-		ToAssetID:   req.ToAsset.AssetID,
-		TradeType:   string(tradeType),
-		InputAmount: model.AmountInfo{
-			AmountBaseUnits: req.AmountBaseUnits,
-			AmountDecimal:   req.AmountDecimal,
-			Decimals:        req.FromAsset.Decimals,
-		},
+		Provider:        "lcx",
+		ChainID:         req.Chain.CAIP2,
+		FromAssetID:     req.FromAsset.AssetID,
+		ToAssetID:       req.ToAsset.AssetID,
+		TradeType:       string(tradeType),
+		InputAmount:     inputAmount,
 		EstimatedOut:    providers.AmountInfoFromBase(q.Output.Amount, outDecimals),
 		EstimatedGasUSD: gasUSD,
 		PriceImpactPct:  priceImpact,
@@ -183,9 +166,10 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	}, nil
 }
 
-// validateQuote rejects a quote that does not answer the request that was sent
-// or that would settle through a contract other than the published router.
-func validateQuote(q quote, chainID int64, router, tokenIn, tokenOut, amountIn string) error {
+// validateQuote rejects a quote that does not answer the request that was sent,
+// that would settle through a contract other than the published router, or
+// that is stale or expired.
+func validateQuote(q quote, chainID int64, router, tokenIn, tokenOut, amountIn string, now time.Time) error {
 	wantIn, okWant := new(big.Int).SetString(amountIn, 10)
 	gotIn, okGot := new(big.Int).SetString(strings.TrimSpace(q.Input.Amount), 10)
 	switch {
@@ -199,8 +183,25 @@ func validateQuote(q quote, chainID int64, router, tokenIn, tokenOut, amountIn s
 		return clierr.New(clierr.CodeUnavailable, "lcx quote tokens do not match request")
 	case q.Output.Amount == "" || providers.NormalizeBaseUnits(q.Output.Amount) != q.Output.Amount:
 		return clierr.New(clierr.CodeUnavailable, "lcx quote missing output amount")
+	case !validDecimals(q.Input.Decimals) || !validDecimals(q.Output.Decimals):
+		return clierr.New(clierr.CodeUnavailable, "lcx quote token decimals out of range")
+	case q.Stale:
+		return clierr.New(clierr.CodeUnavailable, "lcx quote is stale")
+	case q.ExpiresAt <= now.Unix():
+		return clierr.New(clierr.CodeUnavailable, "lcx quote has expired")
 	}
 	return nil
+}
+
+func validDecimals(d *int) bool {
+	return d == nil || (*d >= 0 && *d <= maxTokenDecimals)
+}
+
+func intOrZero(v *int) int {
+	if v == nil {
+		return 0
+	}
+	return *v
 }
 
 // apiToken maps the 0xEeee native placeholder used by the token registry to

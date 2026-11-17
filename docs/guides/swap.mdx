@@ -116,4 +116,4 @@ defi swap submit --action-id <id> --signer tempo --results-only
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields).
 - Output includes normalized `trade_type`, `input_amount`, and `estimated_out` with base and decimal forms.
 - Fibrous currently supports `base`, `hyperevm`, and `citrea`.
-- LCX Liberty DEX (`lcx`) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there).
+- LCX Liberty DEX (`lcx`) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there). `--amount-decimal` is refused when the input token is not in the bootstrap registry; pass `--amount` in base units.

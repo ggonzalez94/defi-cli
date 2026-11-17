@@ -50,6 +50,44 @@ func MoonwellComptroller(chainID int64) (string, bool) {
 	return value, ok
 }
 
+// Canonical LCX Liberty DEX routers per chain. The router is both the swap
+// settlement target and the ERC-20 approval spender named in quotes.
+const (
+	lcxLibertyRouterA = "0x0000000000b1ae06c96aB73FF4360d7AeAaB56F0"
+	lcxLibertyRouterB = "0x0000000000654902B6Ed6cC240cc81CB4c4a3dff"
+)
+
+var lcxLibertyRouterByChainID = map[int64]string{
+	1:     lcxLibertyRouterA, // Ethereum
+	10:    lcxLibertyRouterA, // Optimism
+	8453:  lcxLibertyRouterA, // Base
+	42161: lcxLibertyRouterA, // Arbitrum
+	25:    lcxLibertyRouterB, // Cronos
+	56:    lcxLibertyRouterB, // BNB Chain
+	100:   lcxLibertyRouterB, // Gnosis
+	130:   lcxLibertyRouterB, // Unichain
+	137:   lcxLibertyRouterB, // Polygon
+	143:   lcxLibertyRouterB, // Monad
+	146:   lcxLibertyRouterB, // Sonic
+	324:   lcxLibertyRouterB, // zkSync Era
+	480:   lcxLibertyRouterB, // World Chain
+	999:   lcxLibertyRouterB, // HyperEVM
+	1868:  lcxLibertyRouterB, // Soneium
+	4326:  lcxLibertyRouterB, // MegaETH
+	4663:  lcxLibertyRouterB, // Robinhood Chain
+	5042:  lcxLibertyRouterB, // Arc
+	9745:  lcxLibertyRouterB, // Plasma
+	43114: lcxLibertyRouterB, // Avalanche
+	57073: lcxLibertyRouterB, // Ink
+	59144: lcxLibertyRouterB, // Linea
+}
+
+// LCXLibertyRouter returns the published LCX Liberty DEX router for the given chain ID.
+func LCXLibertyRouter(chainID int64) (string, bool) {
+	addr, ok := lcxLibertyRouterByChainID[chainID]
+	return addr, ok
+}
+
 const tempoStablecoinDEXAddress = "0xdec0000000000000000000000000000000000000"
 
 var tempoChainIDs = map[int64]struct{}{

@@ -356,7 +356,7 @@ providers:
 - Tempo swap execution settles to the sender only; omit `--recipient` or keep it equal to `--from-address`.
 - `actions estimate` returns fee-token-denominated estimates for Tempo actions (includes `fee_unit` and `fee_token` fields instead of native-gas EIP-1559 pricing).
 - `fibrous` currently supports `base`, `hyperevm`, and `citrea`.
-- `lcx` (LCX Liberty DEX) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there). A quote is rejected unless it matches the requested chain, tokens, and amount and names the published LCX Liberty DEX router as spender.
+- `lcx` (LCX Liberty DEX) supports `ethereum`, `optimism`, `base`, `arbitrum`, `bsc`, `polygon`, `avalanche`, `gnosis`, `sonic`, `zksync`, `world-chain`, `hyperevm`, `monad`, `megaeth`, `ink`, and `linea`, plus chain IDs `25`, `130`, `1868`, `4663`, `5042`, and `9745` (pass token addresses there). A quote is rejected unless it matches the requested chain, tokens, and amount, names the published LCX Liberty DEX router as spender, and is neither stale nor expired. `--amount-decimal` is refused when the input token is not in the bootstrap registry; pass `--amount` in base units.
 - Bungee dedicated backend requires both `DEFI_BUNGEE_API_KEY` and `DEFI_BUNGEE_AFFILIATE`.
 
 ### Execution

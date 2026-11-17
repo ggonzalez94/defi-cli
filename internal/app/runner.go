@@ -1108,6 +1108,9 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if providerName == "lcx" && reqStruct.FromAsset.Decimals <= 0 && strings.TrimSpace(quoteAmountDecimal) != "" {
+				return clierr.New(clierr.CodeUsage, "--amount-decimal needs the input token's decimals, which are not in the token registry for this chain; pass --amount in base units")
+			}
 			reqStruct.SlippagePct = slippagePtr
 			reqStruct.Swapper = swapper
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
