@@ -1113,6 +1113,22 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			}
 			reqStruct.SlippagePct = slippagePtr
 			reqStruct.Swapper = swapper
+			fetch := singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.QuoteSwap(ctx, reqStruct)
+			})
+			if providerName == "lcx" {
+				// LCX Liberty DEX quotes carry an expiry (expiresAt) that a cached
+				// copy cannot honour, so they bypass the cache entirely.
+				s.resetCommandDiagnostics()
+				ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
+				defer cancel()
+				data, statuses, _, _, err := fetch(ctx)
+				s.captureCommandDiagnostics(nil, statuses, false)
+				if err != nil {
+					return err
+				}
+				return s.emitSuccess(trimRootPath(cmd.CommandPath()), data, nil, cacheMetaBypass(), statuses, false)
+			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
 				"provider":      providerName,
 				"chain":         reqStruct.Chain.CAIP2,
@@ -1125,9 +1141,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				"swapper":       strings.ToLower(reqStruct.Swapper),
 				"rpc_url":       reqStruct.RPCURL,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
-				return provider.QuoteSwap(ctx, reqStruct)
-			}))
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, fetch)
 		},
 	}
 	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee|lcx)")

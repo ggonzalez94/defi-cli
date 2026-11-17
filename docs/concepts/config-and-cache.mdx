@@ -57,6 +57,8 @@ cache:
 | `yield history` | `5m` |
 | `bridge quote`, `swap quote` | `15s` |
 
+`swap quote --provider lcx` bypasses the cache because LCX Liberty DEX quotes carry their own expiry.
+
 Execution commands (`plan`, `run`, `submit`, `status`) and action inspection (`actions list|show|estimate`) bypass cache reads/writes.
 
 ## Strict mode

@@ -13,6 +13,8 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/config"
 	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/model"
+	"github.com/ggonzalez94/defi-cli/internal/providers"
+	"github.com/spf13/cobra"
 )
 
 type cachePolicyEnvelope struct {
@@ -223,6 +225,62 @@ func TestRunCachedCommandStrictPartialErrorPreservesDiagnostics(t *testing.T) {
 	}
 	if !containsWarning(env.Warnings, "provider morpho failed: timeout") {
 		t.Fatalf("expected warning propagation, got %+v", env.Warnings)
+	}
+}
+
+type scriptedSwapProvider struct {
+	fakeSwapProvider
+	errs []error
+}
+
+func (p *scriptedSwapProvider) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) (model.SwapQuote, error) {
+	call := p.calls
+	quote, _ := p.fakeSwapProvider.QuoteSwap(ctx, req)
+	if call < len(p.errs) && p.errs[call] != nil {
+		return model.SwapQuote{}, p.errs[call]
+	}
+	return quote, nil
+}
+
+func TestSwapQuoteLCXBypassesCache(t *testing.T) {
+	state, stdout := newCachePolicyTestState(t, 5*time.Minute, false)
+	lcx := &scriptedSwapProvider{
+		fakeSwapProvider: fakeSwapProvider{name: "lcx"},
+		errs:             []error{nil, clierr.New(clierr.CodeUnavailable, "provider unavailable")},
+	}
+	state.swapProviders = map[string]providers.SwapProvider{"lcx": lcx}
+	run := func() error {
+		root := &cobra.Command{Use: "defi"}
+		root.SilenceUsage = true
+		root.SilenceErrors = true
+		root.AddCommand(state.newSwapCommand())
+		root.SetArgs([]string{
+			"swap", "quote",
+			"--provider", "lcx",
+			"--chain", "base",
+			"--from-asset", "USDC",
+			"--to-asset", "WETH",
+			"--amount", "1000000",
+		})
+		return root.Execute()
+	}
+
+	if err := run(); err != nil {
+		t.Fatalf("first quote failed: %v", err)
+	}
+	env := decodeCachePolicyEnvelope(t, stdout)
+	if env.Meta.Cache.Status != "bypass" {
+		t.Fatalf("expected lcx quote to bypass the cache, got %+v", env.Meta.Cache)
+	}
+
+	stdout.Reset()
+	err := run()
+	if lcx.calls != 2 {
+		t.Fatalf("expected the second quote to reach the provider, got %d calls", lcx.calls)
+	}
+	cliErr, ok := clierr.As(err)
+	if !ok || cliErr.Code != clierr.CodeUnavailable {
+		t.Fatalf("expected the provider error instead of a cached quote, got err=%v output=%s", err, stdout.String())
 	}
 }
 

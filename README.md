@@ -321,7 +321,7 @@ providers:
 
 ## Cache Policy
 
-- Command TTLs are fixed in code (`chains/protocols/stablecoins/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `wallet balance`: `15s`, `bridge/swap quotes`: `15s`).
+- Command TTLs are fixed in code (`chains/protocols/stablecoins/chains assets`: `5m`, `lend markets`: `60s`, `lend rates`: `30s`, `lend positions`: `30s`, `yield opportunities`: `60s`, `yield positions`: `30s`, `yield history`: `5m`, `wallet balance`: `15s`, `bridge/swap quotes`: `15s`; `swap quote --provider lcx` is not cached because LCX Liberty DEX quotes carry their own expiry).
 - Cache entries are served directly only while fresh (`age <= ttl`).
 - After TTL expiry, the CLI fetches provider data immediately.
 - `cache.max_stale` / `--max-stale` is only a temporary provider-failure fallback window (currently `unavailable` / `rate_limited`).

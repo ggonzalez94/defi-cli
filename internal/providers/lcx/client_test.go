@@ -169,57 +169,95 @@ func TestQuoteSwapSendsZeroAddressForNativeCoin(t *testing.T) {
 	}
 }
 
+const (
+	unichainUSDC = "0x078d782b760474a361dda0af3839290b0ef57ad6"
+	unichainWETH = "0x4200000000000000000000000000000000000006"
+)
+
+func quotedDecimalsClient(t *testing.T, chainID int64, strip ...string) *Client {
+	t.Helper()
+	router, _ := registry.LCXLibertyRouter(chainID)
+	return newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var req quoteReq
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			http.Error(w, "invalid JSON payload", http.StatusBadRequest)
+			return
+		}
+		body := quoteBody(chainID, router, req.TokenIn, req.TokenOut, req.AmountIn, "800000000000000")
+		for _, field := range strip {
+			body = strings.Replace(body, field, ``, 1)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, body)
+	})
+}
+
 func TestQuoteSwapUsesQuotedDecimalsForUnregisteredTokens(t *testing.T) {
 	chain, _ := id.ParseChain("130")
-	assetIn, _ := id.ParseAsset("0x078d782b760474a361dda0af3839290b0ef57ad6", chain)
-	assetOut, _ := id.ParseAsset("0x4200000000000000000000000000000000000006", chain)
+	assetIn, _ := id.ParseAsset(unichainUSDC, chain)
+	assetOut, _ := id.ParseAsset(unichainWETH, chain)
 	if assetIn.Decimals != 0 || assetOut.Decimals != 0 {
 		t.Fatalf("expected unregistered tokens to parse without decimals, got %d/%d", assetIn.Decimals, assetOut.Decimals)
 	}
-	routerUnichain, _ := registry.LCXLibertyRouter(130)
+
+	c := quotedDecimalsClient(t, 130)
+	quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
+		Chain:           chain,
+		FromAsset:       assetIn,
+		ToAsset:         assetOut,
+		AmountBaseUnits: "2500000",
+		// What the runner derives with its 18-decimal fallback; it must not be echoed.
+		AmountDecimal: "0.0000000000025",
+	})
+	if err != nil {
+		t.Fatalf("QuoteSwap failed: %v", err)
+	}
+	if quote.InputAmount.AmountBaseUnits != "2500000" || quote.InputAmount.AmountDecimal != "2.5" || quote.InputAmount.Decimals != 6 {
+		t.Fatalf("unexpected input amount: %+v", quote.InputAmount)
+	}
+	if quote.EstimatedOut.AmountDecimal != "0.0008" || quote.EstimatedOut.Decimals != 18 {
+		t.Fatalf("unexpected output amount: %+v", quote.EstimatedOut)
+	}
+}
+
+func TestQuoteSwapRejectsMissingDecimalsForUnregisteredTokens(t *testing.T) {
+	unichain, _ := id.ParseChain("130")
+	uniIn, _ := id.ParseAsset(unichainUSDC, unichain)
+	uniOut, _ := id.ParseAsset(unichainWETH, unichain)
+	base, _ := id.ParseChain("base")
+	baseIn, _ := id.ParseAsset("USDC", base)
+	baseOut, _ := id.ParseAsset("WETH", base)
+	const inDecimals, outDecimals = `,"decimals":6`, `,"decimals":18`
 
 	cases := []struct {
-		name          string
-		strip         bool
-		wantInDecimal string
-		wantInDec     int
-		wantOutDec    int
+		name    string
+		chain   id.Chain
+		in, out id.Asset
+		strip   []string
+		want    string
 	}{
-		{"decimals reported", false, "2.5", 6, 18},
-		{"decimals not reported", true, "2500000", 0, 0},
+		{"input decimals missing", unichain, uniIn, uniOut, []string{inDecimals}, "input token decimals"},
+		{"output decimals missing", unichain, uniIn, uniOut, []string{outDecimals}, "output token decimals"},
+		{"registered tokens need no quoted decimals", base, baseIn, baseOut, []string{inDecimals, outDecimals}, ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			c := newTestClient(t, func(w http.ResponseWriter, r *http.Request) {
-				var req quoteReq
-				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-					http.Error(w, "invalid JSON payload", http.StatusBadRequest)
-					return
-				}
-				body := quoteBody(130, routerUnichain, req.TokenIn, req.TokenOut, req.AmountIn, "800000000000000")
-				if tc.strip {
-					body = strings.Replace(body, `,"decimals":6`, ``, 1)
-					body = strings.Replace(body, `,"decimals":18`, ``, 1)
-				}
-				w.Header().Set("Content-Type", "application/json")
-				_, _ = io.WriteString(w, body)
-			})
+			c := quotedDecimalsClient(t, tc.chain.EVMChainID, tc.strip...)
 			quote, err := c.QuoteSwap(context.Background(), providers.SwapQuoteRequest{
-				Chain:           chain,
-				FromAsset:       assetIn,
-				ToAsset:         assetOut,
-				AmountBaseUnits: "2500000",
-				// What the runner derives with its 18-decimal fallback; it must not be echoed.
-				AmountDecimal: "0.0000000000025",
+				Chain: tc.chain, FromAsset: tc.in, ToAsset: tc.out, AmountBaseUnits: "2500000", AmountDecimal: "2.5",
 			})
-			if err != nil {
-				t.Fatalf("QuoteSwap failed: %v", err)
+			if tc.want == "" {
+				if err != nil {
+					t.Fatalf("QuoteSwap failed: %v", err)
+				}
+				if quote.InputAmount.Decimals != tc.in.Decimals || quote.EstimatedOut.Decimals != tc.out.Decimals {
+					t.Fatalf("expected registry decimals, got %+v / %+v", quote.InputAmount, quote.EstimatedOut)
+				}
+				return
 			}
-			if quote.InputAmount.AmountBaseUnits != "2500000" || quote.InputAmount.AmountDecimal != tc.wantInDecimal || quote.InputAmount.Decimals != tc.wantInDec {
-				t.Fatalf("unexpected input amount: %+v", quote.InputAmount)
-			}
-			if quote.EstimatedOut.Decimals != tc.wantOutDec {
-				t.Fatalf("unexpected output decimals: %+v", quote.EstimatedOut)
+			cliErr, ok := clierr.As(err)
+			if !ok || cliErr.Code != clierr.CodeUnavailable || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("expected unavailable error mentioning %q, got %v (quote %+v)", tc.want, err, quote)
 			}
 		})
 	}

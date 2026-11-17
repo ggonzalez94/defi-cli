@@ -124,18 +124,25 @@ func (c *Client) QuoteSwap(ctx context.Context, req providers.SwapQuoteRequest) 
 	}
 
 	// Tokens outside the bootstrap registry parse with decimals 0; use the
-	// decimals the quote reports so amount_decimal and decimals agree.
+	// decimals the quote reports so amount_decimal and decimals agree, and
+	// refuse the quote when it reports none.
 	inputAmount := model.AmountInfo{
 		AmountBaseUnits: req.AmountBaseUnits,
 		AmountDecimal:   req.AmountDecimal,
 		Decimals:        req.FromAsset.Decimals,
 	}
 	if req.FromAsset.Decimals <= 0 {
-		inputAmount = providers.AmountInfoFromBase(req.AmountBaseUnits, intOrZero(q.Input.Decimals))
+		if q.Input.Decimals == nil {
+			return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "lcx quote missing input token decimals")
+		}
+		inputAmount = providers.AmountInfoFromBase(req.AmountBaseUnits, *q.Input.Decimals)
 	}
 	outDecimals := req.ToAsset.Decimals
 	if outDecimals <= 0 {
-		outDecimals = intOrZero(q.Output.Decimals)
+		if q.Output.Decimals == nil {
+			return model.SwapQuote{}, clierr.New(clierr.CodeUnavailable, "lcx quote missing output token decimals")
+		}
+		outDecimals = *q.Output.Decimals
 	}
 	gasUSD := 0.0
 	if q.GasFeeUSD != nil {
@@ -195,13 +202,6 @@ func validateQuote(q quote, chainID int64, router, tokenIn, tokenOut, amountIn s
 
 func validDecimals(d *int) bool {
 	return d == nil || (*d >= 0 && *d <= maxTokenDecimals)
-}
-
-func intOrZero(v *int) int {
-	if v == nil {
-		return 0
-	}
-	return *v
 }
 
 // apiToken maps the 0xEeee native placeholder used by the token registry to

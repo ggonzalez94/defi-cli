@@ -130,7 +130,7 @@ README.md                         # user-facing usage + caveats
 - `chains gas` returns live EVM gas prices via RPC (EVM-only, no API key, bypasses cache); supports `--rpc-url` override and comma-separated `--chain` for parallel multi-chain queries (returns array; `--rpc-url` disallowed with multiple chains).
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
-- Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
+- Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures. `swap quote --provider lcx` bypasses the cache because its quotes expire (`expiresAt`).
 - Metadata commands (`version`, `schema`, `providers list`, `chains list`, `chains gas`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache initialization.
 - For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
