@@ -36,6 +36,7 @@ import (
 	"github.com/ggonzalez94/defi-cli/internal/providers/fibrous"
 	"github.com/ggonzalez94/defi-cli/internal/providers/jupiter"
 	"github.com/ggonzalez94/defi-cli/internal/providers/kamino"
+	"github.com/ggonzalez94/defi-cli/internal/providers/lcx"
 	"github.com/ggonzalez94/defi-cli/internal/providers/lifi"
 	"github.com/ggonzalez94/defi-cli/internal/providers/moonwell"
 	"github.com/ggonzalez94/defi-cli/internal/providers/morpho"
@@ -190,6 +191,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					"jupiter":   jupiterProvider,
 					"bungee":    bungee.NewSwap(httpClient, settings.BungeeAPIKey, settings.BungeeAffiliate),
 					"fibrous":   fibrous.New(httpClient),
+					"lcx":       lcx.New(httpClient, settings.LCXAPIKey),
 				}
 				s.providerInfos = []model.ProviderInfo{
 					llama.Info(),
@@ -207,6 +209,7 @@ func (s *runtimeState) newRootCommand() *cobra.Command {
 					s.swapProviders["jupiter"].Info(),
 					s.swapProviders["bungee"].Info(),
 					s.swapProviders["fibrous"].Info(),
+					s.swapProviders["lcx"].Info(),
 				}
 			}
 			if s.actionBuilder == nil {
@@ -1056,7 +1059,7 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			providerName := providers.NormalizeSwapProvider(quoteProviderArg)
 			if providerName == "" {
-				return clierr.New(clierr.CodeUsage, "--provider is required (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
+				return clierr.New(clierr.CodeUsage, "--provider is required (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee|lcx)")
 			}
 			provider, ok := s.swapProviders[providerName]
 			if !ok {
@@ -1105,8 +1108,27 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 			if err != nil {
 				return err
 			}
+			if providerName == "lcx" && reqStruct.FromAsset.Decimals <= 0 && strings.TrimSpace(quoteAmountDecimal) != "" {
+				return clierr.New(clierr.CodeUsage, "--amount-decimal needs the input token's decimals, which are not in the token registry for this chain; pass --amount in base units")
+			}
 			reqStruct.SlippagePct = slippagePtr
 			reqStruct.Swapper = swapper
+			fetch := singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
+				return provider.QuoteSwap(ctx, reqStruct)
+			})
+			if providerName == "lcx" {
+				// LCX Liberty DEX quotes carry an expiry (expiresAt) that a cached
+				// copy cannot honour, so they bypass the cache entirely.
+				s.resetCommandDiagnostics()
+				ctx, cancel := context.WithTimeout(context.Background(), s.settings.Timeout)
+				defer cancel()
+				data, statuses, _, _, err := fetch(ctx)
+				s.captureCommandDiagnostics(nil, statuses, false)
+				if err != nil {
+					return err
+				}
+				return s.emitSuccess(trimRootPath(cmd.CommandPath()), data, nil, cacheMetaBypass(), statuses, false)
+			}
 			key := cacheKey(trimRootPath(cmd.CommandPath()), map[string]any{
 				"provider":      providerName,
 				"chain":         reqStruct.Chain.CAIP2,
@@ -1119,12 +1141,10 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				"swapper":       strings.ToLower(reqStruct.Swapper),
 				"rpc_url":       reqStruct.RPCURL,
 			})
-			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, singleProviderQuery(provider.Info().Name, func(ctx context.Context) (any, error) {
-				return provider.QuoteSwap(ctx, reqStruct)
-			}))
+			return s.runCachedCommand(trimRootPath(cmd.CommandPath()), key, 15*time.Second, fetch)
 		},
 	}
-	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee)")
+	quoteCmd.Flags().StringVar(&quoteProviderArg, "provider", "", "Swap provider (1inch|uniswap|tempo|taikoswap|jupiter|fibrous|bungee|lcx)")
 	quoteCmd.Flags().StringVar(&quoteChainArg, "chain", "", "Chain identifier")
 	quoteCmd.Flags().StringVar(&quoteFromAssetArg, "from-asset", "", "Input asset")
 	quoteCmd.Flags().StringVar(&quoteToAssetArg, "to-asset", "", "Output asset")
@@ -1171,6 +1191,12 @@ func (s *runtimeState) newSwapCommand() *cobra.Command {
 				Optional:    true,
 				When:        map[string][]string{"provider": []string{"jupiter"}},
 				Description: "Jupiter API keys are optional and mainly increase rate limits.",
+			},
+			{
+				Kind:        "api_key",
+				EnvVars:     []string{"DEFI_LCX_API_KEY"},
+				When:        map[string][]string{"provider": []string{"lcx"}},
+				Description: "LCX Liberty DEX quote requests require an LCX API key.",
 			},
 		},
 		Response: &swapQuoteResponse,

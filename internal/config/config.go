@@ -47,6 +47,7 @@ type Settings struct {
 	UniswapAPIKey   string
 	OneInchAPIKey   string
 	JupiterAPIKey   string
+	LCXAPIKey       string
 	BungeeAPIKey    string
 	BungeeAffiliate string
 }
@@ -83,6 +84,10 @@ type fileConfig struct {
 			APIKey    string `yaml:"api_key"`
 			APIKeyEnv string `yaml:"api_key_env"`
 		} `yaml:"jupiter"`
+		LCX struct {
+			APIKey    string `yaml:"api_key"`
+			APIKeyEnv string `yaml:"api_key_env"`
+		} `yaml:"lcx"`
 		Bungee struct {
 			APIKey       string `yaml:"api_key"`
 			APIKeyEnv    string `yaml:"api_key_env"`
@@ -252,6 +257,12 @@ func applyFileConfig(path string, settings *Settings) error {
 	if cfg.Providers.Jupiter.APIKeyEnv != "" {
 		settings.JupiterAPIKey = os.Getenv(cfg.Providers.Jupiter.APIKeyEnv)
 	}
+	if cfg.Providers.LCX.APIKey != "" {
+		settings.LCXAPIKey = cfg.Providers.LCX.APIKey
+	}
+	if cfg.Providers.LCX.APIKeyEnv != "" {
+		settings.LCXAPIKey = os.Getenv(cfg.Providers.LCX.APIKeyEnv)
+	}
 	if cfg.Providers.Bungee.APIKey != "" {
 		settings.BungeeAPIKey = cfg.Providers.Bungee.APIKey
 	}
@@ -325,6 +336,9 @@ func applyEnv(settings *Settings) {
 	}
 	if v := os.Getenv("DEFI_JUPITER_API_KEY"); v != "" {
 		settings.JupiterAPIKey = v
+	}
+	if v := os.Getenv("DEFI_LCX_API_KEY"); v != "" {
+		settings.LCXAPIKey = v
 	}
 	if v := os.Getenv("DEFI_BUNGEE_API_KEY"); v != "" {
 		settings.BungeeAPIKey = v

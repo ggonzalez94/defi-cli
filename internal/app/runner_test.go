@@ -12,6 +12,7 @@ import (
 
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ggonzalez94/defi-cli/internal/config"
+	clierr "github.com/ggonzalez94/defi-cli/internal/errors"
 	"github.com/ggonzalez94/defi-cli/internal/execution"
 	"github.com/ggonzalez94/defi-cli/internal/id"
 	"github.com/ggonzalez94/defi-cli/internal/model"
@@ -394,6 +395,16 @@ func TestRunnerProvidersList(t *testing.T) {
 	}
 	if requiresKey, ok := fibrousInfo["requires_key"].(bool); !ok || requiresKey {
 		t.Fatalf("expected fibrous requires_key=false, got %#v", fibrousInfo["requires_key"])
+	}
+	lcxInfo, ok := findProviderInfo(out, "lcx")
+	if !ok {
+		t.Fatalf("expected lcx provider in providers list, got %#v", out)
+	}
+	if requiresKey, ok := lcxInfo["requires_key"].(bool); !ok || !requiresKey {
+		t.Fatalf("expected lcx requires_key=true, got %#v", lcxInfo["requires_key"])
+	}
+	if keyEnv, _ := lcxInfo["key_env_var"].(string); keyEnv != "DEFI_LCX_API_KEY" {
+		t.Fatalf("expected lcx key_env_var=DEFI_LCX_API_KEY, got %#v", lcxInfo["key_env_var"])
 	}
 	jupiterCount := 0
 	for _, item := range out {
@@ -1636,6 +1647,60 @@ func TestSwapSlippageOverrideRejectedForNonUniswap(t *testing.T) {
 	}
 	if oneinch.calls != 0 {
 		t.Fatalf("expected provider not to be called with unsupported slippage override, got %d calls", oneinch.calls)
+	}
+}
+
+func TestSwapQuoteLCXRejectsDecimalAmountForUnregisteredToken(t *testing.T) {
+	newRoot := func(lcx *fakeSwapProvider, amountArgs ...string) *cobra.Command {
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		state := &runtimeState{
+			runner: &Runner{
+				stdout: &stdout,
+				stderr: &stderr,
+				now:    time.Now,
+			},
+			settings: config.Settings{
+				OutputMode:   "json",
+				Timeout:      2 * time.Second,
+				CacheEnabled: false,
+			},
+			swapProviders: map[string]providers.SwapProvider{
+				"lcx": lcx,
+			},
+		}
+		root := &cobra.Command{Use: "defi"}
+		root.SilenceUsage = true
+		root.SilenceErrors = true
+		root.SetOut(&stdout)
+		root.SetErr(&stderr)
+		root.AddCommand(state.newSwapCommand())
+		root.SetArgs(append([]string{
+			"swap", "quote",
+			"--provider", "lcx",
+			"--chain", "130",
+			"--from-asset", "0x078d782b760474a361dda0af3839290b0ef57ad6",
+			"--to-asset", "0x4200000000000000000000000000000000000006",
+		}, amountArgs...))
+		return root
+	}
+
+	lcx := &fakeSwapProvider{name: "lcx"}
+	err := newRoot(lcx, "--amount-decimal", "1").Execute()
+	cliErr, ok := clierr.As(err)
+	if !ok || cliErr.Code != clierr.CodeUsage {
+		t.Fatalf("expected usage error for --amount-decimal on an unregistered token, got %v", err)
+	}
+	if lcx.calls != 0 {
+		t.Fatalf("expected provider not to be called, got %d calls", lcx.calls)
+	}
+
+	lcx = &fakeSwapProvider{name: "lcx"}
+	if err := newRoot(lcx, "--amount", "1000000").Execute(); err != nil {
+		t.Fatalf("expected base-unit amount to be accepted, got %v", err)
+	}
+	if lcx.calls != 1 || lcx.lastReq.AmountBaseUnits != "1000000" {
+		t.Fatalf("expected one provider call with amount 1000000, got %d calls (%+v)", lcx.calls, lcx.lastReq)
 	}
 }
 

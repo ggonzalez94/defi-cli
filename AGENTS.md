@@ -73,7 +73,7 @@ README.md                         # user-facing usage + caveats
 - `yield positions` currently supports `aave|morpho|moonwell`; `kamino` does not expose positions yet.
 - `lend positions --type all` intentionally returns non-overlapping intents (`supply`, `borrow`, `collateral`) for automation-friendly filtering.
 - Most commands do not require provider API keys.
-- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
+- Key-gated routes: `swap quote --provider 1inch` (`DEFI_1INCH_API_KEY`), `swap quote --provider uniswap` (`DEFI_UNISWAP_API_KEY`), `swap quote --provider lcx` (`DEFI_LCX_API_KEY`), `chains assets`, and `bridge list` / `bridge details` via DefiLlama (`DEFI_DEFILLAMA_API_KEY`).
 - Multi-provider command paths require explicit selector choice via `--provider`; no implicit defaults.
 - Tempo quote/planning does not require an API key; execution uses native Tempo type 0x76 transactions via the TempoStepExecutor and currently settles Tempo DEX swaps back to the sender only.
 - Tempo Stablecoin DEX swaps are currently USD TIP-20 only; the DEX auto-routes supported pairs through quote-token relationships, so non-USD assets should fail as `unsupported` rather than `unavailable`.
@@ -130,7 +130,7 @@ README.md                         # user-facing usage + caveats
 - `chains gas` returns live EVM gas prices via RPC (EVM-only, no API key, bypasses cache); supports `--rpc-url` override and comma-separated `--chain` for parallel multi-chain queries (returns array; `--rpc-url` disallowed with multiple chains).
 - APY values are percentage points (`2.3` means `2.3%`), not ratios.
 - Morpho can emit extreme APYs in tiny markets; use `--min-tvl-usd` in ranking/filters.
-- Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures.
+- Fresh cache hits (`age <= ttl`) skip provider calls; once TTL expires, the CLI re-fetches providers and only serves stale data within `max_stale` on temporary provider failures. `swap quote --provider lcx` bypasses the cache because its quotes expire (`expiresAt`).
 - Metadata commands (`version`, `schema`, `providers list`, `chains list`, `chains gas`) bypass cache initialization.
 - Execution commands (`swap|bridge|approvals|transfer|lend|yield|rewards ... plan|submit|status`, `actions list|show|estimate`) bypass cache initialization.
 - For `lend`/`yield`, unresolved symbols are treated as symbol filters; on chains without bootstrap token entries, prefer token address or CAIP-19 for deterministic matching.
