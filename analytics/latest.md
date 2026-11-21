@@ -1,19 +1,19 @@
 # defi-cli install events
 
-- Timestamp (UTC): 2026-11-20T11:41:41Z
+- Timestamp (UTC): 2026-11-21T11:03:51Z
 - Metric: release asset download counter for `install-marker.txt`
-- Total install events: 21
-- Delta since previous snapshot: 0
+- Total install events: 23
+- Delta since previous snapshot: 2
 
 ## Per release
 
 | Tag | Marker | Checksums | Binaries |
 | --- | ---: | ---: | ---: |
 | v0.5.0 | 7 | 8 | 29 |
-| v0.4.0 | 6 | 8 | 23 |
+| v0.4.0 | 7 | 9 | 29 |
 | v0.4.0-rc.1 | 1 | 1 | 13 |
 | v0.3.1 | 3 | 4 | 18 |
-| v0.3.0 | 4 | 4 | 20 |
-| v0.2.0 | 0 | 13 | 31 |
-| v0.1.1 | 0 | 14 | 35 |
+| v0.3.0 | 5 | 5 | 26 |
+| v0.2.0 | 0 | 14 | 37 |
+| v0.1.1 | 0 | 15 | 41 |
 | v0.1.0 | 0 | 5 | 25 |
